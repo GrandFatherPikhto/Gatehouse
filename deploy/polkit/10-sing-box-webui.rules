@@ -1,0 +1,34 @@
+// SingBoxWebUI: вариант на polkit вместо sudo.
+//
+// Зачем: `sudo` работает через setuid, а setuid ломается от
+// `NoNewPrivileges=yes`. `systemctl` ходит к systemd по D-Bus, setuid там не
+// участвует, поэтому с правилом polkit редактор может включать
+// `NoNewPrivileges=yes` и перезапускать демон без sudoers вовсе.
+//
+// Установка:
+//   sudo install -m 0644 deploy/polkit/10-sing-box-webui.rules \
+//        /etc/polkit-1/rules.d/10-sing-box-webui.rules
+//   sudo systemctl restart polkit
+//
+// В юните при этом варианте должно стоять:
+//   Environment=SINGBOX_WEBUI_SUDO=none
+//
+// Правило разрешает РОВНО restart РОВНО юнита sing-box.service от имени denis.
+// Проверка (от имени denis):
+//   systemctl restart sing-box
+// «Interactive authentication required» означает, что правило не подхватилось.
+
+polkit.addRule(function (action, subject) {
+  if (action.id !== 'org.freedesktop.systemd1.manage-units') {
+    return polkit.Result.NOT_HANDLED;
+  }
+  if (subject.user !== 'denis') {
+    return polkit.Result.NOT_HANDLED;
+  }
+  var unit = action.lookup('unit');
+  var verb = action.lookup('verb');
+  if (unit === 'sing-box.service' && verb === 'restart') {
+    return polkit.Result.YES;
+  }
+  return polkit.Result.NOT_HANDLED;
+});

@@ -1,0 +1,67 @@
+# SingBoxWebUI — вариант на polkit.
+#
+# Отличие от `deploy/sing-box-webui.service` ровно в трёх строках:
+#
+#   1. `SINGBOX_WEBUI_SUDO=none` — редактор вызывает `systemctl` напрямую и ни
+#      разу не трогает sudo;
+#   2. `NoNewPrivileges=yes` — можно, потому что setuid больше не нужен:
+#      `systemctl` ходит к systemd по D-Bus, а не через setuid-хелпер;
+#   3. правило polkit из `deploy/polkit/10-sing-box-webui.rules` разрешает ровно
+#      `restart` ровно юнита `sing-box.service` от имени denis.
+#
+# Установка:
+#
+#   sudo cp deploy/sing-box-webui.service.polkit /etc/systemd/system/sing-box-webui.service
+#   sudo install -d -m 0755 /etc/polkit-1/rules.d
+#   sudo install -m 0644 deploy/polkit/10-sing-box-webui.rules /etc/polkit-1/rules.d/
+#   # правило sudoers при этом варианте не нужно вовсе
+#   sudo systemctl daemon-reload
+#   sudo systemctl restart sing-box-webui
+#
+# Проверка, что правило живо (от имени denis):
+#   systemctl restart sing-box
+# Ответ «Interactive authentication required» означает, что правило не подхватилось.
+
+[Unit]
+Description=SingBoxWebUI — web editor of webui.json and config.json (polkit)
+Documentation=file:///home/denis/sing-box-web-ui/deploy/README.md
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=denis
+Group=denis
+WorkingDirectory=/home/denis/sing-box-web-ui
+ExecStart=/usr/bin/node src/web/server.mjs
+
+StateDirectory=sing-box-webui
+StateDirectoryMode=0700
+ConfigurationDirectory=sing-box-webui
+ConfigurationDirectoryMode=0750
+
+UMask=0027
+
+Environment=SINGBOX_WEBUI_SETTINGS=/etc/sing-box-webui/webui.json
+Environment=SINGBOX_WEBUI_STATE_DIR=/var/lib/sing-box-webui
+Environment=SINGBOX_WEBUI_HOST=10.95.2.1
+Environment=SINGBOX_WEBUI_CONFIG=/etc/sing-box/config.json
+Environment=SINGBOX_WEBUI_SINGBOX=/usr/local/bin/sing-box
+Environment=SINGBOX_WEBUI_SYSTEMCTL=/usr/bin/systemctl
+Environment=SINGBOX_WEBUI_JOURNALCTL=/usr/bin/journalctl
+Environment=SINGBOX_WEBUI_UNIT=sing-box
+# Никакого sudo: рестарт идёт через D-Bus и правило polkit.
+Environment=SINGBOX_WEBUI_SUDO=none
+EnvironmentFile=/etc/sing-box-webui/env
+
+Restart=always
+RestartSec=5
+
+# Теперь setuid не нужен, поэтому ограничение можно включить.
+NoNewPrivileges=yes
+# ProtectHome=yes по-прежнему нельзя: код лежит в домашнем каталоге. Единственный
+# способ его включить — перенести код в /opt и переписать WorkingDirectory и
+# ExecStart. Решение за владельцем.
+
+[Install]
+WantedBy=multi-user.target

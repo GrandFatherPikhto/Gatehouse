@@ -1,0 +1,70 @@
+#!/usr/bin/env node
+// Fake `journalctl` for the system-layer tests.
+//
+// `-n N -o json --no-pager` prints N JSON lines in the shape systemd uses
+// (`__REALTIME_TIMESTAMP` in microseconds, `PRIORITY` as a string, `MESSAGE`,
+// `SYSLOG_IDENTIFIER`, `_PID`). `-f` never exits on its own and keeps printing,
+// which is what the SSE tests need in order to prove that the child process is
+// killed when the browser goes away.
+//
+// `FAKE_JOURNALCTL_PIDFILE` makes the follow mode write its own pid there: the
+// test aborts the SSE connection and then checks that this pid is gone.
+
+import fs from 'node:fs';
+import process from 'node:process';
+
+const argv = process.argv.slice(2);
+
+/**
+ * @param {string} flag
+ * @param {string} [fallback]
+ * @returns {string}
+ */
+function valueOf(flag, fallback = '') {
+  const index = argv.indexOf(flag);
+  return index >= 0 && index + 1 < argv.length ? argv[index + 1] : fallback;
+}
+
+const lines = Number(valueOf('-n', '200'));
+const follow = argv.includes('-f');
+
+/**
+ * One systemd JSON line.
+ *
+ * @param {number} index
+ * @param {string} message
+ * @param {number} priority
+ * @returns {string}
+ */
+function entry(index, message, priority) {
+  return JSON.stringify({
+    __REALTIME_TIMESTAMP: String(1726300000000000 + index * 1000000),
+    PRIORITY: String(priority),
+    SYSLOG_IDENTIFIER: 'sing-box',
+    _PID: String(1234 + index),
+    MESSAGE: message,
+  });
+}
+
+if (follow) {
+  if (process.env.FAKE_JOURNALCTL_PIDFILE) {
+    fs.writeFileSync(process.env.FAKE_JOURNALCTL_PIDFILE, String(process.pid));
+  }
+
+  let index = 0;
+  const timer = setInterval(() => {
+    // Every tenth line is an error, so the level filter has something to hide.
+    process.stdout.write(`${entry(index, `follow line ${index}`, index % 10 === 0 ? 3 : 6)}\n`);
+    index += 1;
+  }, 20);
+
+  process.on('SIGTERM', () => {
+    clearInterval(timer);
+    process.exit(0);
+  });
+} else {
+  for (let index = 0; index < lines; index += 1) {
+    process.stdout.write(`${entry(index, `tail line ${index}`, index % 7 === 0 ? 4 : 6)}\n`);
+  }
+  process.exit(0);
+}

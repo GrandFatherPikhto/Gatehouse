@@ -131,3 +131,45 @@ export function makeProject(overrides = {}, extra = {}) {
   const settingsFile = writeSettings(dir, overrides, extra);
   return {dir, settingsFile, linksFile};
 }
+
+/** Directory of the fake binaries the system-layer tests run instead of the real ones. */
+export const FAKE_BIN_DIR = path.join(FIXTURES_DIR, 'bin');
+
+/**
+ * Makes the fake binaries executable and returns the directory.
+ *
+ * The executable bit is not part of the file content, so a checkout that lost it
+ * (a zip, a copy through a filesystem without modes) would fail with EACCES
+ * instead of exercising the code. Tests call this before spawning a fake.
+ *
+ * @returns {string}
+ */
+export function ensureFakeBins() {
+  for (const name of fs.readdirSync(FAKE_BIN_DIR)) {
+    fs.chmodSync(path.join(FAKE_BIN_DIR, name), 0o755);
+  }
+  return FAKE_BIN_DIR;
+}
+
+/**
+ * Environment for the system layer, pointed at the fakes of `tests/fixtures/bin`.
+ *
+ * `SINGBOX_WEBUI_SUDO` points at the fake `systemctl`: `restartSingBox` runs
+ * `sudo -n <systemctl> restart <unit>`, and the tests observe its argv without
+ * touching sudo or systemd.
+ *
+ * @param {Record<string, string>} [overrides]
+ * @returns {Record<string, string>}
+ */
+export function fakeSystemEnv(overrides = {}) {
+  const bin = ensureFakeBins();
+  return {
+    SINGBOX_WEBUI_SINGBOX: path.join(bin, 'sing-box'),
+    SINGBOX_WEBUI_SYSTEMCTL: path.join(bin, 'systemctl'),
+    SINGBOX_WEBUI_JOURNALCTL: path.join(bin, 'journalctl'),
+    SINGBOX_WEBUI_SUDO: path.join(bin, 'systemctl'),
+    SINGBOX_WEBUI_UNIT: 'sing-box',
+    SINGBOX_WEBUI_TEST_URL: 'https://ipinfo.io',
+    ...overrides,
+  };
+}

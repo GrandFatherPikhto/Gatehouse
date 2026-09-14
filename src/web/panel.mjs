@@ -7,6 +7,7 @@
 // React means reimplementing these builders and the templates, not the model.
 
 import {ConfigError, PROXY_TYPES} from '../core/errors.mjs';
+import {listConfigSnapshots} from '../model/storage.mjs';
 
 /** Keys of the tree, without a name part. */
 export const PANEL_KINDS = Object.freeze([
@@ -20,6 +21,9 @@ export const PANEL_KINDS = Object.freeze([
   'dns',
   'proxy',
   'route',
+  'system',
+  'journal',
+  'tests',
 ]);
 
 /** Outbounds that exist in every generated config. */
@@ -125,6 +129,10 @@ export function buildPanel(model, key, extra = {}) {
     notice: extra.notice ?? null,
     form: extra.form ?? null,
   };
+  // Runtime state of the host layer, handed in by `app.mjs`: the outcome of the
+  // last check/restart and the name of the unit. The panel never runs a command
+  // itself — routes do that, this module only arranges what they return.
+  const system = extra.system ?? {};
 
   switch (kind) {
     case 'profiles':
@@ -214,6 +222,49 @@ export function buildPanel(model, key, extra = {}) {
         title: `Маршрут: ${name}`,
         route,
         outbounds: knownOutbounds(model),
+      };
+    }
+
+    case 'system': {
+      const lastCheck = system.lastCheck ?? null;
+      return {
+        ...base,
+        title: 'Система',
+        configPath: model.resolvedOutputPath(),
+        configExists: model.configExists(),
+        // Only the NAMES are exposed to the view: a snapshot is restored by the
+        // route from the state directory, never by a path arriving from a form.
+        snapshots: listConfigSnapshots(model.stateDir).map((file) => ({file})),
+        lastCheck,
+        lastRestart: system.lastRestart ?? null,
+        // The restart is offered ONLY after a successful check of the file that
+        // is on disk right now. `sing-box check` proves far less than "the config
+        // is correct" (it skips a duplicate listen_port, an unknown outbound tag
+        // and a typo in dns.final), so the wording around it says «схема принята».
+        canRestart: Boolean(lastCheck && lastCheck.ok),
+        checkedOk: lastCheck === null ? null : Boolean(lastCheck.ok),
+        unit: system.unit ?? 'sing-box',
+        tokenRequired: Boolean(extra.auth?.tokenRequired),
+      };
+    }
+
+    case 'journal':
+      return {
+        ...base,
+        title: 'Журнал sing-box',
+        unit: system.unit ?? 'sing-box',
+        lines: system.journalLines ?? 50,
+      };
+
+    case 'tests': {
+      const info = model.linksInfo();
+      return {
+        ...base,
+        title: 'Тест серверов',
+        tags: info.tags,
+        linksError: info.error,
+        concurrency: system.testConcurrency ?? 4,
+        configPath: model.resolvedOutputPath(),
       };
     }
 

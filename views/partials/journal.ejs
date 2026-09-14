@@ -1,0 +1,90 @@
+<%# Живой журнал: SSE-поток `journalctl -f`. Строки уже разобраны на сервере
+    (уровень из PRIORITY, время, текст) и раскрашиваются на клиенте.
+    Поток закрывается вместе с вкладкой: без этого каждый перезаход оставлял бы
+    висеть свой `journalctl -f`. Одновременно разрешён один поток. %>
+<h2><%= panel.title %></h2>
+
+<p class="hint">
+  Юнит: <code><%= panel.unit %></code>. Читается без привилегий (нужно членство в
+  группе <code>adm</code>). Журнал юнита переживает перезапуск sing-box: поток не
+  прерывается, в него просто попадают новые строки.
+</p>
+
+<div class="journal-controls">
+  <label for="journal-level">Минимальный уровень</label>
+  <select id="journal-level">
+    <option value="debug">debug</option>
+    <option value="info" selected>info</option>
+    <option value="notice">notice</option>
+    <option value="warning">warning</option>
+    <option value="err">err</option>
+    <option value="crit">crit</option>
+  </select>
+  <span id="journal-status" class="muted">соединение…</span>
+</div>
+
+<pre id="journal-log" class="journal" aria-live="polite"></pre>
+
+<script>
+  // Крошечный клиент SSE: без сборки и без библиотеки. Строка — один <div>,
+  // чтобы фильтр по уровню был обычным display:none, а не перерисовкой текста.
+  (function () {
+    var RANKS = {emerg: 0, alert: 1, crit: 2, err: 3, warning: 4, notice: 5, info: 6, debug: 7};
+    var MAX_LINES = 500;
+    var log = document.getElementById('journal-log');
+    var level = document.getElementById('journal-level');
+    var status = document.getElementById('journal-status');
+    if (!log || !level || !status) return;
+
+    function rankOf(name) {
+      return Object.prototype.hasOwnProperty.call(RANKS, name) ? RANKS[name] : 6;
+    }
+
+    function applyFilter() {
+      var threshold = rankOf(level.value);
+      for (var i = 0; i < log.children.length; i += 1) {
+        var rank = Number(log.children[i].getAttribute('data-rank'));
+        log.children[i].style.display = rank <= threshold ? '' : 'none';
+      }
+    }
+
+    function add(entry) {
+      var line = document.createElement('div');
+      var levelName = entry.level || 'info';
+      line.className = 'journal-line level-' + levelName;
+      line.setAttribute('data-rank', String(rankOf(levelName)));
+      var time = String(entry.time || '').replace('T', ' ').slice(0, 19);
+      line.textContent = '[' + time + '] ' + levelName + ' ' + (entry.message || '');
+      log.appendChild(line);
+      while (log.childNodes.length > MAX_LINES) log.removeChild(log.firstChild);
+      log.scrollTop = log.scrollHeight;
+      applyFilter();
+    }
+
+    level.addEventListener('change', applyFilter);
+
+    var source = new EventSource('/journal/stream');
+    source.addEventListener('hello', function (event) {
+      var data = JSON.parse(event.data);
+      status.textContent = 'поток открыт (юнит ' + data.unit + ')';
+      status.className = 'badge clean';
+    });
+    source.addEventListener('log', function (event) {
+      add(JSON.parse(event.data));
+    });
+    source.addEventListener('stderr', function (event) {
+      var data = JSON.parse(event.data);
+      status.textContent = 'journalctl: ' + data.message;
+      status.className = 'badge dirty';
+    });
+    source.addEventListener('end', function () {
+      status.textContent = 'поток завершён';
+      status.className = 'muted';
+      source.close();
+    });
+    source.addEventListener('error', function () {
+      status.textContent = 'поток прерван (сервер закрыт или поток уже занят)';
+      status.className = 'badge dirty';
+    });
+  })();
+</script>

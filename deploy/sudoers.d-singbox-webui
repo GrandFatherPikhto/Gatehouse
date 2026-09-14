@@ -1,0 +1,18 @@
+# SingBoxWebUI: право перезапустить ровно один юнит, и ничего больше.
+#
+# Установка:
+#   sudo install -m 0440 -o root -g root deploy/sudoers.d-singbox-webui \
+#        /etc/sudoers.d/sing-box-webui
+#   sudo visudo -c        # обязательно: сломанный файл в sudoers.d ломает sudo целиком
+#
+# Проверка (от имени denis):
+#   sudo -n systemctl restart sing-box && echo ok
+#
+# Правило намеренно узкое: абсолютный путь к systemctl, один юнит, без wildcard
+# и без оболочки. `sing-box-webui` не получает права запускать что-либо ещё.
+#
+# Абсолютный путь совпадает с SINGBOX_WEBUI_SYSTEMCTL, который сервис передаёт
+# аргументом в `sudo -n`: sudo сверяет именно командную строку, поэтому путь
+# systemctl в юните и в этом файле обязан совпадать.
+
+denis ALL=(root) NOPASSWD: /usr/bin/systemctl restart sing-box

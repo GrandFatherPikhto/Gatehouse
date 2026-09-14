@@ -1,0 +1,75 @@
+# SingBoxWebUI — веб-редактор webui.json и config.json.
+#
+# Вариант по умолчанию: рестарт демона через `sudo -n systemctl restart sing-box`
+# и правило из `deploy/sudoers.d-singbox-webui`. Рядом лежит вариант на polkit
+# (`deploy/sing-box-webui.service.polkit`), где sudo не нужен вовсе и потому
+# можно включить `NoNewPrivileges=yes`. Оба варианта — заготовки: применяет
+# владелец руками, см. `deploy/README.md`.
+#
+# Установка (имена путей — как в задании, при другом каталоге кода поправьте
+# WorkingDirectory):
+#
+#   sudo cp deploy/sing-box-webui.service /etc/systemd/system/
+#   sudo install -d -m 0750 -o denis -g denis /etc/sing-box-webui
+#   sudo cp deploy/sing-box-webui.env.example /etc/sing-box-webui/env
+#   sudo chown root:denis /etc/sing-box-webui/env
+#   sudo chmod 0640 /etc/sing-box-webui/env
+#   sudoedit /etc/sing-box-webui/env            # вписать токен
+#   sudo install -m 0440 deploy/sudoers.d-singbox-webui /etc/sudoers.d/sing-box-webui
+#   sudo visudo -c                              # обязательно проверить синтаксис
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now sing-box-webui
+
+[Unit]
+Description=SingBoxWebUI — web editor of webui.json and config.json
+Documentation=file:///home/denis/sing-box-web-ui/deploy/README.md
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=denis
+Group=denis
+WorkingDirectory=/home/denis/sing-box-web-ui
+# Системная нода из NodeSource: та же 22.23.2, на которой сняты форматы вывода.
+ExecStart=/usr/bin/node src/web/server.mjs
+
+# systemd создаёт оба каталога от имени denis. Режимы заданы явно: по умолчанию
+# StateDirectory получает 0755, а в нём лежат снапшоты config.json с ключами
+# VLESS владельца, поэтому 0700.
+StateDirectory=sing-box-webui
+StateDirectoryMode=0700
+ConfigurationDirectory=sing-box-webui
+ConfigurationDirectoryMode=0750
+
+# ОБЯЗАТЕЛЬНО. На роутере umask 0002: без этой строки снапшоты и config.json
+# родятся читаемыми для всех, а на машине есть второй аккаунт с шеллом
+# (git, uid 1001). Проверено.
+UMask=0027
+
+# Пути к исполняемым файлам и адрес привязки — не секреты, им место в юните.
+# Токен — в EnvironmentFile с правами 0640: содержимое юнита видно любому через
+# `systemctl cat`, поэтому секрета в юните быть не должно.
+Environment=SINGBOX_WEBUI_SETTINGS=/etc/sing-box-webui/webui.json
+Environment=SINGBOX_WEBUI_STATE_DIR=/var/lib/sing-box-webui
+Environment=SINGBOX_WEBUI_HOST=10.95.2.1
+Environment=SINGBOX_WEBUI_CONFIG=/etc/sing-box/config.json
+Environment=SINGBOX_WEBUI_SINGBOX=/usr/local/bin/sing-box
+Environment=SINGBOX_WEBUI_SYSTEMCTL=/usr/bin/systemctl
+Environment=SINGBOX_WEBUI_JOURNALCTL=/usr/bin/journalctl
+Environment=SINGBOX_WEBUI_UNIT=sing-box
+EnvironmentFile=/etc/sing-box-webui/env
+
+Restart=always
+RestartSec=5
+
+# ProtectHome=yes здесь включить НЕЛЬЗЯ: код лежит в /home/denis, и сервис
+# перестанет видеть собственные файлы. Либо оставить выключенным (как здесь),
+# либо перенести код в /opt — решение владельца, см. deploy/README.md.
+#
+# NoNewPrivileges=yes здесь тоже нельзя: он блокирует setuid, то есть ломает
+# `sudo`, а с ним и рестарт. Вариант без этого ограничения — на polkit, в
+# `deploy/sing-box-webui.service.polkit`.
+
+[Install]
+WantedBy=multi-user.target

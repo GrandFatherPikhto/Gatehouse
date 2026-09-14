@@ -336,6 +336,19 @@ export class ProjectModel {
   }
 
   /**
+   * True when the generated `config.json` of the active profile is on disk.
+   *
+   * The system layer checks the FILE, not the in-memory document, so the panel
+   * has to say whether there is anything to check yet: on a fresh project the
+   * honest answer is "generate first", not "check failed".
+   *
+   * @returns {boolean}
+   */
+  configExists() {
+    return fs.existsSync(this.resolvedOutputPath());
+  }
+
+  /**
    * `defaults` merged with the active profile — top level only, so nested
    * objects are replaced as a whole. Mirrors the merge of the core
    * (`loadProfileSettings`), and a test asserts the two agree on the same

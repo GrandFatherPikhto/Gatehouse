@@ -1,0 +1,105 @@
+#!/usr/bin/env node
+// Fake `sing-box` for the system-layer tests.
+//
+// It repeats the output shapes measured on the owner's router (see the header of
+// `src/system/index.mjs`) and nothing else: no network, no router, no root, and
+// no real daemon. The tests point `SINGBOX_WEBUI_SINGBOX` at this file.
+//
+// Behaviour is driven by the arguments and by the CONTENT of the config it is
+// asked to check, not by a random number: a test that sets up a failing check
+// writes a file containing `__check_fail__`, so the outcome is deterministic and
+// no global environment juggling is needed between tests.
+//
+// Two extras exist only for the tests:
+//   * `FAKE_SINGBOX_ARGV_LOG` — append the received argv as JSON, one array per
+//     line. This is how "the emoji tag arrives as ONE argument" is checked.
+//   * `FAKE_SINGBOX_DELAY_MS` — sleep before answering, for abort/timeout cases.
+
+import fs from 'node:fs';
+import process from 'node:process';
+
+const argv = process.argv.slice(2);
+const command = argv[0];
+
+if (process.env.FAKE_SINGBOX_ARGV_LOG) {
+  fs.appendFileSync(process.env.FAKE_SINGBOX_ARGV_LOG, `${JSON.stringify(argv)}\n`);
+}
+
+/**
+ * Reads the value of the first flag found, the way `getopt` would.
+ *
+ * @param {string[]} flags
+ * @param {string} [fallback]
+ * @returns {string}
+ */
+function valueOf(flags, fallback = '') {
+  for (const flag of flags) {
+    const index = argv.indexOf(flag);
+    if (index >= 0 && index + 1 < argv.length) return argv[index + 1];
+  }
+  return fallback;
+}
+
+/** @param {number} ms */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+if (command === 'check') {
+  const config = valueOf(['-c', '--config']);
+  let text = '';
+  try {
+    text = fs.readFileSync(config, 'utf8');
+  } catch {
+    // A missing file is a failed check, which is what the real binary reports too.
+  }
+
+  if (text.includes('__check_fail__')) {
+    // The wording of a real decode failure, so the panel shows something honest.
+    process.stderr.write('FATAL decode config: unknown inbound type: bogus\n');
+    process.exit(1);
+  }
+  if (process.env.FAKE_SINGBOX_CHECK_STDERR) {
+    process.stderr.write(`${process.env.FAKE_SINGBOX_CHECK_STDERR}\n`);
+  }
+  // Silent on success and exit 0, exactly like the real `sing-box check`.
+  process.exit(0);
+}
+
+if (command === 'tools' && argv[1] === 'fetch') {
+  const tag = valueOf(['-o', '--outbound']);
+  const url = argv[argv.length - 1];
+  const delay = Number(process.env.FAKE_SINGBOX_DELAY_MS ?? 0);
+  if (delay > 0) await sleep(delay);
+
+  // Service line first, then the JSON body LAST — the interleaving of the router.
+  process.stdout.write(
+    `+0000 2026-09-14T11:00:00Z INFO outbound/vless[${tag}]: outbound connection to ${url}\n`,
+  );
+  process.stdout.write(
+    `${JSON.stringify(
+      {
+        ip: '194.55.164.202',
+        city: 'Limassol',
+        org: 'AS197648 CLOUDLAYER8 LIMITED',
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  if (tag.includes('fails')) {
+    process.stderr.write('ERROR connection refused\n');
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
+if (command === 'geosite' && argv[1] === 'lookup') {
+  // The broken build of sing-box 1.14: no database is installed at all.
+  process.stderr.write('FATAL open geosite file: open geosite.db: no such file or directory\n');
+  process.exit(1);
+}
+
+process.stderr.write(`FATAL unknown command: ${argv.join(' ')}\n`);
+process.exit(2);

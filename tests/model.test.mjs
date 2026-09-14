@@ -617,8 +617,13 @@ describe('stale references and the tree', () => {
       'proxies',
       'routes',
       'dns',
+      // Stage 3 added the host layer: check, restart, rollback, journal, tests.
+      'system',
     ]);
     assert.match(model.treeSpec().children[0].title, /активен: first/);
+
+    const system = model.treeSpec().children.find((child) => child.kind === 'system');
+    assert.deepEqual(system.children.map((child) => child.kind), ['journal', 'tests']);
   });
 
   test('server tags come from the links file of the settings directory', () => {

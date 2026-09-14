@@ -1,0 +1,27 @@
+#!/usr/bin/env node
+// Fake `systemctl`, doubling as the `sudo` stand-in of the tests.
+//
+// `restartSingBox` runs `sudo -n <systemctl> restart sing-box`. Pointing both
+// `SINGBOX_WEBUI_SUDO` and `SINGBOX_WEBUI_SYSTEMCTL` at this file makes the argv
+// observable without touching the real systemd, and keeps the test suite free of
+// `sudo` and of root.
+//
+// `FAKE_SYSTEMCTL_FAIL` makes it exit non-zero, for the "restart failed" path.
+
+import fs from 'node:fs';
+import process from 'node:process';
+
+const argv = process.argv.slice(2);
+
+if (process.env.FAKE_SYSTEMCTL_ARGV_LOG) {
+  fs.appendFileSync(process.env.FAKE_SYSTEMCTL_ARGV_LOG, `${JSON.stringify(argv)}\n`);
+}
+
+process.stdout.write(`fake systemctl: ${argv.join(' ')}\n`);
+
+if (process.env.FAKE_SYSTEMCTL_FAIL) {
+  process.stderr.write('fake systemctl: unit sing-box.service not found\n');
+  process.exit(1);
+}
+
+process.exit(0);

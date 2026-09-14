@@ -1,0 +1,119 @@
+<%# Массовый тест серверов. Прогресс идёт потоком (SSE), а не ответом запроса:
+    прогон 148 серверов с ограничением одновременности занимает минуты, и
+    блокировать на это один HTTP-запрос нельзя.
+    Тест НЕ трогает работающий демон: `sing-box tools fetch` поднимает свой
+    экземпляр, инбаунды не биндит и никого не перезапускает. %>
+<h2><%= panel.title %></h2>
+
+<p class="hint">
+  Проверяется конфиг: <code><%= panel.configPath %></code>.
+  Одновременно запускается не больше <strong><%= panel.concurrency %></strong>
+  проверок. Каждая — отдельный
+  <code>sing-box tools fetch -c … -o "<тег>" …</code>, тег с эмодзи и
+  пробелами уходит одним аргументом.
+</p>
+
+<% if (panel.linksError) { %>
+  <p class="error"><%= panel.linksError %></p>
+<% } else if (panel.tags.length === 0) { %>
+  <p class="hint">В файле ссылок активного профиля нет ни одного сервера.</p>
+<% } else { %>
+  <form id="tests-form" method="post" action="/tests/stream">
+    <button type="button" id="tests-start">Проверить все серверы профиля (<%= panel.tags.length %>)</button>
+    <button type="button" id="tests-stop" class="secondary" disabled>Прервать</button>
+    <span id="tests-status" class="muted">ожидание</span>
+  </form>
+
+  <table class="list" id="tests-table">
+    <thead>
+      <tr><th>тег</th><th>успех</th><th>задержка</th><th>город</th><th>ip</th></tr>
+    </thead>
+    <tbody id="tests-rows"></tbody>
+  </table>
+
+  <script>
+    // Тот же приём, что и у журнала: EventSource и построчный вывод, без
+    // библиотеки и без сборки. GET разрешён, потому что кэш отключён, а
+    // состояние прогона живёт на сервере одной строкой (второй тест отклоняется
+    // с 409).
+    (function () {
+      var start = document.getElementById('tests-start');
+      var stop = document.getElementById('tests-stop');
+      var status = document.getElementById('tests-status');
+      var rows = document.getElementById('tests-rows');
+      if (!start || !stop || !status || !rows) return;
+      var source = null;
+
+      function addRow(result) {
+        var row = document.createElement('tr');
+        var cells = [
+          result.tag,
+          result.ok ? 'OK' : (result.timedOut ? 'таймаут' : 'ошибка'),
+          result.elapsed === null ? '—' : result.elapsed + ' мс',
+          result.city || '—',
+          result.ip || '—',
+        ];
+        for (var i = 0; i < cells.length; i += 1) {
+          var cell = document.createElement('td');
+          cell.textContent = cells[i] === null || cells[i] === undefined ? '—' : String(cells[i]);
+          if (i === 1 && result.ok) cell.className = 'ok';
+          if (i === 1 && !result.ok) cell.className = 'bad';
+          row.appendChild(cell);
+        }
+        rows.appendChild(row);
+      }
+
+      function finish(text, className) {
+        status.textContent = text;
+        status.className = className;
+        start.disabled = false;
+        stop.disabled = true;
+        if (source) {
+          source.close();
+          source = null;
+        }
+      }
+
+      start.addEventListener('click', function () {
+        rows.textContent = '';
+        start.disabled = true;
+        stop.disabled = false;
+        status.textContent = 'соединение…';
+        status.className = 'muted';
+
+        source = new EventSource('/tests/stream');
+        source.addEventListener('start', function (event) {
+          var data = JSON.parse(event.data);
+          status.textContent = 'идёт: 0 из ' + data.total + ' (одновременно ' + data.concurrency + ')';
+        });
+        source.addEventListener('result', function (event) {
+          addRow(JSON.parse(event.data));
+          status.textContent = 'идёт: ' + rows.children.length + ' завершено';
+        });
+        source.addEventListener('done', function (event) {
+          var data = JSON.parse(event.data);
+          finish(
+            data.aborted
+              ? 'прервано: ' + data.done + ' из ' + data.total
+              : 'готово: ' + data.done + ' из ' + data.total,
+            'badge clean',
+          );
+        });
+        source.addEventListener('failed', function (event) {
+          finish('ошибка: ' + JSON.parse(event.data).message, 'badge dirty');
+        });
+        source.addEventListener('error', function () {
+          finish('поток прерван', 'badge dirty');
+        });
+      });
+
+      stop.addEventListener('click', function () {
+        if (source) {
+          source.close();
+          source = null;
+        }
+        finish('прервано пользователем (уже запущенные проверки дописываются)', 'badge dirty');
+      });
+    })();
+  </script>
+<% } %>

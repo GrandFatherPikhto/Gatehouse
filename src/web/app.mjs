@@ -12,11 +12,23 @@
 //     the panel URL, so the tool stays usable without any client script.
 
 import path from 'node:path';
+import process from 'node:process';
 
 import express from 'express';
 
 import {ConfigError} from '../core/errors.mjs';
 import {ProjectModel} from '../model/project.mjs';
+import {restoreLatestConfig, snapshotConfig} from '../model/storage.mjs';
+import {
+  SystemError,
+  checkConfig,
+  followJournal,
+  journalStreamCount,
+  restartSingBox,
+  systemConfig,
+  testOutbounds,
+} from '../system/index.mjs';
+import {TOKEN_COOKIE, extractToken, tokenMatches} from './auth.mjs';
 import * as forms from './forms.mjs';
 import {PANEL_KINDS, buildPanel, buildStatus, panelKey, panelUrl} from './panel.mjs';
 
@@ -26,6 +38,56 @@ const PUBLIC = path.join(ROOT, 'public');
 
 /** Panel shown when nothing else is asked for. */
 export const DEFAULT_PANEL = 'profiles';
+
+/** How many journal lines a live stream replays before following. */
+export const JOURNAL_REPLAY_LINES = 50;
+
+/** How long a check may take before it is killed; `sing-box check` is instant. */
+const CHECK_TIMEOUT = 15000;
+
+/** Keep of the `config.json` snapshots taken before each generation. */
+const CONFIG_SNAPSHOT_KEEP = 10;
+
+/**
+ * Shapes one outbound test result for the wire: the row of the table, without
+ * the whole stdout of the command, which the SSE stream has no use for.
+ *
+ * @param {Record<string, unknown>} result
+ * @returns {Record<string, unknown>}
+ */
+function testResultView(result) {
+  return {
+    tag: result.tag,
+    ok: Boolean(result.ok && result.parsed),
+    exitOk: Boolean(result.ok),
+    elapsed: typeof result.elapsed === 'number' ? result.elapsed : null,
+    city: result.city ?? null,
+    ip: result.ip ?? null,
+    timedOut: Boolean(result.timedOut),
+    error: result.error ?? null,
+  };
+}
+
+/**
+ * Writes one `text/event-stream` frame. Silently ignores a closed socket: the
+ * browser closing a tab is normal, not an error of the editor.
+ *
+ * @param {import('express').Response} res
+ * @param {string} event
+ * @param {unknown} data
+ */
+function writeEvent(res, event, data) {
+  if (res.writableEnded || res.destroyed) return;
+  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+/** Headers of every SSE response. `no-transform` stops a proxy from buffering. */
+const SSE_HEADERS = Object.freeze({
+  'Content-Type': 'text/event-stream; charset=utf-8',
+  'Cache-Control': 'no-cache, no-transform',
+  Connection: 'keep-alive',
+  'X-Accel-Buffering': 'no',
+});
 
 /**
  * Builds the Express app.
@@ -44,12 +106,55 @@ export function createApp(options = {}) {
       snapshotKeep: options.snapshotKeep,
     });
 
+  const token = typeof options.token === 'string' ? options.token : '';
+  // The environment of the process decides what the system layer runs; a request
+  // never does. `systemConfig` reads the same variables the CLI does.
+  const systemEnv = options.env ?? process.env;
+  const system = systemConfig(systemEnv);
+
+  // Runtime state of the host layer. It lives on the app, not in a module global,
+  // so two editors in one process (the tests start many) cannot see each other's
+  // "last check" and restart permissions.
+  const state = {
+    lastCheck: null,
+    lastRestart: null,
+    testsRunning: false,
+  };
+
   const app = express();
   app.disable('x-powered-by');
   app.set('view engine', 'ejs');
   app.set('views', VIEWS);
   app.use(express.urlencoded({extended: false, limit: '4mb'}));
   app.use('/static', express.static(PUBLIC));
+
+  // ------------------------------------------------------------------
+  // Access control
+  // ------------------------------------------------------------------
+  //
+  // With a token configured every route is behind it, the SSE endpoints
+  // included: they are the ones that spawn `journalctl -f`, so leaving them open
+  // would hand a stranger a process on the host. Without a token the server only
+  // ever listens on the loopback address — `assertAuthentication` of
+  // `server.mjs` refuses to start otherwise.
+  if (token.length > 0) {
+    app.use((req, res, next) => {
+      if (tokenMatches(extractToken(req), token)) {
+        // Remember a token that arrived in the query string: the `EventSource`
+        // of the SSE panels cannot set a header, so it needs the cookie to
+        // authenticate. HttpOnly keeps it away from any script on the page.
+        res.cookie(TOKEN_COOKIE, token, {httpOnly: true, sameSite: 'strict', path: '/'});
+        next();
+        return;
+      }
+      res
+        .status(401)
+        .type('text/plain')
+        .send(
+          'Требуется токен доступа: заголовок Authorization: Bearer … или параметр ?token=…\n',
+        );
+    });
+  }
 
   /**
    * Builds a panel, falling back to a neighbouring one when the requested panel
@@ -91,7 +196,20 @@ export function createApp(options = {}) {
    * @returns {Record<string, unknown>}
    */
   function buildView(key, extra) {
-    const resolved = resolvePanel(key, extra);
+    // The panel builders get the runtime state of the host layer, not a way to
+    // run anything: `buildPanel` only arranges what the routes already did.
+    const enriched = {
+      ...extra,
+      system: {
+        lastCheck: state.lastCheck,
+        lastRestart: state.lastRestart,
+        unit: system.unit,
+        testConcurrency: system.testConcurrency,
+        journalLines: JOURNAL_REPLAY_LINES,
+      },
+      auth: {tokenRequired: token.length > 0},
+    };
+    const resolved = resolvePanel(key, enriched);
     return {
       model,
       key: resolved.key,
@@ -128,21 +246,24 @@ export function createApp(options = {}) {
   }
 
   /**
-   * Answers a mutation. `action` returns the panel to show and the notices.
+   * Answers a mutation. `action` returns the panel to show and the notices. It may
+   * be async: the system calls (check, restart) are promises, and the SSE routes
+   * are the only ones that answer without going through here.
    *
    * @param {string} defaultKey
-   * @param {(req: import('express').Request) => Record<string, unknown>} action
+   * @param {(req: import('express').Request) => Record<string, unknown>|Promise<Record<string, unknown>>} action
    * @returns {import('express').RequestHandler}
    */
   function mutation(defaultKey, action) {
-    return (req, res) => {
+    return async (req, res) => {
       let extra;
       try {
-        extra = action(req) ?? {};
+        extra = (await action(req)) ?? {};
       } catch (error) {
-        if (!(error instanceof ConfigError)) throw error;
+        if (!(error instanceof ConfigError) && !(error instanceof SystemError)) throw error;
         // A rejection keeps the entered values, so the owner does not retype a
-        // form because of one bad port number.
+        // form because of one bad port number. A failed system call is reported
+        // the same way: a plain sentence, never a stack trace.
         extra = {error: error.message, form: req.body, key: defaultKey};
       }
       const key = typeof extra.key === 'string' && extra.key.length > 0 ? extra.key : defaultKey;
@@ -280,8 +401,25 @@ export function createApp(options = {}) {
   app.post(
     '/generate',
     mutation('output', () => {
+      // Snapshot BEFORE the generator overwrites the file: the whole point of the
+      // rollback is to bring back byte-for-byte what the daemon was running, and
+      // that copy has to be taken while it still exists.
+      const configPath = model.resolvedOutputPath();
+      const snapshot = model.configExists()
+        ? snapshotConfig(configPath, model.stateDir, {keep: CONFIG_SNAPSHOT_KEEP})
+        : null;
       const generation = model.generate();
-      return {key: 'output', generation, notice: generation.summary};
+
+      // New bytes invalidate the old check: the previous check judged a different
+      // file, so it must not authorise a restart of what is on disk now.
+      state.lastCheck = null;
+
+      return {
+        key: 'output',
+        generation,
+        snapshot: snapshot === null ? null : path.basename(snapshot.path),
+        notice: generation.summary,
+      };
     }),
   );
 
@@ -382,6 +520,207 @@ export function createApp(options = {}) {
       return {key: panelFromBody(req, DEFAULT_PANEL), notice: 'Файл перечитан, правки отброшены'};
     }),
   );
+
+  // ------------------------------------------------------------------
+  // System layer: check, restart, rollback
+  // ------------------------------------------------------------------
+  //
+  // The order is deliberate and visible in the panel: generate → check → and
+  // only then the restart is even drawn. `Restart=always` is set on the unit, so
+  // restarting with a config the daemon rejects means an endless restart loop and
+  // every connection in the house down. The rollback is one click for the same
+  // reason.
+
+  app.post(
+    '/check',
+    mutation('system', async () => {
+      const configPath = model.resolvedOutputPath();
+      if (!model.configExists()) {
+        throw new ConfigError(
+          'config.json ещё не сгенерирован: сначала «Сгенерировать», потом проверять',
+        );
+      }
+
+      const result = await checkConfig(configPath, {env: systemEnv, timeout: CHECK_TIMEOUT});
+      state.lastCheck = {
+        ok: result.ok,
+        code: result.code,
+        stdout: result.stdout.trim(),
+        stderr: result.stderr.trim(),
+        error: result.error,
+        timedOut: result.timedOut,
+        at: new Date().toISOString(),
+        configPath,
+      };
+      // The permission to restart is tied to the bytes that were just checked.
+      state.lastRestart = null;
+
+      return {
+        key: 'system',
+        notice: result.ok
+          ? 'Схема принята: sing-box check прошёл (exit=0). Это проверка декодирования, ' +
+            'а не доказательство корректности — дубль порта, чужой тег и опечатку в dns.final ' +
+            'она пропускает.'
+          : 'Проверка не прошла: перезапуск не предлагается',
+      };
+    }),
+  );
+
+  app.post(
+    '/restart',
+    mutation('system', async () => {
+      if (state.lastCheck === null || !state.lastCheck.ok) {
+        throw new ConfigError(
+          'перезапуск не предлагается: сначала успешная проверка config.json',
+        );
+      }
+
+      const result = await restartSingBox({env: systemEnv});
+      state.lastRestart = {
+        ok: result.ok,
+        code: result.code,
+        stdout: result.stdout.trim(),
+        stderr: result.stderr.trim(),
+        error: result.error,
+        timedOut: result.timedOut,
+        at: new Date().toISOString(),
+      };
+
+      return {
+        key: 'system',
+        notice: result.ok
+          ? 'sing-box перезапущен. Все текущие соединения оборвались — как и предупреждали.'
+          : `Перезапуск не удался: ${result.stderr.trim() || result.error || 'без вывода'}`,
+      };
+    }),
+  );
+
+  app.post(
+    '/rollback',
+    mutation('system', async () => {
+      const configPath = model.resolvedOutputPath();
+      const restored = restoreLatestConfig(model.stateDir, configPath);
+      if (restored === null) {
+        throw new ConfigError('снапшотов config.json ещё нет: откатывать нечего');
+      }
+
+      // The restored bytes were never checked in this session, so the permission
+      // to restart does not transfer to them from the previous check.
+      state.lastCheck = null;
+
+      const result = await restartSingBox({env: systemEnv});
+      state.lastRestart = {
+        ok: result.ok,
+        code: result.code,
+        stdout: result.stdout.trim(),
+        stderr: result.stderr.trim(),
+        error: result.error,
+        timedOut: result.timedOut,
+        at: new Date().toISOString(),
+      };
+
+      const from = path.basename(restored.from);
+      return {
+        key: 'system',
+        notice: result.ok
+          ? `Восстановлен ${from} и sing-box перезапущен.`
+          : `Конфиг восстановлен из ${from}, но перезапуск не удался: ` +
+            `${result.stderr.trim() || result.error || 'без вывода'}`,
+      };
+    }),
+  );
+
+  // ------------------------------------------------------------------
+  // Live journal (SSE)
+  // ------------------------------------------------------------------
+  //
+  // The stream is the one place that leaves a process running, so it is also the
+  // place with the sharpest edges: the child must die with the connection
+  // (`req.on('close')`), and only one stream may exist at a time. Without the
+  // kill, every page reload leaves a `journalctl -f` behind.
+
+  app.get('/journal/stream', (req, res) => {
+    let stream;
+    try {
+      stream = followJournal({
+        env: systemEnv,
+        lines: JOURNAL_REPLAY_LINES,
+        onEntry: (entry) => writeEvent(res, 'log', entry),
+        onRaw: (line) => writeEvent(res, 'raw', {message: line}),
+        onStderr: (text) => writeEvent(res, 'stderr', {message: text}),
+        onExit: () => {
+          writeEvent(res, 'end', {});
+          res.end();
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof SystemError)) throw error;
+      res.status(409).type('text/plain').send(`${error.message}\n`);
+      return;
+    }
+
+    res.status(200).set(SSE_HEADERS);
+    res.flushHeaders();
+    writeEvent(res, 'hello', {unit: stream.unit, streams: journalStreamCount()});
+
+    const close = () => stream.stop();
+    req.on('close', close);
+    res.on('close', close);
+  });
+
+  // ------------------------------------------------------------------
+  // Mass outbound test (SSE)
+  // ------------------------------------------------------------------
+  //
+  // Replaces the reference `live_test`, which restarted the daemon once per
+  // server. Nothing here touches the running daemon: `tools fetch` starts its own
+  // instance. Progress is streamed so a 148-server run cannot block a request for
+  // minutes, and the concurrency cap keeps the router from opening 148 sockets.
+
+  app.get('/tests/stream', async (req, res) => {
+    if (state.testsRunning) {
+      res.status(409).type('text/plain').send('тест серверов уже идёт: дождитесь конца\n');
+      return;
+    }
+
+    const info = model.linksInfo();
+    if (info.error !== null) {
+      res.status(400).type('text/plain').send(`${info.error}\n`);
+      return;
+    }
+
+    const tags = info.tags;
+    const controller = new AbortController();
+    state.testsRunning = true;
+
+    res.status(200).set(SSE_HEADERS);
+    res.flushHeaders();
+    writeEvent(res, 'start', {total: tags.length, concurrency: system.testConcurrency});
+
+    const abort = () => controller.abort();
+    req.on('close', abort);
+    res.on('close', abort);
+
+    try {
+      const outcome = await testOutbounds(tags, {
+        env: systemEnv,
+        configPath: model.resolvedOutputPath(),
+        concurrency: system.testConcurrency,
+        signal: controller.signal,
+        onResult: (result) => writeEvent(res, 'result', testResultView(result)),
+      });
+      writeEvent(res, 'done', {
+        total: tags.length,
+        done: outcome.results.length,
+        aborted: outcome.aborted,
+      });
+    } catch (error) {
+      writeEvent(res, 'failed', {message: error.message});
+    } finally {
+      state.testsRunning = false;
+      if (!res.writableEnded) res.end();
+    }
+  });
 
   // ------------------------------------------------------------------
   // Fallbacks

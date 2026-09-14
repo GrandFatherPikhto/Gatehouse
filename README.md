@@ -16,17 +16,21 @@ maintains that settings file. It is built in three stages:
   `config.json` for the active profile. Functionally it replaces the Qt GUI of
   the Python project.
 * **stage 3 — everything that touches the host machine**: `sing-box check`, the
-  daemon restart, the journal, the live outbound test, geosite, the systemd unit,
-  rights, deployment and authentication. **None of it is implemented**:
-  [`src/system/index.mjs`](src/system/index.mjs:1) is a boundary of five stubs
-  that throw, and it is the only module stage 3 has to change.
+  daemon restart and the rollback, the live journal, the outbound test, geosite,
+  the systemd unit, rights, deployment and authentication. Implemented:
+  [`src/system/index.mjs`](src/system/index.mjs:1) is the only module that runs a
+  command, and it always uses `execFile`/`spawn` with an argument array.
+  [`deploy/`](deploy/README.md:1) holds the unit, the sudoers rule, the polkit
+  alternative and the order of deployment as ready-to-apply files.
 
 The core is a port, not a rewrite. The reference has three years of production
 use and 79 tests, so exact equality came first, not improvement. Anything that
 looks odd in the reference is described in
 [`techdocs/done_2026_09_14_port_core_generator.md`](techdocs/done_2026_09_14_port_core_generator.md)
 instead of being "fixed" on the way. The web editor is documented in
-[`techdocs/done_2026_09_14_web_editor.md`](techdocs/done_2026_09_14_web_editor.md).
+[`techdocs/done_2026_09_14_web_editor.md`](techdocs/done_2026_09_14_web_editor.md)
+and the system layer in
+[`techdocs/done_2026_09_14_system_integration.md`](techdocs/done_2026_09_14_system_integration.md).
 
 ## Requirements
 
@@ -40,9 +44,13 @@ instead of being "fixed" on the way. The web editor is documented in
 
 ```bash
 npm ci          # runtime: ajv, express, ejs; dev: yaml (converter), htmx.org
-node --test     # 218 checks, no network, no root, no sing-box
+node --test     # 256 checks, no network, no root, no sing-box
 npm run compare # byte-level equality with the reference, needs Python
 ```
+
+The system-layer tests run the fake binaries of `tests/fixtures/bin/` instead of
+`sing-box`, `systemctl` and `journalctl`: the suite never touches a real daemon, a
+router or `sudo`.
 
 `node --test` discovers `tests/*.test.mjs` and creates all of its temporary files
 in the system temp directory: a run never touches the repository, `webui.json` or
@@ -100,9 +108,25 @@ npm start        # Веб-редактор webui.json: http://127.0.0.1:8080/
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SINGBOX_WEBUI_SETTINGS` | `webui.json` | settings file to edit; created on the first save when missing |
-| `SINGBOX_WEBUI_HOST` | `127.0.0.1` | listen address. Not `0.0.0.0` until stage 3 adds authentication |
+| `SINGBOX_WEBUI_HOST` | `127.0.0.1` | listen address. A non-loopback address **requires** a token, see "Authentication" below |
 | `SINGBOX_WEBUI_PORT` | `8080` | listen port; `0` picks a free one |
 | `SINGBOX_WEBUI_STATE_DIR` | `./.state` | where snapshots go; on the router this becomes `/var/lib/sing-box-webui` |
+| `SINGBOX_WEBUI_TOKEN` | *(empty)* | access token. Required whenever the bind address is not the loopback |
+
+The system layer reads its own variables, again from the environment and never
+from a request:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SINGBOX_WEBUI_SINGBOX` | `/usr/local/bin/sing-box` | binary used by `check` and `tools fetch` |
+| `SINGBOX_WEBUI_SYSTEMCTL` | `/usr/bin/systemctl` | `systemctl`; this path must match the sudoers rule |
+| `SINGBOX_WEBUI_JOURNALCTL` | `/usr/bin/journalctl` | `journalctl` |
+| `SINGBOX_WEBUI_SUDO` | `/usr/bin/sudo` | `sudo`; the value `none` calls `systemctl` directly (the polkit variant) |
+| `SINGBOX_WEBUI_UNIT` | `sing-box` | unit name |
+| `SINGBOX_WEBUI_CONFIG` | `/etc/sing-box/config.json` | default config of the commands; the UI passes the generated path |
+| `SINGBOX_WEBUI_TEST_URL` | `https://ipinfo.io` | target of the outbound test |
+| `SINGBOX_WEBUI_TEST_TIMEOUT` | `8000` | timeout of one outbound test, ms |
+| `SINGBOX_WEBUI_TEST_CONCURRENCY` | `4` | outbound tests running at once |
 
 The path of the settings file comes from the environment and from nowhere else.
 There is deliberately no "open file" box in the UI: a path arriving from the
@@ -153,12 +177,71 @@ duplicate, remove), Общие, Значения по умолчанию, Фай
   works on a router without internet access, and the files are copied as they are.
 * **Generation runs on the saved file**, through the same `generateConfigFile` the
   CLI uses, and says so when the editor had unsaved edits at that moment.
-* **Stage 3 is behind a boundary.** [`src/system/index.mjs`](src/system/index.mjs:1)
-  exports `restartSingBox`, `checkConfig`, `tailJournal`, `testOutbound` and
-  `geositeLookup`; each throws "не реализовано (этап 3)". When they are
-  implemented, only that module changes, and only with `execFile`/`spawn` and an
-  argument array — tags look like `🇨🇾 Cyprus - Limassol` and break a shell command
-  line with no attacker involved.
+* **The system layer is one module.** [`src/system/index.mjs`](src/system/index.mjs:1)
+  exports `restartSingBox`, `checkConfig`, `tailJournal`, `followJournal`,
+  `testOutbound`, `testOutbounds` and `geositeLookup`, and it is the only place
+  that runs a command. Always `execFile`/`spawn` with an argument array — tags look
+  like `🇨🇾 Cyprus - Limassol` and break a shell command line with no attacker
+  involved.
+
+## System layer (stage 3)
+
+The module is testable without sing-box: the binary paths come from the
+environment, and the tests point them at the fake scripts of
+`tests/fixtures/bin/`.
+
+* **`sing-box check` proves less than it sounds like.** Measured on 1.14: it
+  catches an unknown inbound type and unknown fields, and it lets a duplicate
+  `listen_port`, a reference to a non-existent outbound tag and a typo in
+  `dns.final` through with `exit=0`. The panel therefore says «схема принята» and
+  never «конфиг корректен» — a wrong label is what talks the owner into a restart
+  with a config the daemon will not start.
+* **generate → check → restart, in that order.** The restart button is drawn only
+  after a successful check of the file on disk, and the route refuses the restart
+  otherwise. The unit runs with `Restart=always`, so a config the daemon rejects
+  means an endless restart loop and every connection in the house down.
+* **The rollback is one click.** Before each generation the previous
+  `config.json` is copied to `<state-dir>/snapshots/config-<ISO>.json` (the last
+  10 are kept) and is restored byte for byte, followed by a restart.
+* **The journal is live over SSE.** `journalctl -f -o json` is parsed line by line
+  on the server (level from `PRIORITY`, time, text) and the client colours and
+  filters by level. The child dies with the connection (`req.on('close')`) —
+  otherwise every page reload would leave a `journalctl -f` behind — and one
+  stream at a time is allowed.
+* **The outbound test replaces `live_test`.** `sing-box tools fetch` starts its own
+  instance, binds no inbound and never touches the running daemon, so checking 148
+  servers costs zero restarts. The mass run is capped (4 at a time by default) and
+  streams progress over SSE, so it cannot block a request for minutes.
+* **`geositeLookup` is a stub with a sentence.** sing-box 1.14 installs no geosite
+  database, the owner's routing uses plain `domain_suffix`, and there is
+  deliberately no panel for it: a missing database becomes «база geosite не
+  установлена» instead of a bare `FATAL`.
+
+## Authentication and security
+
+* **A non-loopback bind without a token refuses to start.** From this stage on the
+  editor can restart the daemon and shows the VLESS keys, so `SINGBOX_WEBUI_HOST`
+  that is not a loopback address together with an empty `SINGBOX_WEBUI_TOKEN` is a
+  startup error with the reason and both ways out — not a line in a log.
+* **Every route is behind the token, SSE included.** `Authorization: Bearer …` or
+  `?token=…`; the query form is answered with an `HttpOnly`, `SameSite=Strict`
+  cookie so the `EventSource` of the panels can authenticate on its own. The
+  comparison is length-checked and uses `timingSafeEqual`.
+* **A loopback bind plus an ssh tunnel is still the safer choice.** Over plain HTTP
+  a token travels the local network unencrypted, so a LAN bind with a token is
+  convenience, not protection from sniffing. There is no HTTPS termination in the
+  project on purpose: use `ssh -L 8080:127.0.0.1:8080 denis@10.95.2.1` or an
+  external proxy.
+
+## Deployment
+
+[`deploy/`](deploy/README.md:1) holds the systemd unit, the sudoers rule, the
+polkit alternative and a step-by-step `deploy/README.md`. Nothing there is applied
+automatically. Two decisions are written out honestly instead of being taken here:
+`ProtectHome=yes` cannot be enabled while the code lives in `/home/denis`, and
+`NoNewPrivileges=yes` breaks `sudo` (setuid), so it belongs to the polkit variant.
+`UMask=0027` and `StateDirectoryMode=0700` are not optional: the router runs with
+umask `0002` and there is a second account with a shell.
 
 ## Settings format: `webui.json`
 
@@ -271,7 +354,9 @@ Two levels of verification exist:
 | [`src/web/app.mjs`](src/web/app.mjs:1) | Express app: routes, form parsing, fragments |
 | [`src/web/server.mjs`](src/web/server.mjs:1) | `npm start`: environment, listen address |
 | [`src/web/panel.mjs`](src/web/panel.mjs:1) | view models handed to the templates |
-| [`src/system/index.mjs`](src/system/index.mjs:1) | stage-3 boundary: five stubs that throw |
+| [`src/system/index.mjs`](src/system/index.mjs:1) | system boundary: `checkConfig`, `restartSingBox`, `tailJournal`, `followJournal`, `testOutbound`, `testOutbounds`, `geositeLookup` |
+| [`src/web/auth.mjs`](src/web/auth.mjs:1) | token transport, loopback check, the startup refusal |
+| [`deploy/`](deploy/README.md:1) | systemd unit, sudoers and polkit variants, deployment notes |
 | [`views/`](views/layout.ejs:1), [`public/`](public/app.css:1) | EJS templates, stylesheet, vendored htmx |
 | [`tools/generate.mjs`](tools/generate.mjs:1) | CLI that writes `config.json` |
 | [`tools/import-settings.mjs`](tools/import-settings.mjs:1) | one-off `settings.yaml` → `webui.json` converter |
@@ -305,11 +390,11 @@ Two levels of verification exist:
 * **`curl_test` and `live_test` are gone for good.** `live_test` rewrote
   `config.json` and restarted sing-box to check a single server — 149 restarts
   for 148 servers, each dropping every connection in the house. The verified
-  replacement, already in use on the router, is:
+  replacement is implemented now:
 
   ```bash
   sing-box tools fetch -c /etc/sing-box/config.json -o "🇨🇾 Cyprus - Limassol" https://ipinfo.io
   ```
 
-  It exits 0 within a second and never touches the running sing-box. The web UI
-  will use this command; nothing of it is implemented in this task.
+  It exits 0 within a second, never touches the running sing-box, and the mass
+  test runs it per server with a bounded concurrency. See "System layer" above.

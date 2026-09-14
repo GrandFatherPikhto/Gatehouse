@@ -1,0 +1,103 @@
+<%# Система: проверка, перезапуск и откат. Порядок жёсткий и виден на экране:
+    сгенерировать → проверить → и только потом предлагается перезапуск. У юнита
+    стоит Restart=always, поэтому неподнявшийся конфиг даёт вечный цикл
+    перезапусков и весь трафик в доме встаёт. Кнопка перезапуска не рисуется,
+    пока проверка не прошла. %>
+<h2><%= panel.title %></h2>
+
+<p class="hint">
+  Проверяется файл на диске: <code><%= panel.configPath %></code>.
+  <% if (!panel.configExists) { %>
+    <strong>Файла ещё нет</strong> — сначала «Сгенерировать» на панели «Вывод».
+  <% } %>
+</p>
+
+<h3>1. Проверка схемы</h3>
+<p class="hint">
+  <code>sing-box check</code> проверяет <strong>только декодирование</strong>.
+  Проверено на живом sing-box 1.14: неизвестный тип инбаунда и лишние поля он
+  ловит, а дубль <code>listen_port</code>, ссылку на несуществующий тег аутбаунда
+  и опечатку в <code>dns.final</code> пропускает с <code>exit=0</code>. Поэтому
+  надпись здесь — «схема принята», а не «конфиг корректен».
+</p>
+<form hx-post="/check" hx-target="#panel" hx-swap="innerHTML" method="post" action="/check">
+  <button type="submit">Проверить config.json</button>
+</form>
+
+<% if (panel.lastCheck) { %>
+  <p class="<%= panel.lastCheck.ok ? 'notice' : 'error' %>">
+    <% if (panel.lastCheck.ok) { %>
+      Схема принята (exit=<%= panel.lastCheck.code %>), проверено <%= panel.lastCheck.at %>.
+    <% } else { %>
+      Проверка не прошла (exit=<%= panel.lastCheck.code %>)<%= panel.lastCheck.timedOut ? ', превышен таймаут' : '' %>.
+    <% } %>
+  </p>
+  <% if (panel.lastCheck.stdout) { %>
+    <h4>stdout</h4>
+    <pre class="output"><%= panel.lastCheck.stdout %></pre>
+  <% } %>
+  <% if (panel.lastCheck.stderr) { %>
+    <h4>stderr</h4>
+    <pre class="output"><%= panel.lastCheck.stderr %></pre>
+  <% } %>
+  <% if (panel.lastCheck.error) { %>
+    <p class="error"><%= panel.lastCheck.error %></p>
+  <% } %>
+<% } %>
+
+<h3>2. Перезапуск демона</h3>
+<% if (panel.canRestart) { %>
+  <p class="hint">
+    Юнит: <code><%= panel.unit %></code>. Перезапуск выполняется через
+    <code>sudo -n systemctl restart <%= panel.unit %></code> по единственному
+    правилу sudoers, выданному этому сервису.
+  </p>
+  <form hx-post="/restart" hx-target="#panel" hx-swap="innerHTML" method="post" action="/restart">
+    <button type="submit" class="danger"
+            hx-confirm="Перезапустить sing-box? ВСЕ текущие соединения в доме оборвутся, включая это.">Перезапустить sing-box</button>
+  </form>
+<% } else { %>
+  <p class="hint">
+    Кнопка перезапуска появится только после успешной проверки текущего
+    <code>config.json</code>. Так устроено намеренно: неподнявшийся конфиг при
+    <code>Restart=always</code> означает вечный цикл перезапусков.
+  </p>
+<% } %>
+
+<% if (panel.lastRestart) { %>
+  <p class="<%= panel.lastRestart.ok ? 'notice' : 'error' %>">
+    <% if (panel.lastRestart.ok) { %>
+      Последний перезапуск: успешен (exit=<%= panel.lastRestart.code %>), <%= panel.lastRestart.at %>.
+    <% } else { %>
+      Последний перезапуск: не удался (exit=<%= panel.lastRestart.code %>), <%= panel.lastRestart.at %>.
+    <% } %>
+  </p>
+  <% if (panel.lastRestart.stderr) { %>
+    <pre class="output"><%= panel.lastRestart.stderr %></pre>
+  <% } %>
+  <% if (panel.lastRestart.error) { %>
+    <p class="error"><%= panel.lastRestart.error %></p>
+  <% } %>
+<% } %>
+
+<h3>3. Откат предыдущего конфига</h3>
+<p class="hint">
+  Перед каждой генерацией предыдущий <code>config.json</code> копируется в
+  каталог состояния (<code>snapshots/config-<метка>.json</code>, хранятся
+  последние 10). Откат возвращает файл побайтово и сразу перезапускает демон —
+  чинить конфиг руками в аварии, когда весь дом без сети, не приходится.
+</p>
+<form hx-post="/rollback" hx-target="#panel" hx-swap="innerHTML" method="post" action="/rollback">
+  <button type="submit" class="danger" <%= panel.snapshots.length === 0 ? 'disabled' : '' %>
+          hx-confirm="Вернуть предыдущий config.json и перезапустить sing-box? Текущие соединения оборвутся.">Вернуть предыдущий конфиг и перезапустить</button>
+</form>
+
+<% if (panel.snapshots.length === 0) { %>
+  <p class="hint">Снапшотов ещё нет: они появятся после первой генерации поверх существующего файла.</p>
+<% } else { %>
+  <ul class="list-plain">
+    <% for (const snapshot of panel.snapshots.slice(-5).reverse()) { %>
+      <li><code><%= snapshot.file %></code></li>
+    <% } %>
+  </ul>
+<% } %>
