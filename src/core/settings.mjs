@@ -15,7 +15,7 @@ import path from 'node:path';
 
 import Ajv from 'ajv';
 
-import {buildConfig} from './build.mjs';
+import {API_SECRET_VAR, buildConfig} from './build.mjs';
 import {ConfigError, DEFAULT_SETTINGS_FILE, isMapping, pythonRepr} from './errors.mjs';
 import {parseLinks} from './vless.mjs';
 
@@ -196,7 +196,11 @@ export function generateConfigFile(settingsPath, options = {}) {
       : {...settings, exclude_from_auto: override};
 
   const outbounds = parseLinks(linksFile, warnings);
-  const [config, stats] = buildConfig(effective, outbounds, listenIp, warnings);
+  // The API secret lives in the environment and is looked up here, in the one
+  // place every caller (CLI and web editor) goes through. `options.apiSecret` is
+  // the injection point for a test; the environment is what a service uses.
+  const apiSecret = options.apiSecret ?? process.env[API_SECRET_VAR] ?? '';
+  const [config, stats] = buildConfig(effective, outbounds, listenIp, warnings, {apiSecret});
   writeJson(outputFile, config);
 
   return {outputFile, stats, warnings, config};

@@ -124,6 +124,18 @@
               "note": {
                 "description": "Free-form comment. Ignored by the core.",
                 "type": "string"
+              },
+              "pinned": {
+                "description": "The exit of this proxy is fixed on purpose. Ignored by the core; enforced by the model: a pinned proxy may name at most one server.",
+                "type": "boolean"
+              },
+              "watch": {
+                "description": "The watchdog checks this proxy's inbound and may act on it. Ignored by the core.",
+                "type": "boolean"
+              },
+              "watch_url": {
+                "description": "Per-proxy check target. Empty means the neutral default (generate_204). Ignored by the core.",
+                "type": "string"
               }
             }
           }
@@ -158,6 +170,55 @@
                 "description": "Free-form comment, like the one a profile and a proxy carry. Ignored by the core: buildRules reads only outbound and domains.",
                 "type": "string"
               }
+            }
+          }
+        },
+        "clash_api": {
+          "description": "External HTTP API of the daemon (Clash-compatible). Off by default; disabled means config.json stays byte-identical to the reference. The secret is NEVER stored here: it comes from SINGBOX_WEBUI_API_SECRET.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "controller": {
+              "description": "external_controller, host:port. Only 127.0.0.1 is accepted; anything else is refused by the generator.",
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "watchdog": {
+          "description": "Liveness watchdog of the editor. Read-only for the watchdog itself: it never writes webui.json or config.json.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "description": "Global switch. With it off a proxy marked watch is not checked at all.",
+              "type": "boolean"
+            },
+            "interval_seconds": {
+              "type": "integer",
+              "minimum": 10
+            },
+            "failures_before_action": {
+              "description": "Consecutive failed checks before the first rung. Two by default.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "pause_seconds": {
+              "description": "Minimum pause between two actions on one proxy.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_restarts_per_day": {
+              "description": "After this many restarts the watchdog gives up until the owner resets it.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "restart_enabled": {
+              "description": "Second rung: restart the daemon. Off by default until the owner confirms it helps.",
+              "type": "boolean"
             }
           }
         }

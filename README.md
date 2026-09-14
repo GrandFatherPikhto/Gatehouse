@@ -22,6 +22,12 @@ maintains that settings file. It is built in three stages:
   command, and it always uses `execFile`/`spawn` with an argument array.
   [`deploy/`](deploy/README.md:1) holds the unit, the sudoers rule, the polkit
   alternative and the order of deployment as ready-to-apply files.
+* **continuation — a pinned exit and a liveness watchdog**: a `pinned` flag on a
+  proxy forbids a pool, and a watchdog checks each `watch: true` proxy through its
+  own inbound, closes that proxy's connections on a failure and — only with the
+  second-rung switch on — restarts the daemon. Implemented:
+  [`src/watchdog/watchdog.mjs`](src/watchdog/watchdog.mjs:1) and
+  [`src/watchdog/clash.mjs`](src/watchdog/clash.mjs:1).
 
 The core is a port, not a rewrite. The reference has three years of production
 use and 79 tests, so exact equality came first, not improvement. Anything that
@@ -44,7 +50,7 @@ and the system layer in
 
 ```bash
 npm ci          # runtime: ajv, express, ejs; dev: yaml (converter), htmx.org
-node --test     # 256 checks, no network, no root, no sing-box
+node --test     # 298 checks, no network, no root, no sing-box
 npm run compare # byte-level equality with the reference, needs Python
 ```
 
@@ -121,12 +127,14 @@ from a request:
 | `SINGBOX_WEBUI_SINGBOX` | `/usr/local/bin/sing-box` | binary used by `check` and `tools fetch` |
 | `SINGBOX_WEBUI_SYSTEMCTL` | `/usr/bin/systemctl` | `systemctl`; this path must match the sudoers rule |
 | `SINGBOX_WEBUI_JOURNALCTL` | `/usr/bin/journalctl` | `journalctl` |
+| `SINGBOX_WEBUI_CURL` | `/usr/bin/curl` | binary the watchdog probes an inbound with |
 | `SINGBOX_WEBUI_SUDO` | `/usr/bin/sudo` | `sudo`; the value `none` calls `systemctl` directly (the polkit variant) |
 | `SINGBOX_WEBUI_UNIT` | `sing-box` | unit name |
 | `SINGBOX_WEBUI_CONFIG` | `/etc/sing-box/config.json` | default config of the commands; the UI passes the generated path |
 | `SINGBOX_WEBUI_TEST_URL` | `https://ipinfo.io` | target of the outbound test |
 | `SINGBOX_WEBUI_TEST_TIMEOUT` | `8000` | timeout of one outbound test, ms |
 | `SINGBOX_WEBUI_TEST_CONCURRENCY` | `4` | outbound tests running at once |
+| `SINGBOX_WEBUI_API_SECRET` | *(empty)* | secret of `experimental.clash_api`. **Never stored in `webui.json`**; the generator refuses to enable the API without it |
 
 The path of the settings file comes from the environment and from nowhere else.
 There is deliberately no "open file" box in the UI: a path arriving from the
@@ -134,7 +142,8 @@ browser at a process that writes files is a path traversal waiting to happen.
 
 One tree node per screen: Профили (list, active profile, create, rename,
 duplicate, remove), Общие, Значения по умолчанию, Файл ссылок, Вывод,
-Прокси → tag, Маршруты → name, DNS.
+Прокси → tag, Маршруты → name, DNS, and under Система: Журнал, Тест серверов,
+Сторож.
 
 * **«Общие» writes the active profile, «Значения по умолчанию» writes `defaults`.**
   A profile key overrides the same-named key of `defaults`, top level only, so
@@ -228,6 +237,67 @@ environment, and the tests point them at the fake scripts of
   deliberately no panel for it: a missing database becomes «база geosite не
   установлена» instead of a bare `FATAL`.
 
+## Pinned exit, external API and the watchdog
+
+The owner's channel is throttled by DPI now and then: connections to the server
+stick, and a restart helps — **on the same server**. Which server is not a free
+choice: several proxies are deliberately glued to one country, because the service
+on the far end watches where the login comes from. `claude-http` is fixed to
+`🇨🇾 Cyprus - Limassol`, and the tool now defends that on two levels.
+
+* **`pinned: true` on a proxy forbids a pool.** The proxy form carries «выход
+  зафиксирован»; with it on, a save that would leave two or more servers is refused
+  with «у прокси зафиксирован выход — снимите отметку, если нужен пул», and so is
+  turning the flag on for a proxy that already has a pool. The list is never
+  truncated silently. The tree marks a pinned proxy (`[🔒] выход зафиксирован`), so
+  the lock is visible without opening the form, and `note` next to it is where the
+  reason goes. The core knows nothing about the key and drops it, so `config.json`
+  does not change — a test asserts that. This is protection from the owner's own
+  future slip, not a sing-box mechanism: from the outside a pinned proxy cannot be
+  moved anyway.
+* **The external HTTP API is opt-in and loopback only.** `clash_api` in
+  `webui.json` is off by default. When it is on, the generator adds
+  `experimental.clash_api` with `external_controller` and a secret; with it off the
+  output stays byte-identical to the reference. `external_controller` may only name
+  `127.0.0.1` — on the router the WAN address lives on the same host, and an open
+  API is full control of the daemon from the internet — and the secret comes from
+  `SINGBOX_WEBUI_API_SECRET`, never from `webui.json`, which would put it into the
+  snapshots and the backups. An enabled API with an empty secret is a refusal with
+  a sentence, like the token rule above. This is the first deliberate divergence
+  from the Python reference, which cannot emit such a block.
+* **The watchdog checks through the inbound.** It runs `curl -x http://…` (or
+  `socks5h://…` for a socks inbound) against the local inbound of a proxy, because
+  that is the road the application takes: inbound → route rule → pool → server.
+  `tools fetch` checks an outbound only and would walk past a problem anywhere else.
+  The default target is `https://www.gstatic.com/generate_204` — a neutral endpoint
+  that exists for liveness checks and has no quota — not `ipinfo.io`, which is an
+  API with a monthly limit and is the target of the **manual** server test, where
+  seeing the city is the point. A target can be set per proxy next to `watch`; the
+  hint next to the field states the trade plainly: a service address diagnoses
+  better but puts an automatic request from the owner's exit IP on a fixed schedule.
+  By default that does not happen.
+* **The ladder and its fuses.** After two consecutive failures it closes the
+  connections of **that** proxy only, through `GET /connections` + `DELETE
+  /connections/<id>`; if the next check fails again it restarts the daemon, and only
+  with the second-rung switch on. The second rung is global: it drops the
+  connections of every proxy at once, and the panel says so. `api group select` is
+  never used — moving a pinned proxy to another server is exactly what must not
+  happen. The fuses: a 10-minute interval, two failures before acting, a 30-minute
+  pause between actions on one proxy, at most three restarts a day and then «сдаюсь»
+  until the owner resets it, a global switch (off means nothing runs even for a
+  `watch: true` proxy), and `watch: true` which is off by default.
+* **The watchdog cannot write the config.** It lives in the editor process, outside
+  `src/system/`, and its only powers are closing connections and restarting the
+  daemon; it reads the settings and never writes `webui.json` or `config.json`. The
+  chosen server lives in the config, so a watchdog that cannot touch the config
+  cannot move the exit under any circumstances — a test checks the hashes of both
+  files before and after a full pass. Every decision is logged (the service writes
+  to journald) and kept in a 20-event history in the panel: without it the watchdog
+  is a black box doing something at night. The second rung is off until the owner's
+  spike confirms that closing connections without a restart does not restore the
+  link; the commands for that spike are in
+  [`techdocs/done_2026_09_14_pinned_exit_and_watchdog.md`](techdocs/done_2026_09_14_pinned_exit_and_watchdog.md).
+
 ## Authentication and security
 
 * **A non-loopback bind without a token refuses to start.** From this stage on the
@@ -306,6 +376,12 @@ Rules of the format:
   reference behaved with a flat YAML file.
 * **`note` is a comment for humans** — in a profile and in a proxy. The core
   ignores it and it never reaches `config.json`.
+* **`pinned`, `watch` and `watch_url` on a proxy, and the `watchdog` section, are
+  editor-only.** The core drops them, so `config.json` is unaffected; the model
+  enforces the pinned rule and the watchdog reads the section.
+* **`clash_api` is the one section that reaches `config.json`.** Off by default;
+  when on it becomes `experimental.clash_api`. The secret is deliberately not a key
+  of the file — it comes from the environment.
 * **proxy types are `socks`, `http`, `mixed`**, declared once in
   [`src/core/errors.mjs`](src/core/errors.mjs:1) (`PROXY_TYPES`) and repeated in
   the schema `enum`; a test fails if the two ever drift apart.
@@ -368,7 +444,9 @@ Two levels of verification exist:
 | [`src/web/app.mjs`](src/web/app.mjs:1) | Express app: routes, form parsing, fragments |
 | [`src/web/server.mjs`](src/web/server.mjs:1) | `npm start`: environment, listen address |
 | [`src/web/panel.mjs`](src/web/panel.mjs:1) | view models handed to the templates |
-| [`src/system/index.mjs`](src/system/index.mjs:1) | system boundary: `checkConfig`, `restartSingBox`, `tailJournal`, `followJournal`, `testOutbound`, `testOutbounds`, `geositeLookup` |
+| [`src/system/index.mjs`](src/system/index.mjs:1) | system boundary: `checkConfig`, `restartSingBox`, `tailJournal`, `followJournal`, `testOutbound`, `testOutbounds`, `testInbound`, `geositeLookup` |
+| [`src/watchdog/watchdog.mjs`](src/watchdog/watchdog.mjs:1) | liveness watchdog: fuses, the two-rung ladder, the 20-event history |
+| [`src/watchdog/clash.mjs`](src/watchdog/clash.mjs:1) | Clash-compatible HTTP API client: list and close connections of one inbound |
 | [`src/web/auth.mjs`](src/web/auth.mjs:1) | token transport, loopback check, the startup refusal |
 | [`deploy/`](deploy/README.md:1) | systemd unit, sudoers and polkit variants, deployment notes |
 | [`views/`](views/layout.ejs:1), [`public/`](public/app.css:1) | EJS templates, stylesheet, vendored htmx |

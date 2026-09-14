@@ -19,6 +19,7 @@ import express from 'express';
 import {ConfigError} from '../core/errors.mjs';
 import {ProjectModel} from '../model/project.mjs';
 import {restoreLatestConfig, snapshotConfig} from '../model/storage.mjs';
+import {API_SECRET_VAR} from '../core/build.mjs';
 import {
   SystemError,
   checkConfig,
@@ -28,6 +29,7 @@ import {
   systemConfig,
   testOutbounds,
 } from '../system/index.mjs';
+import {Watchdog} from '../watchdog/watchdog.mjs';
 import {TOKEN_COOKIE, extractToken, tokenMatches} from './auth.mjs';
 import * as forms from './forms.mjs';
 import {PANEL_KINDS, buildPanel, buildStatus, panelKey, panelUrl} from './panel.mjs';
@@ -121,6 +123,48 @@ export function createApp(options = {}) {
     testsRunning: false,
   };
 
+  // The API secret is read from the environment of the process and never from a
+  // request; the panel is only told whether it is present. Both the generator and
+  // the watchdog use the same value.
+  const apiSecret =
+    typeof systemEnv[API_SECRET_VAR] === 'string' ? systemEnv[API_SECRET_VAR] : '';
+
+  /**
+   * Builds the read-only descriptor the watchdog works from. It reads the model,
+   * never writes it: the watchdog has no way to reach `webui.json` at all.
+   *
+   * @returns {Record<string, unknown>}
+   */
+  const watchdogContext = () => {
+    const profile = model.effectiveProfile();
+    return {
+      watchdog: profile.watchdog,
+      api: {
+        enabled: profile.clash_api?.enabled === true,
+        controller: profile.clash_api?.controller,
+        secret: apiSecret,
+      },
+      listenIp: model.listenIp,
+      proxies: model.watchedProxies(),
+    };
+  };
+
+  // `options.watchdog` lets a test inject its own object; `null` disables the
+  // background loop entirely. The loop is unref'ed, so it never keeps a process
+  // alive and a short test run never waits for it.
+  const watchdog =
+    options.watchdog !== undefined
+      ? options.watchdog
+      : new Watchdog({env: systemEnv, context: watchdogContext});
+  if (watchdog !== null && options.watchdog === undefined) {
+    try {
+      watchdog.start();
+    } catch {
+      // A broken document must not stop the editor from opening.
+    }
+  }
+  state.watchdog = watchdog;
+
   const app = express();
   app.disable('x-powered-by');
   app.set('view engine', 'ejs');
@@ -207,7 +251,8 @@ export function createApp(options = {}) {
         testConcurrency: system.testConcurrency,
         journalLines: JOURNAL_REPLAY_LINES,
       },
-      auth: {tokenRequired: token.length > 0},
+      watchdog: state.watchdog === null ? undefined : state.watchdog.snapshot(),
+      auth: {tokenRequired: token.length > 0, apiSecretPresent: apiSecret.length > 0},
     };
     const resolved = resolvePanel(key, enriched);
     return {
@@ -721,6 +766,50 @@ export function createApp(options = {}) {
       if (!res.writableEnded) res.end();
     }
   });
+
+  // ------------------------------------------------------------------
+  // Watchdog and the external API
+  // ------------------------------------------------------------------
+  //
+  // The watchdog itself lives in the process and runs on its own clock; these
+  // routes only edit its settings (through the model, like any other form), ask
+  // for one pass right now, or forget the accumulated state. Not one of them lets
+  // the watchdog write the config: they write `webui.json` on the owner's command,
+  // which is a different thing entirely.
+
+  app.post(
+    '/watchdog',
+    mutation('watchdog', (req) => {
+      model.applyWatchdog(forms.parseWatchdogForm(req.body));
+      model.applyClashApi(forms.parseClashApiForm(req.body));
+      return {
+        key: 'watchdog',
+        notice: 'Настройки сторожа применены — не забудьте сохранить',
+      };
+    }),
+  );
+
+  app.post(
+    '/watchdog/check',
+    mutation('watchdog', async () => {
+      const run = await watchdog.checkAll();
+      return {
+        key: 'watchdog',
+        notice:
+          run.skipped === 'disabled'
+            ? 'Сторож выключен общим рубильником: проверок не было'
+            : `Проверено прокси: ${run.checked}`,
+      };
+    }),
+  );
+
+  app.post(
+    '/watchdog/reset',
+    mutation('watchdog', () => {
+      watchdog.reset();
+      return {key: 'watchdog', notice: 'Состояние сторожа сброшено'};
+    }),
+  );
 
   // ------------------------------------------------------------------
   // Fallbacks

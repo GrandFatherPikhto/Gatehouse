@@ -31,6 +31,7 @@ import {ConfigError, DEFAULT_EXCLUDE, PROXY_TYPES, isMapping} from '../core/erro
 import {generateConfigFile, loadSettings, resolvePath, validateSettings} from '../core/settings.mjs';
 import {asList, requireMapping, urltestBlock, validateProxies} from '../core/validate.mjs';
 import {parseLinks} from '../core/vless.mjs';
+import {normalizeClashApi, normalizeProxy, normalizeWatchdog} from '../watchdog/watchdog.mjs';
 import {staleMap, treeSpec as buildTree} from './stale.mjs';
 import {
   DEFAULT_SNAPSHOT_KEEP,
@@ -79,7 +80,16 @@ export const SHARED_KEYS = Object.freeze([
   'urltest',
   'dns',
   'exclude_from_auto',
+  'clash_api',
+  'watchdog',
 ]);
+
+/**
+ * Refusal shown when a pinned proxy would end up with a pool. The wording is
+ * fixed by the task: an accidental second server is exactly what the flag exists
+ * to prevent, and the owner has to be told how to lift the mark.
+ */
+export const PINNED_REFUSAL = 'у прокси зафиксирован выход — снимите отметку, если нужен пул';
 
 /**
  * A name made of digits only is refused by the schema, and for a reason that
@@ -736,6 +746,79 @@ export class ProjectModel {
   }
 
   // ------------------------------------------------------------------
+  // Watchdog and the external API of the daemon
+  //
+  // Both sections are ordinary shared settings of a profile (or `defaults`): the
+  // owner edits them through a form, and the watchdog process only ever READS
+  // them. That is the point of the rule — a watchdog that cannot write the config
+  // cannot move a pinned exit, whatever it decides to do at night.
+  // ------------------------------------------------------------------
+
+  /**
+   * The `watchdog` section with every default filled in.
+   *
+   * @returns {Record<string, unknown>}
+   */
+  watchdogValues() {
+    return normalizeWatchdog(this.effectiveProfile().watchdog);
+  }
+
+  /**
+   * Writes the watchdog form into the active profile, field by field, so a value
+   * that was inherited from `defaults` stops being inherited exactly where the
+   * owner touched it.
+   *
+   * @param {{enabled?: boolean, interval_seconds?: number, failures_before_action?: number,
+   *   pause_seconds?: number, max_restarts_per_day?: number, restart_enabled?: boolean}} values
+   */
+  applyWatchdog(values = {}) {
+    const profile = this.profileBody();
+    if (!isMapping(profile.watchdog)) profile.watchdog = {};
+    const body = profile.watchdog;
+    for (const key of Object.keys(values)) {
+      if (values[key] !== undefined) body[key] = values[key];
+    }
+    this.markDirty();
+  }
+
+  /**
+   * The `clash_api` section with every default filled in.
+   *
+   * @returns {Record<string, unknown>}
+   */
+  clashApiValues() {
+    return normalizeClashApi(this.effectiveProfile().clash_api);
+  }
+
+  /**
+   * Writes the API form into the active profile. The SECRET is deliberately not a
+   * field here: it comes from `SINGBOX_WEBUI_API_SECRET` and never lands in
+   * `webui.json`, its snapshots or a backup.
+   *
+   * @param {{enabled?: boolean, controller?: string}} values
+   */
+  applyClashApi(values = {}) {
+    const profile = this.profileBody();
+    if (!isMapping(profile.clash_api)) profile.clash_api = {};
+    const body = profile.clash_api;
+    for (const key of Object.keys(values)) {
+      if (values[key] !== undefined) body[key] = values[key];
+    }
+    this.markDirty();
+  }
+
+  /**
+   * Every proxy of the active profile in the shape the watchdog uses.
+   *
+   * @returns {Array<Record<string, unknown>>}
+   */
+  watchedProxies() {
+    return this.proxies()
+      .filter((proxy) => isMapping(proxy))
+      .map((proxy) => normalizeProxy(proxy));
+  }
+
+  // ------------------------------------------------------------------
   // DNS  (a JSON text field on purpose: the schema moves too fast)
   // ------------------------------------------------------------------
 
@@ -864,7 +947,11 @@ export class ProjectModel {
       port: candidate.port ?? this.nextFreePort(),
       servers: candidate.servers,
       note: candidate.note,
+      pinned: candidate.pinned,
+      watch: candidate.watch,
+      watch_url: candidate.watch_url,
     });
+    this.#assertPinned(entry);
     const error = this.validateProxyCandidate(entry, null);
     if (error !== null) throw new ConfigError(error);
 
@@ -884,6 +971,7 @@ export class ProjectModel {
    */
   upsertProxy(candidate, currentTag = null) {
     const entry = this.#proxyEntry(candidate);
+    this.#assertPinned(entry);
     const error = this.validateProxyCandidate(entry, currentTag);
     if (error !== null) throw new ConfigError(error);
 
@@ -1190,11 +1278,14 @@ export class ProjectModel {
   }
 
   /**
-   * Normalises a proxy into the shape the core expects: `servers` and `note` are
-   * only written when they carry something, which keeps `webui.json` free of
-   * empty noise. Reference: `upsert_proxy`.
+   * Normalises a proxy into the shape the core expects: `servers`, `note`,
+   * `pinned`, `watch` and `watch_url` are only written when they carry something,
+   * which keeps `webui.json` free of empty noise and keeps an untouched save a
+   * no-op. Reference: `upsert_proxy` (the three new keys are editor-only and never
+   * reach `config.json` — `validateProxies` of the core drops them).
    *
-   * @param {{tag?: unknown, type?: unknown, port?: unknown, servers?: unknown, note?: unknown}} candidate
+   * @param {{tag?: unknown, type?: unknown, port?: unknown, servers?: unknown,
+   *   note?: unknown, pinned?: unknown, watch?: unknown, watch_url?: unknown}} candidate
    * @returns {Record<string, unknown>}
    */
   #proxyEntry(candidate) {
@@ -1206,7 +1297,29 @@ export class ProjectModel {
     if (typeof candidate.note === 'string' && candidate.note.length > 0) {
       entry.note = candidate.note;
     }
+    if (candidate.pinned === true) entry.pinned = true;
+    if (candidate.watch === true) entry.watch = true;
+    if (typeof candidate.watch_url === 'string' && candidate.watch_url.length > 0) {
+      entry.watch_url = candidate.watch_url;
+    }
     return entry;
+  }
+
+  /**
+   * Refuses a pinned proxy that would end up with a pool.
+   *
+   * This is the first part of the task and it is deliberately NOT in the core: the
+   * core is a port of the Python reference and has to stay byte-compatible. The
+   * flag protects against the owner's own future slip, and this is where the slip
+   * is caught — before anything is stored, and with the same wording whatever form
+   * it came from ("save with two servers" and "tick the flag on a pool").
+   *
+   * @param {Record<string, unknown>} entry
+   */
+  #assertPinned(entry) {
+    if (entry.pinned !== true) return;
+    const servers = Array.isArray(entry.servers) ? entry.servers : [];
+    if (servers.length > 1) throw new ConfigError(PINNED_REFUSAL);
   }
 
   /**

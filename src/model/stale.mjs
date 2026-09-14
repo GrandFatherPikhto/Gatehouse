@@ -166,7 +166,14 @@ export function treeSpec(options = {}) {
     if (!isMapping(proxy)) continue;
     const tag = typeof proxy.tag === 'string' ? proxy.tag : '';
     const missing = stale.get(staleKey('proxies', tag)) ?? [];
-    const mark = missing.length > 0 ? `[!] нет в списке серверов: ${missing.join(', ')}` : '';
+    // A pinned proxy is visible in the tree without opening its form — the whole
+    // point of the flag is that the owner notices the lock at a glance. The mark
+    // is a plain text label, so the template stays a single interpolation.
+    const marks = [];
+    if (missing.length > 0) marks.push(`[!] нет в списке серверов: ${missing.join(', ')}`);
+    if (proxy.pinned === true) marks.push('[🔒] выход зафиксирован');
+    if (proxy.watch === true) marks.push('[👁] сторож');
+    const mark = marks.join('  ');
     proxyNodes.push(
       node(`proxy:${tag}`, mark === '' ? tag : `${tag}  ${mark}`, 'proxy', {
         stale: missing.length > 0,
@@ -220,6 +227,7 @@ export function treeSpec(options = {}) {
         children: [
           node('journal', 'Журнал', 'journal'),
           node('tests', 'Тест серверов', 'tests'),
+          node('watchdog', 'Сторож', 'watchdog'),
         ],
       }),
     ],

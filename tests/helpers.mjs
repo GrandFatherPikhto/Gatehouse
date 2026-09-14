@@ -167,6 +167,7 @@ export function fakeSystemEnv(overrides = {}) {
     SINGBOX_WEBUI_SINGBOX: path.join(bin, 'sing-box'),
     SINGBOX_WEBUI_SYSTEMCTL: path.join(bin, 'systemctl'),
     SINGBOX_WEBUI_JOURNALCTL: path.join(bin, 'journalctl'),
+    SINGBOX_WEBUI_CURL: path.join(bin, 'curl'),
     SINGBOX_WEBUI_SUDO: path.join(bin, 'systemctl'),
     SINGBOX_WEBUI_UNIT: 'sing-box',
     SINGBOX_WEBUI_TEST_URL: 'https://ipinfo.io',

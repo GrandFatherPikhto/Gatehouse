@@ -81,7 +81,8 @@ export function selection(value) {
  * Parses the proxy form.
  *
  * @param {Record<string, unknown>} body
- * @returns {{tag: string, type: string, port: number, servers: string[], note: string}}
+ * @returns {{tag: string, type: string, port: number, servers: string[], note: string,
+ *   pinned: boolean, watch: boolean, watch_url: string}}
  */
 export function parseProxyForm(body) {
   const type = String(body.type ?? '');
@@ -101,7 +102,60 @@ export function parseProxyForm(body) {
     port: port(body.port),
     servers: selection(body.servers),
     note: String(body.note ?? '').trim(),
+    pinned: checkbox(body.pinned),
+    watch: checkbox(body.watch),
+    watch_url: String(body.watch_url ?? '').trim(),
   };
+}
+
+/**
+ * Parses the watchdog form. Every threshold has a floor; a value below it is
+ * clamped, never accepted silently as something the schema would only reject
+ * later.
+ *
+ * @param {Record<string, unknown>} body
+ * @returns {{enabled: boolean, interval_seconds: number, failures_before_action: number,
+ *   pause_seconds: number, max_restarts_per_day: number, restart_enabled: boolean}}
+ */
+export function parseWatchdogForm(body) {
+  return {
+    enabled: checkbox(body.enabled),
+    interval_seconds: atLeast(integer(body.interval_seconds, 'интервал'), 10),
+    failures_before_action: atLeast(integer(body.failures_before_action, 'порог неудач'), 1),
+    pause_seconds: atLeast(integer(body.pause_seconds, 'пауза'), 0),
+    max_restarts_per_day: atLeast(integer(body.max_restarts_per_day, 'предел перезапусков'), 0),
+    restart_enabled: checkbox(body.restart_enabled),
+  };
+}
+
+/**
+ * Parses the API form. The secret is not a field here on purpose.
+ *
+ * @param {Record<string, unknown>} body
+ * @returns {{enabled: boolean, controller: string}}
+ */
+export function parseClashApiForm(body) {
+  const controller = String(body.controller ?? '').trim();
+  return {
+    // A distinct field name: the same form carries the watchdog's own `enabled`.
+    enabled: checkbox(body.api_enabled),
+    controller: controller.length > 0 ? controller : '127.0.0.1:9090',
+  };
+}
+
+/**
+ * Raises a value to a floor, throwing when it is below so the form shows a reason
+ * instead of the schema's generic wording.
+ *
+ * @param {number} value
+ * @param {number} minimum
+ * @returns {number}
+ */
+function atLeast(value, minimum) {
+  if (value < minimum) {
+    throw new ConfigError(`значение должно быть не меньше ${minimum}, получено ${value}`);
+  }
+  return value;
 }
 
 /**

@@ -1,0 +1,166 @@
+<%# Сторож: общий выключатель, пороги, внешний API, состояние прокси и история.
+    Сторож не правит ни webui.json, ни config.json — эта страница только
+    настраивает его и показывает, что он сделал. Каждое решение попадает ещё и в
+    journald (сервис пишет туда), но без истории в интерфейсе сторож превращается
+    в чёрный ящик, который что-то делает ночью. %>
+<% const state = panel.state; %>
+<% const config = panel.config; %>
+<% const api = panel.api; %>
+<h2><%= panel.title %></h2>
+
+<p class="hint">
+  Сторож проверяет связь <strong>через сам инбаунд</strong> прокси — ту же дорогу,
+  по которой ходит приложение: инбаунд → правило маршрута → пул → сервер.
+  <code>tools fetch</code> для этого не годится: он проверяет только аутбаунд и
+  пропускает проблему на любом другом участке.
+</p>
+
+<p class="badge <%= config.enabled ? 'clean' : 'dirty' %>">
+  Общий рубильник: <%= config.enabled ? 'включён' : 'выключен' %>
+</p>
+<p class="hint">
+  При выключенном рубильнике не выполняется <strong>ничего</strong>, даже если у
+  прокси стоит галочка «следить за связью».
+</p>
+
+<form class="form" hx-post="/watchdog" hx-target="#panel" hx-swap="innerHTML" method="post" action="/watchdog">
+  <fieldset>
+    <legend>Сторож</legend>
+    <label class="check">
+      <input type="checkbox" name="enabled" value="1" <%= config.enabled ? 'checked' : '' %>>
+      общий выключатель
+    </label>
+    <label for="interval_seconds">интервал проверки, секунд</label>
+    <input type="number" id="interval_seconds" name="interval_seconds" min="10"
+           value="<%= config.intervalSeconds %>">
+    <label for="failures_before_action">неудач подряд до первого действия</label>
+    <input type="number" id="failures_before_action" name="failures_before_action" min="1"
+           value="<%= config.failuresBeforeAction %>">
+    <label for="pause_seconds">пауза между действиями одного прокси, секунд</label>
+    <input type="number" id="pause_seconds" name="pause_seconds" min="0"
+           value="<%= config.pauseSeconds %>">
+    <label for="max_restarts_per_day">не больше перезапусков в сутки</label>
+    <input type="number" id="max_restarts_per_day" name="max_restarts_per_day" min="0"
+           value="<%= config.maxRestartsPerDay %>">
+  </fieldset>
+
+  <fieldset>
+    <legend>Вторая ступень</legend>
+    <label class="check">
+      <input type="checkbox" name="restart_enabled" value="1" <%= config.restartEnabled ? 'checked' : '' %>>
+      разрешить <code>systemctl restart sing-box</code>
+    </label>
+    <p class="hint">
+      Действие глобальное: перезапуск рвёт соединения у <strong>всех</strong>
+      прокси разом. По умолчанию вторая ступень выключена — пока владелец не
+      подтвердит спайком (см. techdocs), что закрытие соединений без перезапуска
+      связь не восстанавливает. После исчерпания суточного предела сторож умолкает
+      и показывает «сдаюсь», пока состояние не сбросят.
+    </p>
+  </fieldset>
+
+  <fieldset>
+    <legend>Внешний HTTP-API демона</legend>
+    <p class="hint">
+      Нужен, чтобы закрывать соединения одного прокси. Включает в
+      <code>config.json</code> блок <code>experimental.clash_api</code>. Секрет в
+      <code>webui.json</code> не хранится: он берётся из окружения
+      (<code>SINGBOX_WEBUI_API_SECRET</code>) и иначе попал бы в снапшоты и бэкапы.
+      <% if (panel.secretPresent) { %>
+        <span class="badge clean">секрет задан в окружении</span>
+      <% } else { %>
+        <span class="badge dirty">секрет в окружении не задан</span>
+      <% } %>
+    </p>
+    <label class="check">
+      <input type="checkbox" name="api_enabled" value="1" <%= api.enabled ? 'checked' : '' %>>
+      включить API (external_controller)
+    </label>
+    <label for="controller">external_controller</label>
+    <input type="text" id="controller" name="controller" value="<%= api.controller %>" size="30">
+    <p class="hint">
+      Только <code>127.0.0.1</code>. На роутере по тому же адресу живёт WAN, и
+      открытый наружу API — это полное управление демоном из интернета, поэтому
+      генератор отказывается собирать конфиг с чужим адресом. При включённом API и
+      пустом секрете генерация тоже отвергается.
+    </p>
+  </fieldset>
+
+  <button type="submit">Применить</button>
+</form>
+
+<h3>Состояние</h3>
+<p class="hint">
+  Интервал по умолчанию — 10 минут. Сторож действует после
+  <strong><%= config.failuresBeforeAction %></strong> подряд неудачных проверок,
+  затем держит паузу не меньше <strong><%= config.pauseSeconds %></strong> секунд
+  между действиями одного прокси. Перезапусков за сутки: <%= state.restartsLastDay %>
+  из <%= config.maxRestartsPerDay %>.
+  <% if (state.lastRun) { %>
+    Последний проход: <%= state.lastRun.at %>,
+    <% if (state.lastRun.skipped === 'disabled') { %>выключен<% } else { %>
+      проверено <%= state.lastRun.checked %><% } %>.
+  <% } else { %>
+    Проходов ещё не было.
+  <% } %>
+</p>
+
+<div class="watchdog-actions">
+  <form hx-post="/watchdog/check" hx-target="#panel" hx-swap="innerHTML" method="post" action="/watchdog/check">
+    <button type="submit">Проверить сейчас</button>
+  </form>
+  <form hx-post="/watchdog/reset" hx-target="#panel" hx-swap="innerHTML" method="post" action="/watchdog/reset">
+    <button type="submit" class="secondary">Сбросить состояние</button>
+  </form>
+</div>
+
+<% if (state.proxies.length === 0) { %>
+  <p class="hint">В активном профиле нет прокси.</p>
+<% } else { %>
+  <table class="list">
+    <thead>
+      <tr>
+        <th>прокси</th><th>следит</th><th>состояние</th><th>неудач подряд</th>
+        <th>последняя проверка</th><th>действие</th><th>цель</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% for (const proxy of state.proxies) { %>
+        <tr class="<%= proxy.givenUp ? 'stale' : '' %>">
+          <td>
+            <a href="<%= '/panel/' + encodeURIComponent('proxy:' + proxy.tag) %>"
+               hx-get="/panel/<%= encodeURIComponent('proxy:' + proxy.tag) %>"
+               hx-target="#panel" hx-swap="innerHTML" hx-push-url="true"><%= proxy.tag %></a>
+            <% if (proxy.pinned) { %><span class="badge">выход зафиксирован</span><% } %>
+          </td>
+          <td><%= proxy.watch ? 'да' : 'нет' %></td>
+          <td><%= proxy.label %></td>
+          <td><%= proxy.failures %></td>
+          <td><%= proxy.lastCheckAt ?? '—' %></td>
+          <td><%= proxy.lastAction ?? '—' %><%= proxy.lastActionAt ? ` (${proxy.lastActionAt})` : '' %></td>
+          <td><code><%= proxy.url %></code></td>
+        </tr>
+      <% } %>
+    </tbody>
+  </table>
+<% } %>
+
+<h3>История последних решений</h3>
+<% if (state.history.length === 0) { %>
+  <p class="hint">Событий пока нет.</p>
+<% } else { %>
+  <table class="list">
+    <thead><tr><th>время</th><th>прокси</th><th>проверка</th><th>действие</th><th>что вышло</th></tr></thead>
+    <tbody>
+      <% for (const event of state.history) { %>
+        <tr>
+          <td><%= event.time %></td>
+          <td><%= event.tag %></td>
+          <td><%= event.check %></td>
+          <td><%= event.action ?? '—' %></td>
+          <td><%= event.reason ?? '—' %></td>
+        </tr>
+      <% } %>
+    </tbody>
+  </table>
+<% } %>

@@ -8,6 +8,7 @@
 
 import {ConfigError, DEFAULT_EXCLUDE, PROXY_TYPES} from '../core/errors.mjs';
 import {listConfigSnapshots} from '../model/storage.mjs';
+import {DEFAULT_WATCH_URL} from '../system/index.mjs';
 
 /** Keys of the tree, without a name part. */
 export const PANEL_KINDS = Object.freeze([
@@ -24,6 +25,7 @@ export const PANEL_KINDS = Object.freeze([
   'system',
   'journal',
   'tests',
+  'watchdog',
 ]);
 
 /** Outbounds that exist in every generated config. */
@@ -227,6 +229,7 @@ export function buildPanel(model, key, extra = {}) {
         autoPrefixes: autoExcludePrefixes(model),
         linksError: info.error,
         types: PROXY_TYPES,
+        defaultWatchUrl: DEFAULT_WATCH_URL,
       };
     }
 
@@ -281,6 +284,30 @@ export function buildPanel(model, key, extra = {}) {
         linksError: info.error,
         concurrency: system.testConcurrency ?? 4,
         configPath: model.resolvedOutputPath(),
+      };
+    }
+
+    case 'watchdog': {
+      // Runtime state comes from the Watchdog object, handed in by `app.mjs` as
+      // `extra.watchdog`: the panel arranges what the watchdog already did and
+      // never steps a check itself.
+      const state = extra.watchdog ?? {
+        running: false,
+        lastRun: null,
+        restartsLastDay: 0,
+        history: [],
+        proxies: [],
+      };
+      return {
+        ...base,
+        title: 'Сторож',
+        config: model.watchdogValues(),
+        api: model.clashApiValues(),
+        // The secret itself never travels: only whether the environment carries it.
+        secretPresent: Boolean(extra.auth?.apiSecretPresent),
+        defaultWatchUrl: DEFAULT_WATCH_URL,
+        listenIp: model.listenIp,
+        state,
       };
     }
 

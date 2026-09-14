@@ -7,8 +7,20 @@
 // `config.json` byte by byte with the reference output, and JS keeps string key
 // insertion order, so the order below must mirror the reference exactly.
 
-import {ConfigError, DEFAULT_EXCLUDE, pyTruthy} from './errors.mjs';
+import {ConfigError, DEFAULT_EXCLUDE, isMapping, pyTruthy} from './errors.mjs';
 import {asList, requireMapping, urltestBlock, validateExclude, validateProxies} from './validate.mjs';
+
+/**
+ * Defaults of the external HTTP API of the daemon. The Editor is the first
+ * deliberate divergence from the Python reference and the block below is its
+ * whole surface: with `enabled` false nothing is emitted and `config.json` stays
+ * byte-identical to the reference output.
+ */
+export const DEFAULT_CLASH_CONTROLLER = '127.0.0.1:9090';
+/** Environment variable that carries the API secret. Never stored in webui.json. */
+export const API_SECRET_VAR = 'SINGBOX_WEBUI_API_SECRET';
+/** Hosts the loopback-only external_controller may use. */
+const LOOPBACK_HOSTS = Object.freeze(['127.0.0.1']);
 
 /**
  * Builds the inbounds from validated proxies.
@@ -114,6 +126,52 @@ export function buildRules(proxies, routes, knownOutbounds, warnings = []) {
 }
 
 /**
+ * Builds the `experimental.clash_api` block, or `null` when the API is off.
+ *
+ * Two rules are refused here and not in a form, because the block ends up in a
+ * file the daemon runs:
+ *   * `external_controller` must stay on the loopback address. On the router the
+ *     WAN address lives on the same host, so a `0.0.0.0` controller would be full
+ *     control of the daemon from the internet;
+ *   * the secret must be non-empty, and it is passed in from the environment
+ *     (`SINGBOX_WEBUI_API_SECRET`) so that it never lands in `webui.json`, its
+ *     snapshots or a backup.
+ *
+ * @param {unknown} clashApi The `clash_api` section of the effective settings.
+ * @param {string} secret Value of `SINGBOX_WEBUI_API_SECRET`.
+ * @returns {{external_controller: string, secret: string}|null}
+ */
+export function clashApiBlock(clashApi, secret) {
+  if (!isMapping(clashApi) || clashApi.enabled !== true) return null;
+
+  const controller =
+    typeof clashApi.controller === 'string' && clashApi.controller.length > 0
+      ? clashApi.controller
+      : DEFAULT_CLASH_CONTROLLER;
+
+  // The host is everything before the LAST colon, so an IPv6 literal in brackets
+  // would survive; only plain loopback addresses are accepted here anyway.
+  const separator = controller.lastIndexOf(':');
+  const host = separator < 0 ? controller : controller.slice(0, separator);
+  if (!LOOPBACK_HOSTS.includes(host)) {
+    throw new ConfigError(
+      `clash_api.controller должен указывать только на обратную петлю (${LOOPBACK_HOSTS.join(', ')}), ` +
+        `а не на '${host}': на роутере по тому же адресу живёт WAN, и открытый API — ` +
+        'это полное управление демоном из интернета',
+    );
+  }
+
+  if (typeof secret !== 'string' || secret.length === 0) {
+    throw new ConfigError(
+      `clash_api включён, но секрет пуст: задайте ${API_SECRET_VAR} в окружении сервиса. ` +
+        'В webui.json секрет не хранится — он попал бы в снапшоты и бэкапы',
+    );
+  }
+
+  return {external_controller: controller, secret};
+}
+
+/**
  * Assembles the whole sing-box configuration.
  * Reference: `build_config`. Returns `[config, stats]`.
  *
@@ -122,9 +180,11 @@ export function buildRules(proxies, routes, knownOutbounds, warnings = []) {
  * @param {Array<Record<string, unknown>>} outbounds Parsed VLESS outbounds.
  * @param {string} listenIp
  * @param {string[]} [warnings] Collector for non-fatal problems.
+ * @param {{apiSecret?: string}} [options] `apiSecret` is the value of
+ *   `SINGBOX_WEBUI_API_SECRET`; only read when `clash_api.enabled` is true.
  * @returns {[Record<string, unknown>, Record<string, unknown>]}
  */
-export function buildConfig(settings, outbounds, listenIp, warnings = []) {
+export function buildConfig(settings, outbounds, listenIp, warnings = [], options = {}) {
   requireMapping(settings, 'settings.yaml');
 
   const tags = outbounds.map((outbound) => outbound.tag);
@@ -179,6 +239,12 @@ export function buildConfig(settings, outbounds, listenIp, warnings = []) {
       default_domain_resolver: 'dns-local',
     },
   };
+
+  // The only section the reference cannot produce. It is appended AFTER `route`
+  // and only when the API is on, so a disabled API keeps the output byte-identical
+  // to the Python generator.
+  const clashApi = clashApiBlock(settings.clash_api, options.apiSecret ?? '');
+  if (clashApi !== null) config.experimental = {clash_api: clashApi};
 
   const stats = {
     servers: outbounds.length,

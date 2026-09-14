@@ -623,7 +623,7 @@ describe('stale references and the tree', () => {
     assert.match(model.treeSpec().children[0].title, /активен: first/);
 
     const system = model.treeSpec().children.find((child) => child.kind === 'system');
-    assert.deepEqual(system.children.map((child) => child.kind), ['journal', 'tests']);
+    assert.deepEqual(system.children.map((child) => child.kind), ['journal', 'tests', 'watchdog']);
   });
 
   test('server tags come from the links file of the settings directory', () => {
