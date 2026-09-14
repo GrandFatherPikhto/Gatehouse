@@ -1,0 +1,156 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/singbox-webui/schemas/webui.schema.json",
+  "title": "webui.json",
+  "description": "Settings of the sing-box config generator. Replaces settings.yaml of the reference implementation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "active", "profiles"],
+  "profileMustExist": true,
+  "properties": {
+    "version": {
+      "description": "Schema version, bumped only on incompatible changes.",
+      "const": 1
+    },
+    "active": {
+      "description": "Name of the profile to apply. Two profiles can never be applied at once: they overlap on ports and sing-box is a single process.",
+      "type": "string",
+      "minLength": 1
+    },
+    "defaults": {
+      "description": "Shared body of all profiles. A same-named key of the active profile overrides it (top level only).",
+      "$ref": "#/definitions/profile"
+    },
+    "profiles": {
+      "description": "Named profiles.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/definitions/profile"
+      }
+    }
+  },
+  "definitions": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "note": {
+          "description": "Free-form comment carried over from settings.yaml. Ignored by the core.",
+          "type": "string"
+        },
+        "listen_ip": {
+          "type": "string",
+          "minLength": 1
+        },
+        "links_file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "output_file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exclude_from_auto": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "urltest": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "interval": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tolerance": {
+              "type": "integer"
+            }
+          }
+        },
+        "log": {
+          "description": "Passed into config.json unchanged.",
+          "type": "object"
+        },
+        "dns": {
+          "description": "Passed into config.json unchanged.",
+          "type": "object"
+        },
+        "proxies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tag", "type", "port"],
+            "properties": {
+              "tag": {
+                "type": "string",
+                "minLength": 1
+              },
+              "type": {
+                "description": "Kept in sync with PROXY_TYPES of errors.mjs; a test guards the drift.",
+                "enum": ["socks", "http", "mixed"]
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "servers": {
+                "description": "Server tags. An empty or missing list means auto-select. A single string is accepted and normalised by the core, exactly as in the reference.",
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                ]
+              },
+              "note": {
+                "description": "Free-form comment. Ignored by the core.",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "routes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "outbound": {
+                "type": "string"
+              },
+              "domains": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

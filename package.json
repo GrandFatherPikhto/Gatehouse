@@ -1,0 +1,22 @@
+{
+  "name": "singbox-webui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "sing-box config.json generator core (Node.js port of the Python reference) with the webui.json settings format",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test",
+    "generate": "node tools/generate.mjs",
+    "compare": "node tools/compare-with-python.mjs",
+    "import-settings": "node tools/import-settings.mjs"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0"
+  },
+  "devDependencies": {
+    "yaml": "^2.9.1"
+  }
+}

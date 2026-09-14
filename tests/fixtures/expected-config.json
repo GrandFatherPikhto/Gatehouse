@@ -1,0 +1,130 @@
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "local",
+        "tag": "dns-local"
+      }
+    ],
+    "final": "dns-local"
+  },
+  "inbounds": [
+    {
+      "type": "socks",
+      "tag": "main-socks",
+      "listen": "127.0.0.1",
+      "listen_port": 54321
+    },
+    {
+      "type": "http",
+      "tag": "apps-http",
+      "listen": "127.0.0.1",
+      "listen_port": 54323
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "urltest",
+      "tag": "auto-select",
+      "outbounds": [
+        "🇫🇮 Finland - Helsinki 1",
+        "🇳🇱 Netherlands - Amsterdam"
+      ],
+      "url": "https://gstatic.com",
+      "interval": "3m",
+      "tolerance": 50
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "urltest",
+      "tag": "pool-apps-http",
+      "outbounds": [
+        "🇫🇮 Finland - Helsinki 1",
+        "🇳🇱 Netherlands - Amsterdam"
+      ],
+      "url": "https://gstatic.com",
+      "interval": "3m",
+      "tolerance": 50
+    },
+    {
+      "type": "vless",
+      "tag": "🇫🇮 Finland - Helsinki 1",
+      "server": "fi.example.com",
+      "server_port": 443,
+      "uuid": "11111111-1111-1111-1111-111111111111",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "fi.example.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "FI_PUBKEY",
+          "short_id": "ab12"
+        }
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "🇳🇱 Netherlands - Amsterdam",
+      "server": "nl.example.com",
+      "server_port": 443,
+      "uuid": "22222222-2222-2222-2222-222222222222",
+      "tls": {
+        "enabled": true,
+        "server_name": "nl.example.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "firefox"
+        }
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "🇷🇺 Russia - Moscow",
+      "server": "ru.example.com",
+      "server_port": 443,
+      "uuid": "33333333-3333-3333-3333-333333333333"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      },
+      {
+        "inbound": [
+          "main-socks",
+          "apps-http"
+        ],
+        "action": "sniff"
+      },
+      {
+        "inbound": [
+          "apps-http"
+        ],
+        "outbound": "pool-apps-http"
+      },
+      {
+        "domain_suffix": [
+          "t.me",
+          "telegram.org"
+        ],
+        "outbound": "auto-select"
+      }
+    ],
+    "final": "auto-select",
+    "default_domain_resolver": "dns-local"
+  }
+}

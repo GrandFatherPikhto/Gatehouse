@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "active": "gui-default",
+  "defaults": {},
+  "profiles": {
+    "gui-default": {
+      "listen_ip": "127.0.0.1",
+      "links_file": "links.txt",
+      "output_file": "config.json",
+      "exclude_from_auto": [
+        "🇷🇺"
+      ],
+      "urltest": {
+        "url": "https://gstatic.com",
+        "interval": "3m",
+        "tolerance": 50
+      },
+      "log": {
+        "level": "info",
+        "timestamp": true
+      },
+      "dns": {
+        "servers": [
+          {
+            "type": "local",
+            "tag": "dns-local"
+          },
+          {
+            "type": "https",
+            "tag": "dns-remote",
+            "server": "1.1.1.1",
+            "path": "/dns-query",
+            "detour": "auto-select"
+          }
+        ],
+        "rules": [],
+        "final": "dns-local"
+      },
+      "proxies": [
+        {
+          "tag": "main-socks",
+          "type": "socks",
+          "port": 54321,
+          "servers": [
+            "🇫🇮 Finland - Helsinki 1"
+          ]
+        },
+        {
+          "tag": "apps-http",
+          "type": "http",
+          "port": 54323,
+          "servers": [
+            "🇫🇮 Finland - Helsinki 1",
+            "🇳🇱 Netherlands - Amsterdam",
+            "🇩🇪 Germany - Berlin"
+          ]
+        }
+      ],
+      "routes": {
+        "telegram": {
+          "outbound": "🇫🇮 Finland - Helsinki 1",
+          "domains": [
+            "telegram.org"
+          ]
+        },
+        "broken": {
+          "outbound": "🇩🇪 Germany - Berlin",
+          "domains": [
+            "example.com"
+          ]
+        }
+      }
+    }
+  }
+}
