@@ -50,7 +50,7 @@ and the system layer in
 
 ```bash
 npm ci          # runtime: ajv, express, ejs; dev: yaml (converter), htmx.org
-node --test     # 298 checks, no network, no root, no sing-box
+node --test     # 307 checks, no network, no root, no sing-box
 npm run compare # byte-level equality with the reference, needs Python
 ```
 
@@ -184,6 +184,19 @@ duplicate, remove), Общие, Значения по умолчанию, Фай
   newline. That is deliberately NOT the format of `config.json`, which keeps the
   reference contract (`json.dump(..., indent=2)`, no trailing newline) because the
   acceptance test compares its bytes.
+* **«Сохранить» takes the open form with it.** The header button used to post the
+  panel key and nothing else, so a field that had not gone through «Применить» was
+  thrown away while the notice still said «Сохранено» — the owner hit it on a
+  checkbox. Each panel now marks its edit form with `id="panel-form"`, and the
+  button is bound to it twice over, because the header and the form live in
+  different parts of the DOM: htmx pulls the fields in with `hx-include`, and
+  `form="panel-form"` does the same with JavaScript off. A panel with no edit form
+  (`profiles`, `system`, `journal`, `tests`) keeps the old standalone button — a
+  broken `form=` reference would stop it from submitting at all. `/save` applies the
+  form through the very same function the panel route uses, so the two can never
+  drift; a rejection writes nothing and keeps the entered values, and a save that
+  changes nothing answers «нечего сохранять» without writing a snapshot. «Перечитать
+  с диска» stays unbound on purpose: reloading is supposed to discard.
 * **One model per process.** The state (loaded file, unsaved edits) lives on the
   server, exactly as the Qt window was a thin shell over `model.py`. Two open
   browser tabs will silently overwrite each other's edits; there are no locks and

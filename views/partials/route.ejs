@@ -7,7 +7,7 @@
      : (route.domains ? [route.domains] : []); %>
 <h2><%= panel.title %></h2>
 
-<form class="form" hx-post="/route" hx-target="#panel" hx-swap="innerHTML" method="post" action="/route">
+<form id="panel-form" class="form" hx-post="/route" hx-target="#panel" hx-swap="innerHTML" method="post" action="/route">
   <input type="hidden" name="current" value="<%= panel.name %>">
 
   <fieldset>

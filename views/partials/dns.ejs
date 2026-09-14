@@ -10,7 +10,7 @@
   есть. Проверяется только то, что это валидный JSON-объект.
 </p>
 
-<form class="form" hx-post="/dns" hx-target="#panel" hx-swap="innerHTML" method="post" action="/dns">
+<form id="panel-form" class="form" hx-post="/dns" hx-target="#panel" hx-swap="innerHTML" method="post" action="/dns">
   <input type="hidden" name="scope" value="profile">
   <textarea name="dns" rows="20" cols="80" spellcheck="false"><%= panel.json %></textarea>
   <button type="submit">Применить DNS</button>

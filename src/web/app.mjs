@@ -32,7 +32,15 @@ import {
 import {Watchdog} from '../watchdog/watchdog.mjs';
 import {TOKEN_COOKIE, extractToken, tokenMatches} from './auth.mjs';
 import * as forms from './forms.mjs';
-import {PANEL_KINDS, buildPanel, buildStatus, panelKey, panelUrl} from './panel.mjs';
+import {
+  PANEL_KINDS,
+  buildPanel,
+  buildStatus,
+  editFormRoute,
+  panelKey,
+  panelUrl,
+  parsePanelKey,
+} from './panel.mjs';
 
 const ROOT = path.join(import.meta.dirname, '..', '..');
 const VIEWS = path.join(ROOT, 'views');
@@ -295,12 +303,15 @@ export function createApp(options = {}) {
    * be async: the system calls (check, restart) are promises, and the SSE routes
    * are the only ones that answer without going through here.
    *
-   * @param {string} defaultKey
+   * @param {string|((req: import('express').Request) => string)} defaultKey A
+   *   string, or a function so a route that learns its panel from the request
+   *   (the `/save` button) still renders the right panel after a rejection.
    * @param {(req: import('express').Request) => Record<string, unknown>|Promise<Record<string, unknown>>} action
    * @returns {import('express').RequestHandler}
    */
   function mutation(defaultKey, action) {
     return async (req, res) => {
+      const fallbackKey = typeof defaultKey === 'function' ? defaultKey(req) : defaultKey;
       let extra;
       try {
         extra = (await action(req)) ?? {};
@@ -309,9 +320,9 @@ export function createApp(options = {}) {
         // A rejection keeps the entered values, so the owner does not retype a
         // form because of one bad port number. A failed system call is reported
         // the same way: a plain sentence, never a stack trace.
-        extra = {error: error.message, form: req.body, key: defaultKey};
+        extra = {error: error.message, form: req.body, key: fallbackKey};
       }
-      const key = typeof extra.key === 'string' && extra.key.length > 0 ? extra.key : defaultKey;
+      const key = typeof extra.key === 'string' && extra.key.length > 0 ? extra.key : fallbackKey;
       if (!req.get('HX-Request')) {
         // No htmx (JavaScript off, bundle missing): answer with a plain redirect
         // so the tool works anyway.
@@ -324,15 +335,78 @@ export function createApp(options = {}) {
 
   /**
    * Reads the panel a form belongs to, so saving from the header returns the
-   * owner to the panel they were looking at.
+   * owner to the panel they were looking at. The bound «Сохранить» button carries
+   * the panel in the query string (its `form="panel-form"` association would drop
+   * any hidden field of the header form), so the query is checked first.
    *
    * @param {import('express').Request} req
    * @param {string} fallback
    * @returns {string}
    */
   function panelFromBody(req, fallback) {
-    const value = req.body?.panel;
+    const value = req.query?.panel ?? req.body?.panel;
     return typeof value === 'string' && value.length > 0 ? value : fallback;
+  }
+
+  /**
+   * Applies the edit form of one panel to the model.
+   *
+   * Shared by the panel's own route and by `/save`: that is the whole point of the
+   * fix, because if the two ever drifted the save button would silently behave
+   * differently from «Применить» again. `EditFormRoute` decides which panels have
+   * such a form at all — the action buttons (`/proxy/remove`, `/generate`, …) are
+   * never routed through here.
+   *
+   * Returns `changed`, computed from the canonical text of the document, so
+   * `/save` can tell "the form really did something" from "the values were already
+   * like that" and skip a pointless write and snapshot.
+   *
+   * @param {string} kind Panel kind (`proxy`, `route`, `dns`, `general`, …).
+   * @param {import('express').Request} req
+   * @returns {{key: string, changed: boolean}}
+   */
+  function applyEditForm(kind, req) {
+    const body = req.body ?? {};
+    const before = model.toText();
+
+    switch (kind) {
+      case 'proxy': {
+        const current = String(body.current ?? '').trim();
+        const candidate = forms.parseProxyForm(body);
+        model.upsertProxy(candidate, current.length > 0 ? current : null);
+        return {key: panelKey('proxy', candidate.tag), changed: model.toText() !== before};
+      }
+      case 'route': {
+        const current = String(body.current ?? '').trim();
+        const candidate = forms.parseRouteForm(body);
+        model.upsertRoute(candidate.name, candidate, current.length > 0 ? current : null);
+        return {key: panelKey('route', candidate.name), changed: model.toText() !== before};
+      }
+      case 'dns': {
+        const scope = body.scope === 'defaults' ? 'defaults' : 'profile';
+        model.applyDns(String(body.dns ?? ''), scope);
+        return {key: scope === 'defaults' ? 'defaults' : 'dns', changed: model.toText() !== before};
+      }
+      case 'links':
+        model.setLinksFile(String(body.links_file ?? '').trim());
+        return {key: 'links', changed: model.toText() !== before};
+      case 'output':
+        model.setOutputFile(String(body.output_file ?? '').trim());
+        return {key: 'output', changed: model.toText() !== before};
+      case 'watchdog':
+        model.applyWatchdog(forms.parseWatchdogForm(body));
+        model.applyClashApi(forms.parseClashApiForm(body));
+        return {key: 'watchdog', changed: model.toText() !== before};
+      case 'general':
+      case 'defaults': {
+        const values = forms.parseGeneralForm(body);
+        if (kind === 'defaults') model.applyDefaults(values);
+        else model.applyGeneral(values);
+        return {key: kind, changed: model.toText() !== before};
+      }
+      default:
+        throw new ConfigError(`у панели '${kind}' нет формы правки`);
+    }
   }
 
   // ------------------------------------------------------------------
@@ -404,9 +478,7 @@ export function createApp(options = {}) {
         return {key, notice: `'${field}' убран из профиля: снова действует значение по умолчанию`};
       }
 
-      const values = forms.parseGeneralForm(req.body);
-      if (scope === 'defaults') model.applyDefaults(values);
-      else model.applyGeneral(values);
+      applyEditForm(key, req);
       return {key, notice: 'Применено — не забудьте сохранить'};
     }),
   );
@@ -414,12 +486,8 @@ export function createApp(options = {}) {
   app.post(
     '/dns',
     mutation('dns', (req) => {
-      const scope = req.body.scope === 'defaults' ? 'defaults' : 'profile';
-      model.applyDns(String(req.body.dns ?? ''), scope);
-      return {
-        key: scope === 'defaults' ? 'defaults' : 'dns',
-        notice: 'DNS применён — не забудьте сохранить',
-      };
+      const {key} = applyEditForm('dns', req);
+      return {key, notice: 'DNS применён — не забудьте сохранить'};
     }),
   );
 
@@ -430,7 +498,7 @@ export function createApp(options = {}) {
   app.post(
     '/links',
     mutation('links', (req) => {
-      model.setLinksFile(String(req.body.links_file ?? '').trim());
+      applyEditForm('links', req);
       return {key: 'links', notice: 'Путь к файлу ссылок применён — не забудьте сохранить'};
     }),
   );
@@ -438,7 +506,7 @@ export function createApp(options = {}) {
   app.post(
     '/output',
     mutation('output', (req) => {
-      model.setOutputFile(String(req.body.output_file ?? '').trim());
+      applyEditForm('output', req);
       return {key: 'output', notice: 'Путь вывода применён — не забудьте сохранить'};
     }),
   );
@@ -475,13 +543,8 @@ export function createApp(options = {}) {
   app.post(
     '/proxy',
     mutation('proxies', (req) => {
-      const current = String(req.body.current ?? '').trim();
-      const candidate = forms.parseProxyForm(req.body);
-      model.upsertProxy(candidate, current.length > 0 ? current : null);
-      return {
-        key: panelKey('proxy', candidate.tag),
-        notice: `Прокси '${candidate.tag}' применён — не забудьте сохранить`,
-      };
+      const {key} = applyEditForm('proxy', req);
+      return {key, notice: `Прокси '${parsePanelKey(key).name}' применён — не забудьте сохранить`};
     }),
   );
 
@@ -512,13 +575,8 @@ export function createApp(options = {}) {
   app.post(
     '/route',
     mutation('routes', (req) => {
-      const current = String(req.body.current ?? '').trim();
-      const candidate = forms.parseRouteForm(req.body);
-      model.upsertRoute(candidate.name, candidate, current.length > 0 ? current : null);
-      return {
-        key: panelKey('route', candidate.name),
-        notice: `Маршрут '${candidate.name}' применён — не забудьте сохранить`,
-      };
+      const {key} = applyEditForm('route', req);
+      return {key, notice: `Маршрут '${parsePanelKey(key).name}' применён — не забудьте сохранить`};
     }),
   );
 
@@ -548,14 +606,44 @@ export function createApp(options = {}) {
 
   app.post(
     '/save',
-    mutation(DEFAULT_PANEL, (req) => {
-      const {snapshot} = model.save();
-      const notice =
-        snapshot === null
-          ? 'Сохранено'
-          : `Сохранено, предыдущая версия: ${path.basename(snapshot)}`;
-      return {key: panelFromBody(req, DEFAULT_PANEL), notice};
-    }),
+    mutation(
+      (req) => panelFromBody(req, DEFAULT_PANEL),
+      (req) => {
+        const key = panelFromBody(req, DEFAULT_PANEL);
+        const {kind} = parsePanelKey(key);
+        const hadEdits = model.dirty;
+
+        // The header button carries the fields of the open edit form (htmx
+        // hx-include / the form="" attribute with JavaScript off). Apply them with
+        // the very same function the panel's own route uses, so "edit → Сохранить"
+        // can never behave differently from "edit → Применить → Сохранить".
+        //
+        // A body that carries nothing but the panel key is a plain "save what the
+        // model holds" — there is no form to apply, and parsing an empty one would
+        // fail for no reason.
+        const hasFormFields = Object.keys(req.body ?? {}).some((field) => field !== 'panel');
+        let changed = false;
+        if (editFormRoute(kind) !== null && hasFormFields) {
+          changed = applyEditForm(kind, req).changed;
+        }
+
+        // Applying identical values is not an error, but it must not look like a
+        // save either: no write and, above all, no snapshot for an edit that
+        // changed nothing. `applyEditForm` always marks the model dirty, so the
+        // "nothing happened" case is undone here.
+        if (!changed && !hadEdits) model.markClean();
+        if (!model.dirty) {
+          return {key, notice: 'Нечего сохранять: неприменённых правок нет'};
+        }
+
+        const {snapshot} = model.save();
+        const base = changed ? 'Правка формы применена и сохранена' : 'Сохранено';
+        return {
+          key,
+          notice: snapshot === null ? base : `${base}, предыдущая версия: ${path.basename(snapshot)}`,
+        };
+      },
+    ),
   );
 
   app.post(
@@ -780,8 +868,7 @@ export function createApp(options = {}) {
   app.post(
     '/watchdog',
     mutation('watchdog', (req) => {
-      model.applyWatchdog(forms.parseWatchdogForm(req.body));
-      model.applyClashApi(forms.parseClashApiForm(req.body));
+      applyEditForm('watchdog', req);
       return {
         key: 'watchdog',
         notice: 'Настройки сторожа применены — не забудьте сохранить',

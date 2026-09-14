@@ -546,6 +546,10 @@ describe('saving and generating from the UI', () => {
       assert.match(html, /class="stale"/);
       assert.match(html, /нет в списке серверов/);
 
+      // Saving now answers «нечего сохранять» for an untouched model, so the edit
+      // is made first — the point of the test is that a stale reference does not
+      // block the write.
+      editor.model.markDirty();
       const saved = await post(editor.base, '/save', {panel: 'proxies'});
 
       assert.equal(saved.status, 200);

@@ -1,16 +1,37 @@
 <%# One proxy: its own inbound with its own port and its own list of servers.
     Servers that disappeared from the links file stay in the list as checked
     boxes, marked — otherwise the first save would silently drop them. %>
-<% const proxy = panel.proxy; %>
-<% const servers = Array.isArray(proxy.servers)
-     ? proxy.servers
-     : (proxy.servers ? [proxy.servers] : []); %>
+<%# A rejected form must not throw the owner's typing away: when the model rejected
+    this edit, `panel.form` holds exactly what the browser sent, and the fields below
+    are drawn from it instead of from the stored entry. On success there is no
+    `panel.form` and the stored entry is shown, as always. %>
+<% const stored = panel.proxy; %>
+<% const posted = panel.form && typeof panel.form === 'object' ? panel.form : null; %>
+<% const pick = (field, fallback) => (posted && posted[field] !== undefined ? posted[field] : fallback); %>
+<% const ticked = (field, fallback) => (posted ? posted[field] === '1' : fallback); %>
+<% const proxy = {
+     tag: pick('tag', stored.tag),
+     type: pick('type', stored.type),
+     port: pick('port', stored.port),
+     note: pick('note', stored.note ?? ''),
+     pinned: ticked('pinned', stored.pinned === true),
+     watch: ticked('watch', stored.watch === true),
+     watch_url: pick('watch_url', stored.watch_url ?? ''),
+   }; %>
+<% const current = posted && posted.current !== undefined ? posted.current : stored.tag; %>
+<% const servers = posted
+     ? (posted.servers === undefined
+         ? []
+         : (Array.isArray(posted.servers) ? posted.servers : [posted.servers]))
+     : (Array.isArray(stored.servers)
+         ? stored.servers
+         : (stored.servers ? [stored.servers] : [])); %>
 <% const known = new Set(panel.tags); %>
 <% const excludePrefixes = panel.autoPrefixes ?? []; %>
 <h2><%= panel.title %></h2>
 
-<form class="form" hx-post="/proxy" hx-target="#panel" hx-swap="innerHTML" method="post" action="/proxy">
-  <input type="hidden" name="current" value="<%= proxy.tag %>">
+<form id="panel-form" class="form" hx-post="/proxy" hx-target="#panel" hx-swap="innerHTML" method="post" action="/proxy">
+  <input type="hidden" name="current" value="<%= current %>">
 
   <fieldset>
     <legend>Инбаунд</legend>
@@ -122,6 +143,6 @@
 </form>
 
 <form hx-post="/proxy/remove" hx-target="#panel" hx-swap="innerHTML" method="post" action="/proxy/remove">
-  <input type="hidden" name="current" value="<%= proxy.tag %>">
-  <button type="submit" class="danger" hx-confirm="Удалить прокси '<%= proxy.tag %>'?">Удалить прокси</button>
+  <input type="hidden" name="current" value="<%= current %>">
+  <button type="submit" class="danger" hx-confirm="Удалить прокси '<%= current %>'?">Удалить прокси</button>
 </form>

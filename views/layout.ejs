@@ -14,7 +14,7 @@
     <script src="/static/app.js" type="module"></script>
   </head>
   <body>
-    <header id="status"><%- include('partials/status', {status, key}) %></header>
+    <header id="status"><%- include('partials/status', {status, key, editForm: panel.editForm}) %></header>
     <main>
       <nav id="tree"><%- include('partials/tree', {tree, key}) %></nav>
       <section id="panel">

@@ -3,7 +3,7 @@
     project, so it is reported, not thrown. %>
 <h2><%= panel.title %></h2>
 
-<form class="form" hx-post="/links" hx-target="#panel" hx-swap="innerHTML" method="post" action="/links">
+<form id="panel-form" class="form" hx-post="/links" hx-target="#panel" hx-swap="innerHTML" method="post" action="/links">
   <fieldset>
     <legend>Путь к файлу ссылок</legend>
     <label for="links_file">links_file</label>

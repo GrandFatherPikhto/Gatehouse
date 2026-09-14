@@ -3,7 +3,7 @@
     included — the summary says so when the document is dirty. %>
 <h2><%= panel.title %></h2>
 
-<form class="form" hx-post="/output" hx-target="#panel" hx-swap="innerHTML" method="post" action="/output">
+<form id="panel-form" class="form" hx-post="/output" hx-target="#panel" hx-swap="innerHTML" method="post" action="/output">
   <fieldset>
     <legend>Куда писать config.json</legend>
     <label for="output_file">output_file</label>

@@ -2,7 +2,7 @@
     destination differs — the active profile or defaults. Both are written by
     POST /general with a scope field. %>
 <% const values = panel.values; %>
-<form class="form" hx-post="/general" hx-target="#panel" hx-swap="innerHTML" method="post" action="/general">
+<form id="panel-form" class="form" hx-post="/general" hx-target="#panel" hx-swap="innerHTML" method="post" action="/general">
   <input type="hidden" name="scope" value="<%= scope %>">
 
   <fieldset>

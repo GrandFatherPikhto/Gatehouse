@@ -3,4 +3,4 @@
 <%- include('notices', {error: extra.error ?? null, notice: extra.notice ?? null}) %>
 <%- include('panel', {panel}) %>
 <nav id="tree" hx-swap-oob="true"><%- include('tree', {tree, key}) %></nav>
-<header id="status" hx-swap-oob="true"><%- include('status', {status, key}) %></header>
+<header id="status" hx-swap-oob="true"><%- include('status', {status, key, editForm: panel.editForm}) %></header>

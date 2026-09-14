@@ -32,6 +32,39 @@ export const PANEL_KINDS = Object.freeze([
 export const BUILTIN_OUTBOUNDS = Object.freeze(['auto-select', 'direct']);
 
 /**
+ * The edit form of a panel: the route its "Применить" form posts to, or `null`
+ * when the panel has no editable form at all.
+ *
+ * A panel can carry several forms and only one of them is the edit form; the rest
+ * are action buttons (`/proxy/remove`, `/generate`, `/watchdog/check` …) and must
+ * never be attached to the header's «Сохранить». The list is deliberately explicit:
+ * a wrong guess here would make the save button submit a delete request.
+ *
+ * `general` and `defaults` share one form, rendered by `settings-form.ejs`, so both
+ * kinds point at `/general`.
+ */
+const EDIT_FORMS = Object.freeze({
+  proxy: '/proxy',
+  route: '/route',
+  dns: '/dns',
+  output: '/output',
+  links: '/links',
+  watchdog: '/watchdog',
+  general: '/general',
+  defaults: '/general',
+});
+
+/**
+ * Route of the edit form of a panel kind, or `null` when it has none.
+ *
+ * @param {string} kind
+ * @returns {string|null}
+ */
+export function editFormRoute(kind) {
+  return EDIT_FORMS[kind] ?? null;
+}
+
+/**
  * Builds a tree key for a panel. The name is glued with a colon; tags and route
  * names of the owner look like `🇨🇾 Cyprus - Limassol`, so anything that could
  * clash with a separator is a bad idea and a colon is already unusual there.
@@ -145,6 +178,10 @@ export function buildPanel(model, key, extra = {}) {
     error: extra.error ?? null,
     notice: extra.notice ?? null,
     form: extra.form ?? null,
+    // The header's «Сохранить» binds to this form so an unapplied edit survives
+    // the save. `null` means the panel has no edit form and the button keeps its
+    // standalone behaviour.
+    editForm: editFormRoute(kind),
   };
   // Runtime state of the host layer, handed in by `app.mjs`: the outcome of the
   // last check/restart and the name of the unit. The panel never runs a command

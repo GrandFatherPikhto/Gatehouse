@@ -1,4 +1,13 @@
-<%# Header: which file, is it saved, and the two file actions. %>
+<%# Header: which file, is it saved, and the file actions.
+    «Сохранить» takes the open edit form with it. Without that, a field the owner had
+    not sent through «Применить» was thrown away while the notice still said
+    «Сохранено». The button is bound to the form twice over, because the header and
+    the form live in different parts of the DOM: htmx pulls the fields in with
+    hx-include, and the form="panel-form" attribute does the same for a browser with
+    JavaScript off. A panel with no edit form (`profiles`, `system`, `journal`,
+    `tests`) keeps the old standalone save; a broken form="" reference would stop
+    that button from submitting at all. «Перечитать с диска» is deliberately NOT
+    bound: reloading is supposed to discard. %>
 <div class="status-line">
   <strong><%= status.name %></strong>
   <% if (status.path) { %>
@@ -15,10 +24,20 @@
   <span class="muted">активный профиль: <%= status.active %></span>
 </div>
 <div class="status-actions">
-  <form hx-post="/save" hx-target="#panel" hx-swap="innerHTML" method="post" action="/save">
-    <input type="hidden" name="panel" value="<%= key %>">
-    <button type="submit">Сохранить</button>
-  </form>
+  <% if (editForm) { %>
+    <% const saveUrl = `/save?panel=${encodeURIComponent(key)}`; %>
+    <form method="post" action="<%= saveUrl %>">
+      <button type="submit"
+              hx-post="<%= saveUrl %>" hx-target="#panel" hx-swap="innerHTML"
+              hx-include="#panel-form"
+              form="panel-form" formaction="<%= saveUrl %>" formmethod="post">Сохранить</button>
+    </form>
+  <% } else { %>
+    <form hx-post="/save" hx-target="#panel" hx-swap="innerHTML" method="post" action="/save">
+      <input type="hidden" name="panel" value="<%= key %>">
+      <button type="submit">Сохранить</button>
+    </form>
+  <% } %>
   <form hx-post="/reload" hx-target="#panel" hx-swap="innerHTML" method="post" action="/reload">
     <input type="hidden" name="panel" value="<%= key %>">
     <button type="submit" class="secondary">Перечитать с диска</button>
