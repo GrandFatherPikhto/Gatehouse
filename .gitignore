@@ -27,3 +27,5 @@ Thumbs.db
 
 # Project innter documentation
 techdocs/
+
+*.sh
