@@ -13,7 +13,7 @@ import {describe, test} from 'node:test';
 import {run as runGenerate} from '../tools/generate.mjs';
 import {canonicalJson, listSnapshots} from '../src/model/storage.mjs';
 import {DEFAULT_PORT, readEnv, startServer} from '../src/web/server.mjs';
-import {FI_TAG, makeTempDir, writeLinksFile, writeSettings} from './helpers.mjs';
+import {FI_TAG, NL_TAG, RU_TAG, makeTempDir, writeLinksFile, writeSettings} from './helpers.mjs';
 
 /**
  * Starts the editor over a temporary project and returns everything the test
@@ -89,6 +89,48 @@ async function post(base, route, fields, htmx = true) {
 /** Panel URL of a proxy or route, with the name encoded. */
 function panelUrl(key) {
   return `/panel/${encodeURIComponent(key)}`;
+}
+
+/**
+ * The `<option>` tags of the servers multi-select, in DOCUMENT order.
+ *
+ * Reading the order out of the rendered HTML is the whole point: a browser
+ * submits the selected options in document order, not in the order the model
+ * holds them. The curl-based manual pass sent the model's order, so it could not
+ * see this class of defect at all.
+ *
+ * Option values are compared as they are written; a tag containing `&` or `"`
+ * would arrive HTML-escaped, which no real tag does.
+ *
+ * @param {string} html
+ * @returns {RegExpMatchArray[]} Matches with the value in group 1 and the
+ *   `selected` suffix in group 2.
+ */
+function serverOptionTags(html) {
+  const start = html.indexOf('<select name="servers"');
+  assert.ok(start >= 0, 'the servers select must be rendered');
+  const end = html.indexOf('</select>', start);
+  return [...html.slice(start, end).matchAll(/<option value="([^"]*)"( selected)?>/g)];
+}
+
+/**
+ * @param {string} html
+ * @returns {string[]} Values of all options, in document order.
+ */
+function serverOptions(html) {
+  return serverOptionTags(html).map((match) => match[1]);
+}
+
+/**
+ * Exactly what a browser submits for the servers field.
+ *
+ * @param {string} html
+ * @returns {string[]}
+ */
+function submittedServers(html) {
+  return serverOptionTags(html)
+    .filter((match) => match[2] === ' selected')
+    .map((match) => match[1]);
 }
 
 describe('pages and static files', () => {
@@ -487,6 +529,49 @@ describe('saving and generating from the UI', () => {
 
       assert.match(html, /value="🇩🇪 Germany - Berlin" selected/);
       assert.match(html, /\(нет в файле ссылок\)/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('a browser submits the servers in document order, and the stored order does not move', async () => {
+    // The stored order deliberately differs from the order of links.txt, and a
+    // server that is not in the file sits in the MIDDLE of the list. Rendering the
+    // options in links order (with `selected` on top of it) would make the first
+    // save of an untouched form rewrite the list into links order and push the
+    // missing server to the end.
+    const stored = [RU_TAG, FI_TAG, '🇩🇪 Germany - Berlin'];
+    const editor = await startEditor({
+      overrides: {proxies: [{tag: 'main-socks', type: 'socks', port: 54321, servers: stored}]},
+    });
+    try {
+      const html = await (await fetch(`${editor.base}${panelUrl('proxy:main-socks')}`)).text();
+
+      assert.deepEqual(
+        serverOptions(html).slice(0, stored.length),
+        stored,
+        'the selected options come first, in their stored order',
+      );
+      assert.deepEqual(
+        serverOptions(html).slice(stored.length),
+        [NL_TAG],
+        'the remaining servers follow in links-file order',
+      );
+
+      await post(editor.base, '/proxy', {
+        current: 'main-socks',
+        tag: 'main-socks',
+        type: 'socks',
+        port: '54321',
+        servers: submittedServers(html),
+        note: '',
+      });
+
+      assert.deepEqual(
+        editor.model.getProxy('main-socks').servers,
+        stored,
+        'saving a form nobody edited must not reorder the servers',
+      );
     } finally {
       await editor.close();
     }

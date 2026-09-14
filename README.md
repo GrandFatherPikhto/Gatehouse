@@ -126,6 +126,12 @@ duplicate, remove), Общие, Значения по умолчанию, Фай
   left the links file, and a route naming an unknown outbound, are marked in the
   tree; saving stays possible. Only the generator refuses to build a pool for a
   missing server.
+* **The servers list keeps the stored order.** The multi-select draws the selected
+  servers first, in the order the file holds them, and the rest of the links file
+  after them. A browser submits the selected options in document order, so any
+  other layout would rewrite the list into links-file order on the first save of a
+  form nobody had touched, and a server that left the links file would move to the
+  end.
 * **Names may not consist of digits only** — for profiles and for routes alike.
   JavaScript reorders integer-like object keys, so a profile called `2024` would
   silently jump to the front of the file and the order of `webui.json` (and of the
