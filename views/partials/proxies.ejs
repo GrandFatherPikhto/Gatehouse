@@ -1,0 +1,21 @@
+<%# The "Прокси" node itself: a list plus the create button. The node of a single
+    proxy is a separate panel. %>
+<h2><%= panel.title %></h2>
+
+<form hx-post="/proxy/new" hx-target="#panel" hx-swap="innerHTML" method="post" action="/proxy/new">
+  <button type="submit">Создать прокси</button>
+</form>
+
+<% if (panel.tags.length === 0) { %>
+  <p class="hint">В активном профиле пока нет ни одного прокси.</p>
+<% } else { %>
+  <ul class="list-plain">
+    <% for (const tag of panel.tags) { %>
+      <li>
+        <a href="<%= '/panel/' + encodeURIComponent('proxy:' + tag) %>"
+           hx-get="/panel/<%= encodeURIComponent('proxy:' + tag) %>"
+           hx-target="#panel" hx-swap="innerHTML" hx-push-url="true"><%= tag %></a>
+      </li>
+    <% } %>
+  </ul>
+<% } %>

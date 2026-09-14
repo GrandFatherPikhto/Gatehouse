@@ -1,0 +1,26 @@
+<%# Header: which file, is it saved, and the two file actions. %>
+<div class="status-line">
+  <strong><%= status.name %></strong>
+  <% if (status.path) { %>
+    <span class="muted"><%= status.path %></span>
+    <% if (!status.exists) { %><span class="badge">файл ещё не создан</span><% } %>
+  <% } else { %>
+    <span class="muted">файл ещё не создан</span>
+  <% } %>
+  <% if (status.dirty) { %>
+    <span class="badge dirty">есть несохранённые правки</span>
+  <% } else { %>
+    <span class="badge clean">сохранено</span>
+  <% } %>
+  <span class="muted">активный профиль: <%= status.active %></span>
+</div>
+<div class="status-actions">
+  <form hx-post="/save" hx-target="#panel" hx-swap="innerHTML" method="post" action="/save">
+    <input type="hidden" name="panel" value="<%= key %>">
+    <button type="submit">Сохранить</button>
+  </form>
+  <form hx-post="/reload" hx-target="#panel" hx-swap="innerHTML" method="post" action="/reload">
+    <input type="hidden" name="panel" value="<%= key %>">
+    <button type="submit" class="secondary">Перечитать с диска</button>
+  </form>
+</div>

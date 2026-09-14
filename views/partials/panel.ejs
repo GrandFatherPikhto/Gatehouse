@@ -1,0 +1,15 @@
+<%# Dispatcher: one include per panel kind. Keeping the switch here means the
+    route handlers never build markup and never pick a template. %>
+<% switch (panel.kind) {
+     case 'profiles': %><%- include('profiles', {panel}) %><% break;
+     case 'general': %><%- include('general', {panel}) %><% break;
+     case 'defaults': %><%- include('defaults', {panel}) %><% break;
+     case 'links': %><%- include('links', {panel}) %><% break;
+     case 'output': %><%- include('output', {panel}) %><% break;
+     case 'proxies': %><%- include('proxies', {panel}) %><% break;
+     case 'proxy': %><%- include('proxy', {panel}) %><% break;
+     case 'routes': %><%- include('routes', {panel}) %><% break;
+     case 'route': %><%- include('route', {panel}) %><% break;
+     case 'dns': %><%- include('dns', {panel}) %><% break;
+     default: %><p class="error">Неизвестный раздел '<%= panel.kind %>'</p><% break;
+   } %>

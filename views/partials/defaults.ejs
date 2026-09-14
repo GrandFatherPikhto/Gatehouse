@@ -1,0 +1,30 @@
+<%# defaults is shared by every profile. It is empty right after the migration from
+    settings.yaml — that is normal: there is nothing to share until a second
+    profile appears and dns/log/urltest stop being duplicated. %>
+<h2><%= panel.title %></h2>
+<%- include('settings-form', {panel, scope: 'defaults'}) %>
+
+<h3>Что задано в defaults</h3>
+<p class="hint">
+  Ключ профиля перекрывает одноимённый ключ defaults целиком (верхний уровень).
+  Здесь правятся только общие ключи: links_file, output_file, proxies, routes и
+  notice по смыслу принадлежат профилю и в defaults не пишутся.
+</p>
+<table class="list">
+  <thead><tr><th>ключ</th><th>задано в defaults</th></tr></thead>
+  <tbody>
+    <% for (const key of ['listen_ip', 'log', 'urltest', 'dns', 'exclude_from_auto']) { %>
+      <tr>
+        <td><code><%= key %></code></td>
+        <td><%= panel.values.present[key] ? 'да' : 'нет' %></td>
+      </tr>
+    <% } %>
+  </tbody>
+</table>
+
+<h3>DNS в defaults</h3>
+<form class="form" hx-post="/dns" hx-target="#panel" hx-swap="innerHTML" method="post" action="/dns">
+  <input type="hidden" name="scope" value="defaults">
+  <textarea name="dns" rows="12" cols="70" spellcheck="false"><%= panel.defaultsDns %></textarea>
+  <button type="submit">Применить DNS</button>
+</form>

@@ -212,6 +212,53 @@ test('schema: an empty proxies list is left to validateProxies', () => {
   );
 });
 
+// NEW: JavaScript reorders integer-like object keys, so a profile or a route
+// called "2024" would silently move to the front of the file on the next save:
+// key order would be lost in the data structure itself, before any serialiser
+// runs. The schema refuses names made of digits only, which keeps the round-trip
+// promise and the byte match with the reference achievable.
+describe('schema: digit-only names are rejected (NEW)', () => {
+  test('a profile called 2024 is rejected', () => {
+    assert.throws(
+      () => validateSettings({version: 1, active: '2024', profiles: {'2024': {}}}, 'webui.json'),
+      (error) => error instanceof ConfigError && /profiles/.test(error.message),
+    );
+  });
+
+  test('a profile called 2024-reality is accepted', () => {
+    assert.doesNotThrow(() =>
+      validateSettings(
+        {version: 1, active: '2024-reality', profiles: {'2024-reality': {}}},
+        'webui.json',
+      ),
+    );
+  });
+
+  test('a route called 1 is rejected', () => {
+    assert.throws(
+      () =>
+        validateSettings(
+          {version: 1, active: 'a', profiles: {a: {routes: {'1': {outbound: 'auto-select'}}}}},
+          'webui.json',
+        ),
+      (error) => error instanceof ConfigError && /routes/.test(error.message),
+    );
+  });
+
+  test('a route called 2024-telegram is accepted', () => {
+    assert.doesNotThrow(() =>
+      validateSettings(
+        {
+          version: 1,
+          active: 'a',
+          profiles: {a: {routes: {'2024-telegram': {outbound: 'auto-select'}}}},
+        },
+        'webui.json',
+      ),
+    );
+  });
+});
+
 // NEW: defaults are overridden by the active profile, top level only.
 describe('profiles: defaults merge (NEW)', () => {
   test('a same-named key of the profile wins', () => {

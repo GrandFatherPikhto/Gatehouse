@@ -1,0 +1,66 @@
+<%# Profiles: list, activation, create, rename, duplicate, remove and the note of
+    the active profile. Exactly one profile is applied at a time, so removal is
+    refused for the active one and for the last one — the model decides that, the
+    template only shows what it allows. %>
+<h2><%= panel.title %></h2>
+
+<table class="list">
+  <thead>
+    <tr><th>профиль</th><th>переименовать</th><th>копия</th><th>удалить</th></tr>
+  </thead>
+  <tbody>
+    <% for (const name of panel.names) { %>
+      <tr class="<%= name === panel.active ? 'row-active' : '' %>">
+        <td>
+          <form hx-post="/profiles" hx-target="#panel" hx-swap="innerHTML" method="post" action="/profiles" class="inline">
+            <input type="hidden" name="action" value="activate">
+            <input type="hidden" name="name" value="<%= name %>">
+            <button type="submit" <%= name === panel.active ? 'disabled' : '' %>><%= name %></button>
+          </form>
+          <% if (name === panel.active) { %><span class="badge">активен</span><% } %>
+        </td>
+        <td>
+          <form hx-post="/profiles" hx-target="#panel" hx-swap="innerHTML" method="post" action="/profiles" class="inline">
+            <input type="hidden" name="action" value="rename">
+            <input type="hidden" name="current" value="<%= name %>">
+            <input type="text" name="name" value="<%= name %>" size="20">
+            <button type="submit" class="secondary">Переименовать</button>
+          </form>
+        </td>
+        <td>
+          <form hx-post="/profiles" hx-target="#panel" hx-swap="innerHTML" method="post" action="/profiles" class="inline">
+            <input type="hidden" name="action" value="duplicate">
+            <input type="hidden" name="current" value="<%= name %>">
+            <button type="submit" class="secondary">Дублировать</button>
+          </form>
+        </td>
+        <td>
+          <form hx-post="/profiles" hx-target="#panel" hx-swap="innerHTML" method="post" action="/profiles" class="inline">
+            <input type="hidden" name="action" value="remove">
+            <input type="hidden" name="name" value="<%= name %>">
+            <button type="submit" class="danger" hx-confirm="Удалить профиль '<%= name %>'?">Удалить</button>
+          </form>
+        </td>
+      </tr>
+    <% } %>
+  </tbody>
+</table>
+
+<h3>Создать профиль</h3>
+<p class="hint">
+  Имя не может состоять только из цифр: JavaScript переставляет такие ключи в
+  начало файла, и порядок перестал бы быть предсказуемым. Копия профиля берёт
+  порты как есть — конфликтуют они только между профилями, а применяется один.
+</p>
+<form hx-post="/profiles" hx-target="#panel" hx-swap="innerHTML" method="post" action="/profiles" class="inline">
+  <input type="hidden" name="action" value="create">
+  <input type="text" name="name" placeholder="имя профиля" size="24">
+  <button type="submit">Создать</button>
+</form>
+
+<h3>Заметка активного профиля</h3>
+<form hx-post="/profiles" hx-target="#panel" hx-swap="innerHTML" method="post" action="/profiles">
+  <input type="hidden" name="action" value="note">
+  <textarea name="note" rows="4" cols="60"><%= panel.note %></textarea>
+  <button type="submit">Сохранить заметку</button>
+</form>

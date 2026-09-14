@@ -9,14 +9,19 @@
   },
   "scripts": {
     "test": "node --test",
+    "start": "node src/web/server.mjs",
     "generate": "node tools/generate.mjs",
     "compare": "node tools/compare-with-python.mjs",
-    "import-settings": "node tools/import-settings.mjs"
+    "import-settings": "node tools/import-settings.mjs",
+    "vendor:htmx": "node tools/vendor-htmx.mjs"
   },
   "dependencies": {
-    "ajv": "^8.20.0"
+    "ajv": "^8.20.0",
+    "ejs": "^3.1.10",
+    "express": "^5.1.0"
   },
   "devDependencies": {
+    "htmx.org": "^2.0.7",
     "yaml": "^2.9.1"
   }
 }

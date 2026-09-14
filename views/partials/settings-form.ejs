@@ -1,0 +1,41 @@
+<%# Shared form of "Общие" and "Значения по умолчанию": the same fields, only the
+    destination differs — the active profile or defaults. Both are written by
+    POST /general with a scope field. %>
+<% const values = panel.values; %>
+<form class="form" hx-post="/general" hx-target="#panel" hx-swap="innerHTML" method="post" action="/general">
+  <input type="hidden" name="scope" value="<%= scope %>">
+
+  <fieldset>
+    <legend>Сеть</legend>
+    <label for="listen_ip">listen_ip</label>
+    <input type="text" id="listen_ip" name="listen_ip" value="<%= values.listen_ip %>">
+  </fieldset>
+
+  <fieldset>
+    <legend>urltest</legend>
+    <label for="urltest_url">url</label>
+    <input type="text" id="urltest_url" name="urltest_url" value="<%= values.urltest.url %>">
+    <label for="urltest_interval">interval</label>
+    <input type="text" id="urltest_interval" name="urltest_interval" value="<%= values.urltest.interval %>">
+    <label for="urltest_tolerance">tolerance</label>
+    <input type="number" id="urltest_tolerance" name="urltest_tolerance" value="<%= values.urltest.tolerance %>">
+  </fieldset>
+
+  <fieldset>
+    <legend>log</legend>
+    <label for="log_level">level</label>
+    <input type="text" id="log_level" name="log_level" value="<%= values.log.level %>">
+    <label class="check">
+      <input type="checkbox" name="log_timestamp" value="1" <%= values.log.timestamp ? 'checked' : '' %>>
+      timestamp
+    </label>
+  </fieldset>
+
+  <fieldset>
+    <legend>exclude_from_auto</legend>
+    <p class="hint">Префиксы тегов, по одному в строке. Пустая строка ничего не добавляет.</p>
+    <textarea name="exclude_from_auto" rows="5" cols="40"><%= values.exclude_from_auto.join('\n') %></textarea>
+  </fieldset>
+
+  <button type="submit">Применить</button>
+</form>

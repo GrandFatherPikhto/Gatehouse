@@ -1,0 +1,27 @@
+<%# Full page. The same fragments are rendered by partials/response.ejs for htmx. %>
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>webui.json — <%= status.name %></title>
+    <link rel="stylesheet" href="/static/app.css">
+    <%# htmx is served from our own public/vendor: the editor has to work on a
+        router with no internet access. %>
+    <script src="/static/vendor/htmx.min.js" defer></script>
+  </head>
+  <body>
+    <header id="status"><%- include('partials/status', {status, key}) %></header>
+    <main>
+      <nav id="tree"><%- include('partials/tree', {tree, key}) %></nav>
+      <section id="panel">
+        <%- include('partials/notices', {error: extra.error ?? null, notice: extra.notice ?? null}) %>
+        <%- include('partials/panel', {panel}) %>
+      </section>
+    </main>
+    <footer>
+      Этап 2: правка настроек и генерация <code>config.json</code>. Проверка
+      конфига, перезапуск sing-box, журнал и тест серверов появятся на этапе 3.
+    </footer>
+  </body>
+</html>

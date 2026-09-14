@@ -1,0 +1,32 @@
+<%# "Общие" writes into the ACTIVE PROFILE. Fields marked as inherited come from
+    defaults and are shown with the value that really applies, so editing
+    defaults is never a silent no-op. %>
+<h2><%= panel.title %></h2>
+<%- include('settings-form', {panel, scope: 'profile'}) %>
+
+<h3>Откуда взято каждое поле</h3>
+<p class="hint">
+  «Задано в профиле» — ключ лежит в профиле и перекрывает defaults.
+  «Унаследовано из defaults» — ключа в профиле нет. Кнопка убирает ключ из
+  профиля и возвращает значение по умолчанию; значение, случайно совпавшее с
+  defaultValue, само по себе не удаляется — иначе ломался бы round-trip файла.
+</p>
+<table class="list">
+  <thead><tr><th>поле</th><th>происхождение</th><th>вернуть к умолчанию</th></tr></thead>
+  <tbody>
+    <% for (const field of ['listen_ip', 'urltest', 'log', 'exclude_from_auto']) { %>
+      <tr>
+        <td><code><%= field %></code></td>
+        <td><span class="badge <%= panel.origins[field].className %>"><%= panel.origins[field].text %></span></td>
+        <td>
+          <form hx-post="/general" hx-target="#panel" hx-swap="innerHTML" method="post" action="/general" class="inline">
+            <input type="hidden" name="scope" value="profile">
+            <input type="hidden" name="action" value="reset">
+            <input type="hidden" name="field" value="<%= field %>">
+            <button type="submit" class="secondary">Вернуть к умолчанию</button>
+          </form>
+        </td>
+      </tr>
+    <% } %>
+  </tbody>
+</table>

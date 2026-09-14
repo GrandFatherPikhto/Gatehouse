@@ -1,0 +1,29 @@
+<%# Tree of the project. Two levels only, which is all treeSpec produces, so the
+    template stays a plain pair of loops: a broken reference is a mark on the
+    node, never a save blocker. %>
+<ul class="tree">
+  <% for (const node of tree.children) { %>
+    <li class="<%= node.stale ? 'stale' : '' %>">
+      <a href="<%= '/panel/' + encodeURIComponent(node.key) %>"
+         hx-get="/panel/<%= encodeURIComponent(node.key) %>"
+         hx-target="#panel"
+         hx-swap="innerHTML"
+         hx-push-url="true"
+         class="<%= node.key === key ? 'active' : '' %>"><%= node.title %></a>
+      <% if (node.children.length > 0) { %>
+        <ul>
+          <% for (const child of node.children) { %>
+            <li class="<%= child.stale ? 'stale' : '' %>">
+              <a href="<%= '/panel/' + encodeURIComponent(child.key) %>"
+                 hx-get="/panel/<%= encodeURIComponent(child.key) %>"
+                 hx-target="#panel"
+                 hx-swap="innerHTML"
+                 hx-push-url="true"
+                 class="<%= child.key === key ? 'active' : '' %>"><%= child.title %></a>
+            </li>
+          <% } %>
+        </ul>
+      <% } %>
+    </li>
+  <% } %>
+</ul>

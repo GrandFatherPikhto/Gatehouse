@@ -1,0 +1,6 @@
+<%# htmx response: the panel, plus the tree and the header swapped out of band.
+    Both keep their ids of the full page, so the swap target is unambiguous. %>
+<%- include('notices', {error: extra.error ?? null, notice: extra.notice ?? null}) %>
+<%- include('panel', {panel}) %>
+<nav id="tree" hx-swap-oob="true"><%- include('tree', {tree, key}) %></nav>
+<header id="status" hx-swap-oob="true"><%- include('status', {status, key}) %></header>

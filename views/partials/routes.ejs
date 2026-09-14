@@ -1,0 +1,20 @@
+<%# The "Маршруты" node: a list plus the create button. %>
+<h2><%= panel.title %></h2>
+
+<form hx-post="/route/new" hx-target="#panel" hx-swap="innerHTML" method="post" action="/route/new">
+  <button type="submit">Создать маршрут</button>
+</form>
+
+<% if (panel.names.length === 0) { %>
+  <p class="hint">В активном профиле пока нет ни одного маршрута.</p>
+<% } else { %>
+  <ul class="list-plain">
+    <% for (const name of panel.names) { %>
+      <li>
+        <a href="<%= '/panel/' + encodeURIComponent('route:' + name) %>"
+           hx-get="/panel/<%= encodeURIComponent('route:' + name) %>"
+           hx-target="#panel" hx-swap="innerHTML" hx-push-url="true"><%= name %></a>
+      </li>
+    <% } %>
+  </ul>
+<% } %>

@@ -22,9 +22,12 @@
       "$ref": "#/definitions/profile"
     },
     "profiles": {
-      "description": "Named profiles.",
+      "description": "Named profiles. A name must contain at least one non-digit character: JavaScript reorders integer-like object keys, so a profile called \"2024\" would silently jump to the front of the file on the next save.",
       "type": "object",
       "minProperties": 1,
+      "propertyNames": {
+        "pattern": "\\D"
+      },
       "additionalProperties": {
         "$ref": "#/definitions/profile"
       }
@@ -126,7 +129,11 @@
           }
         },
         "routes": {
+          "description": "Domain routes layered on top of the proxies. Route names carry the same restriction as profile names: a name made of digits only would be reordered by JavaScript object key rules and would break the byte-for-byte match with the reference.",
           "type": "object",
+          "propertyNames": {
+            "pattern": "\\D"
+          },
           "additionalProperties": {
             "type": "object",
             "additionalProperties": false,
@@ -146,6 +153,10 @@
                     }
                   }
                 ]
+              },
+              "note": {
+                "description": "Free-form comment, like the one a profile and a proxy carry. Ignored by the core: buildRules reads only outbound and domains.",
+                "type": "string"
               }
             }
           }

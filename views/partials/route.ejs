@@ -1,0 +1,48 @@
+<%# One domain route. The outbound is a free text field with a datalist of known
+    outbounds: a route may legitimately name a pool or a tag that will appear
+    later, and a hard dropdown would make the file unrepresentable. %>
+<% const route = panel.route; %>
+<% const domains = Array.isArray(route.domains)
+     ? route.domains
+     : (route.domains ? [route.domains] : []); %>
+<h2><%= panel.title %></h2>
+
+<form class="form" hx-post="/route" hx-target="#panel" hx-swap="innerHTML" method="post" action="/route">
+  <input type="hidden" name="current" value="<%= panel.name %>">
+
+  <fieldset>
+    <legend>Маршрут</legend>
+    <label for="name">имя</label>
+    <input type="text" id="name" name="name" value="<%= panel.name %>" size="40">
+    <label for="outbound">outbound</label>
+    <input type="text" id="outbound" name="outbound" value="<%= route.outbound ?? '' %>" list="outbounds" size="40">
+    <datalist id="outbounds">
+      <% for (const outbound of panel.outbounds) { %>
+        <option value="<%= outbound %>"></option>
+      <% } %>
+    </datalist>
+    <p class="hint">
+      Неизвестный outbound — не ошибка сохранения: узел в дереве будет помечен.
+      Генерация config.json на таком маршруте выдаст предупреждение.
+    </p>
+  </fieldset>
+
+  <fieldset>
+    <legend>domains</legend>
+    <p class="hint">По одному домену в строке.</p>
+    <textarea name="domains" rows="8" cols="50"><%= domains.join('\n') %></textarea>
+  </fieldset>
+
+  <fieldset>
+    <legend>Заметка</legend>
+    <label for="note">note</label>
+    <input type="text" id="note" name="note" value="<%= route.note ?? '' %>" size="60">
+  </fieldset>
+
+  <button type="submit">Применить</button>
+</form>
+
+<form hx-post="/route/remove" hx-target="#panel" hx-swap="innerHTML" method="post" action="/route/remove">
+  <input type="hidden" name="current" value="<%= panel.name %>">
+  <button type="submit" class="danger" hx-confirm="Удалить маршрут '<%= panel.name %>'?">Удалить маршрут</button>
+</form>
