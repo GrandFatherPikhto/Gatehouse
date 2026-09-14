@@ -11,7 +11,7 @@ import path from 'node:path';
 import {describe, test} from 'node:test';
 
 import {ConfigError} from '../src/core/errors.mjs';
-import {dedupTags, getFirst, parseLinks, parseVless, unquote} from '../src/core/vless.mjs';
+import {BOM_WARNING, dedupTags, getFirst, parseLinks, parseVless, unquote} from '../src/core/vless.mjs';
 import {ALL_TAGS, FI_TAG, FIXTURES_DIR, makeTempDir, NL_TAG, vlessLink} from './helpers.mjs';
 
 const FIXTURE_LINKS = path.join(FIXTURES_DIR, 'links.txt');
@@ -264,9 +264,11 @@ test('parseLinks: invalid UTF-8 bytes are dropped, not replaced', () => {
   assert.equal(outbounds[0].tag, 'tag');
 });
 
-// NEW: a BOM in front of the first link makes urllib.parse see no vless scheme,
-// so the reference skips that link. Kept identical on purpose.
-test('parseLinks: a leading BOM keeps the reference behaviour (link skipped)', () => {
+// Paired fix with the reference (techdocs/done_2026_09_14_strip_bom_from_links.md):
+// a BOM used to turn the first line into "\ufeffvless://...", urllib.parse saw a
+// scheme it did not recognise and the link vanished without a word — one server
+// quietly lost from the subscription. This test used to pin that behaviour.
+test('parseLinks: a leading BOM is stripped once, with a warning', () => {
   const dir = makeTempDir();
   const file = path.join(dir, 'links.txt');
   fs.writeFileSync(
@@ -280,9 +282,49 @@ test('parseLinks: a leading BOM keeps the reference behaviour (link skipped)', (
     ]),
   );
 
-  const outbounds = parseLinks(file);
+  const warnings = [];
+  const outbounds = parseLinks(file, warnings);
+
   assert.deepEqual(
     outbounds.map((outbound) => outbound.tag),
-    ['ok'],
+    ['bom', 'ok'],
   );
+  assert.deepEqual(warnings, [BOM_WARNING]);
+});
+
+// Only the very first character of the file is dropped: a BOM anywhere else
+// keeps its old behaviour and that link is still skipped silently.
+test('parseLinks: a BOM in the middle of the file still breaks that link', () => {
+  const dir = makeTempDir();
+  const file = path.join(dir, 'links.txt');
+  fs.writeFileSync(
+    file,
+    Buffer.concat([
+      Buffer.from(`${vlessLink('uuid-1', 'first.example.com', 'first', 'security=tls')}\n`),
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from(`${vlessLink('uuid-2', 'second.example.com', 'second', 'security=tls')}\n`),
+    ]),
+  );
+
+  const warnings = [];
+  const outbounds = parseLinks(file, warnings);
+
+  assert.deepEqual(
+    outbounds.map((outbound) => outbound.tag),
+    ['first'],
+  );
+  assert.deepEqual(warnings, []);
+});
+
+test('parseLinks: a file that is nothing but a BOM still fails', () => {
+  const dir = makeTempDir();
+  const file = path.join(dir, 'links.txt');
+  fs.writeFileSync(file, Buffer.from([0xef, 0xbb, 0xbf]));
+
+  const warnings = [];
+  assert.throws(
+    () => parseLinks(file, warnings),
+    (error) => error instanceof ConfigError && /валидных VLESS/.test(error.message),
+  );
+  assert.deepEqual(warnings, [BOM_WARNING]);
 });

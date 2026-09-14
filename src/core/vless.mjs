@@ -332,6 +332,13 @@ export function dedupTags(outbounds) {
 }
 
 /**
+ * Warning emitted when the links file starts with a byte order mark.
+ * The reference prints the very same text to stderr.
+ */
+export const BOM_WARNING =
+  'Предупреждение: файл ссылок начинается с BOM (U+FEFF), метка снята.';
+
+/**
  * Reads the links file and returns the outbounds (throws ConfigError when there
  * is nothing usable). Blank lines are skipped silently, unparsable links become
  * warnings.
@@ -350,6 +357,16 @@ export function parseLinks(filePath, warnings = []) {
     text = decodeUtf8Ignore(fs.readFileSync(filePath));
   } catch (error) {
     throw new ConfigError(`ошибка чтения ${filePath}: ${error.message}`);
+  }
+
+  // A BOM makes the first line "\ufeffvless://...", and a scheme it does not
+  // recognise means the reference skipped that link without a word — one server
+  // quietly missing from the subscription. Exactly one character at the very
+  // start of the file is dropped; a BOM anywhere else keeps its old behaviour.
+  // `utf-8-sig` is not used on purpose: it would strip the mark silently.
+  if (text.startsWith('\ufeff')) {
+    text = text.slice(1);
+    warnings.push(BOM_WARNING);
   }
 
   const outbounds = [];
