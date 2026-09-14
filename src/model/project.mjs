@@ -303,6 +303,28 @@ export class ProjectModel {
     return canonicalJson(this.document);
   }
 
+  /**
+   * Puts the in-memory document back to a canonical text taken earlier with
+   * `toText`, without touching the file. It is the rollback the web layer needs
+   * when one edit form maps to several routes and a later route refuses: the
+   * model works on the live document, so without this a half-applied panel would
+   * stay in memory while the owner only sees the refusal.
+   *
+   * The text comes from `toText`, i.e. from a document that already passed
+   * validation, so it is parsed and checked with the same loader `reload` uses.
+   * The dirty flag is left alone on purpose: the caller knows whether there were
+   * unsaved edits before and restores it, because "not dirty" and "dirty since
+   * before" are different states.
+   *
+   * @param {string} text Canonical text produced by `toText`.
+   * @returns {void}
+   */
+  restoreText(text) {
+    const data = JSON.parse(text);
+    validateSettings(data, this.path ?? this.displayName);
+    this.document = data;
+  }
+
   // ------------------------------------------------------------------
   // Effective settings  (reference: links_file / output_file / listen_ip)
   // ------------------------------------------------------------------

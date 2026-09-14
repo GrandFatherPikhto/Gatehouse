@@ -292,10 +292,12 @@ describe('the header button is bound to the edit form', () => {
   test('a panel without an edit form keeps the standalone save form', async () => {
     const editor = await startEditor();
     try {
-      const html = await (await fetch(`${editor.base}/panel/profiles`)).text();
+      // `journal` has action buttons only; `profiles` used to be in this list too
+      // but now carries the note form as its edit form.
+      const html = await (await fetch(`${editor.base}/panel/journal`)).text();
 
       assert.doesNotMatch(html, /hx-include="#panel-form"/);
-      assert.match(html, /<input type="hidden" name="panel" value="profiles">/);
+      assert.match(html, /<input type="hidden" name="panel" value="journal">/);
     } finally {
       await editor.close();
     }

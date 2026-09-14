@@ -32,36 +32,42 @@ export const PANEL_KINDS = Object.freeze([
 export const BUILTIN_OUTBOUNDS = Object.freeze(['auto-select', 'direct']);
 
 /**
- * The edit form of a panel: the route its "Применить" form posts to, or `null`
- * when the panel has no editable form at all.
+ * Routes of the edit form of a panel, in application order. A panel has ONE form
+ * element (`id="panel-form"`) and every «Применить» button on the panel sends it
+ * whole, so a panel may legitimately have several routes: on "Значения по
+ * умолчанию" the general fields post to `/general` and the DNS text posts to
+ * `/dns`, and either button must apply BOTH.
  *
- * A panel can carry several forms and only one of them is the edit form; the rest
- * are action buttons (`/proxy/remove`, `/generate`, `/watchdog/check` …) and must
- * never be attached to the header's «Сохранить». The list is deliberately explicit:
- * a wrong guess here would make the save button submit a delete request.
+ * An empty list means the panel has no edit form at all; its «Сохранить» keeps the
+ * standalone behaviour. The list is deliberately explicit: the action buttons
+ * (`/proxy/remove`, `/generate`, `/watchdog/check` …) are never listed, because a
+ * wrong entry here would make the save button fire a delete request.
  *
- * `general` and `defaults` share one form, rendered by `settings-form.ejs`, so both
- * kinds point at `/general`.
+ * `general` and `defaults` share the `settings-form.ejs` element, and `profiles`
+ * edits only the note; `proxies`, `routes`, `system`, `journal` and `tests` have
+ * action buttons only.
  */
 const EDIT_FORMS = Object.freeze({
-  proxy: '/proxy',
-  route: '/route',
-  dns: '/dns',
-  output: '/output',
-  links: '/links',
-  watchdog: '/watchdog',
-  general: '/general',
-  defaults: '/general',
+  proxy: ['/proxy'],
+  route: ['/route'],
+  dns: ['/dns'],
+  output: ['/output'],
+  links: ['/links'],
+  watchdog: ['/watchdog'],
+  general: ['/general'],
+  defaults: ['/general', '/dns'],
+  profiles: ['/profiles'],
 });
 
 /**
- * Route of the edit form of a panel kind, or `null` when it has none.
+ * Routes of the edit form of a panel kind, in application order. An empty array
+ * means the panel has no edit form.
  *
  * @param {string} kind
- * @returns {string|null}
+ * @returns {string[]}
  */
-export function editFormRoute(kind) {
-  return EDIT_FORMS[kind] ?? null;
+export function editFormRoutes(kind) {
+  return EDIT_FORMS[kind] ?? [];
 }
 
 /**
@@ -178,10 +184,10 @@ export function buildPanel(model, key, extra = {}) {
     error: extra.error ?? null,
     notice: extra.notice ?? null,
     form: extra.form ?? null,
-    // The header's «Сохранить» binds to this form so an unapplied edit survives
-    // the save. `null` means the panel has no edit form and the button keeps its
-    // standalone behaviour.
-    editForm: editFormRoute(kind),
+    // The header's «Сохранить» binds to the panel's form so an unapplied edit
+    // survives the save. `false` means the panel has no edit form and the button
+    // keeps its standalone behaviour.
+    editForm: editFormRoutes(kind).length > 0,
   };
   // Runtime state of the host layer, handed in by `app.mjs`: the outcome of the
   // last check/restart and the name of the unit. The panel never runs a command

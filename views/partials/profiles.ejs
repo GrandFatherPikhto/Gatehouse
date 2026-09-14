@@ -59,7 +59,11 @@
 </form>
 
 <h3>Заметка активного профиля</h3>
-<form hx-post="/profiles" hx-target="#panel" hx-swap="innerHTML" method="post" action="/profiles">
+<%# The note is the panel's edit form, so the header's «Сохранить» can take it with
+    it. Every other form on this panel is an action (activate/rename/duplicate/
+    create/remove) and is deliberately not marked: the edit-form path refuses any
+    action but `note`, so a body posted to `/save` cannot delete a profile. %>
+<form id="panel-form" hx-post="/profiles" hx-target="#panel" hx-swap="innerHTML" method="post" action="/profiles">
   <input type="hidden" name="action" value="note">
   <textarea name="note" rows="4" cols="60"><%= panel.note %></textarea>
   <button type="submit">Сохранить заметку</button>

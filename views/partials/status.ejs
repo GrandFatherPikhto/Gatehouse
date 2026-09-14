@@ -4,10 +4,10 @@
     «Сохранено». The button is bound to the form twice over, because the header and
     the form live in different parts of the DOM: htmx pulls the fields in with
     hx-include, and the form="panel-form" attribute does the same for a browser with
-    JavaScript off. A panel with no edit form (`profiles`, `system`, `journal`,
-    `tests`) keeps the old standalone save; a broken form="" reference would stop
-    that button from submitting at all. «Перечитать с диска» is deliberately NOT
-    bound: reloading is supposed to discard. %>
+    JavaScript off. A panel with no edit form (`proxies`, `routes`, `system`,
+    `journal`, `tests`) keeps the old standalone save; a broken form="" reference
+    would stop that button from submitting at all. «Перечитать с диска» is
+    deliberately NOT bound: reloading is supposed to discard. %>
 <div class="status-line">
   <strong><%= status.name %></strong>
   <% if (status.path) { %>

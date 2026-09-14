@@ -36,7 +36,7 @@ import {
   PANEL_KINDS,
   buildPanel,
   buildStatus,
-  editFormRoute,
+  editFormRoutes,
   panelKey,
   panelUrl,
   parsePanelKey,
@@ -57,6 +57,30 @@ const CHECK_TIMEOUT = 15000;
 
 /** Keep of the `config.json` snapshots taken before each generation. */
 const CONFIG_SNAPSHOT_KEEP = 10;
+
+/**
+ * Field names that mark a body as carrying one edit-form route. A route whose
+ * fields are all absent is left alone, so a direct POST of a single route stays a
+ * partial edit of a panel whose edit form has several routes instead of being
+ * refused over a missing sibling field.
+ */
+const ROUTE_FIELDS = Object.freeze({
+  '/proxy': ['tag', 'type', 'port'],
+  '/route': ['name', 'outbound'],
+  '/dns': ['dns'],
+  '/profiles': ['action', 'note'],
+  '/links': ['links_file'],
+  '/output': ['output_file'],
+  '/watchdog': ['interval_seconds'],
+  '/general': [
+    'listen_ip',
+    'urltest_url',
+    'urltest_interval',
+    'urltest_tolerance',
+    'log_level',
+    'exclude_from_auto',
+  ],
+});
 
 /**
  * Shapes one outbound test result for the wire: the row of the table, without
@@ -349,13 +373,97 @@ export function createApp(options = {}) {
   }
 
   /**
-   * Applies the edit form of one panel to the model.
+   * Applies exactly one edit-form route to the live model and reports the panel
+   * key the result belongs to.
+   *
+   * `scope` is the destination of the shared settings and is decided by the PANEL
+   * the button stands on, never by the request body: pressing «Применить» on
+   * "Значения по умолчанию" writes to `defaults`, the same field on "Общие"
+   * writes to the active profile.
+   *
+   * `applied` is false when the body carries none of the fields of the route.
+   * That is how a direct POST of a single route stays a partial edit of a panel
+   * whose edit form has more than one route, instead of being refused because a
+   * field of a sibling route is missing.
+   *
+   * @param {string} route One of the routes a form posts to (`/proxy`, `/dns`, …).
+   * @param {import('express').Request} req
+   * @param {'profile'|'defaults'} scope Destination of the shared settings.
+   * @returns {{applied: boolean, key: string|null}}
+   */
+  function applyRoute(route, req, scope) {
+    const body = req.body ?? {};
+    const fields = ROUTE_FIELDS[route] ?? [];
+    if (!fields.some((field) => Object.hasOwn(body, field))) {
+      return {applied: false, key: null};
+    }
+
+    switch (route) {
+      case '/proxy': {
+        const current = String(body.current ?? '').trim();
+        const candidate = forms.parseProxyForm(body);
+        model.upsertProxy(candidate, current.length > 0 ? current : null);
+        return {applied: true, key: panelKey('proxy', candidate.tag)};
+      }
+      case '/route': {
+        const current = String(body.current ?? '').trim();
+        const candidate = forms.parseRouteForm(body);
+        model.upsertRoute(candidate.name, candidate, current.length > 0 ? current : null);
+        return {applied: true, key: panelKey('route', candidate.name)};
+      }
+      case '/dns':
+        model.applyDns(String(body.dns ?? ''), scope);
+        return {applied: true, key: scope === 'defaults' ? 'defaults' : 'dns'};
+      case '/profiles': {
+        // The panel's edit form is the note field and nothing else. Refusing every
+        // other action is what stops a body posted to `/save` from renaming or
+        // deleting a profile behind the button that owns that action.
+        const action = String(body.action ?? 'note');
+        if (action !== 'note') {
+          throw new ConfigError(
+            `панель «Профили» принимает только заметку, получено действие '${action}'`,
+          );
+        }
+        model.setProfileNote(body.note ?? '');
+        return {applied: true, key: 'profiles'};
+      }
+      case '/links':
+        model.setLinksFile(String(body.links_file ?? '').trim());
+        return {applied: true, key: 'links'};
+      case '/output':
+        model.setOutputFile(String(body.output_file ?? '').trim());
+        return {applied: true, key: 'output'};
+      case '/watchdog':
+        model.applyWatchdog(forms.parseWatchdogForm(body));
+        model.applyClashApi(forms.parseClashApiForm(body));
+        return {applied: true, key: 'watchdog'};
+      case '/general': {
+        const values = forms.parseGeneralForm(body);
+        if (scope === 'defaults') model.applyDefaults(values);
+        else model.applyGeneral(values);
+        return {applied: true, key: scope === 'defaults' ? 'defaults' : 'general'};
+      }
+      default:
+        throw new ConfigError(`маршрут '${route}' не является формой правки`);
+    }
+  }
+
+  /**
+   * Applies the edit form of one panel to the model, atomically.
    *
    * Shared by the panel's own route and by `/save`: that is the whole point of the
    * fix, because if the two ever drifted the save button would silently behave
-   * differently from «Применить» again. `EditFormRoute` decides which panels have
+   * differently from «Применить» again. `editFormRoutes` decides which panels have
    * such a form at all — the action buttons (`/proxy/remove`, `/generate`, …) are
    * never routed through here.
+   *
+   * A panel may have more than one route (the "Значения по умолчанию" panel posts
+   * the general fields to `/general` and the DNS text to `/dns`), and a button
+   * applies the WHOLE panel, so every route of the panel is applied in order. A
+   * canonical snapshot is taken before the first route: if any route refuses, the
+   * model is put back exactly as it was, so the owner never gets a panel that is
+   * applied halfway while the notice only reports the refusal. The file is not
+   * touched here at all — `/save` writes it, and only after a successful apply.
    *
    * Returns `changed`, computed from the canonical text of the document, so
    * `/save` can tell "the form really did something" from "the values were already
@@ -366,47 +474,27 @@ export function createApp(options = {}) {
    * @returns {{key: string, changed: boolean}}
    */
   function applyEditForm(kind, req) {
-    const body = req.body ?? {};
-    const before = model.toText();
+    const routes = editFormRoutes(kind);
+    if (routes.length === 0) throw new ConfigError(`у панели '${kind}' нет формы правки`);
+    const scope = kind === 'defaults' ? 'defaults' : 'profile';
 
-    switch (kind) {
-      case 'proxy': {
-        const current = String(body.current ?? '').trim();
-        const candidate = forms.parseProxyForm(body);
-        model.upsertProxy(candidate, current.length > 0 ? current : null);
-        return {key: panelKey('proxy', candidate.tag), changed: model.toText() !== before};
+    const before = model.toText();
+    const wasDirty = model.dirty;
+    let key = kind;
+
+    try {
+      for (const route of routes) {
+        const outcome = applyRoute(route, req, scope);
+        if (outcome.applied && outcome.key !== null) key = outcome.key;
       }
-      case 'route': {
-        const current = String(body.current ?? '').trim();
-        const candidate = forms.parseRouteForm(body);
-        model.upsertRoute(candidate.name, candidate, current.length > 0 ? current : null);
-        return {key: panelKey('route', candidate.name), changed: model.toText() !== before};
-      }
-      case 'dns': {
-        const scope = body.scope === 'defaults' ? 'defaults' : 'profile';
-        model.applyDns(String(body.dns ?? ''), scope);
-        return {key: scope === 'defaults' ? 'defaults' : 'dns', changed: model.toText() !== before};
-      }
-      case 'links':
-        model.setLinksFile(String(body.links_file ?? '').trim());
-        return {key: 'links', changed: model.toText() !== before};
-      case 'output':
-        model.setOutputFile(String(body.output_file ?? '').trim());
-        return {key: 'output', changed: model.toText() !== before};
-      case 'watchdog':
-        model.applyWatchdog(forms.parseWatchdogForm(body));
-        model.applyClashApi(forms.parseClashApiForm(body));
-        return {key: 'watchdog', changed: model.toText() !== before};
-      case 'general':
-      case 'defaults': {
-        const values = forms.parseGeneralForm(body);
-        if (kind === 'defaults') model.applyDefaults(values);
-        else model.applyGeneral(values);
-        return {key: kind, changed: model.toText() !== before};
-      }
-      default:
-        throw new ConfigError(`у панели '${kind}' нет формы правки`);
+    } catch (error) {
+      model.restoreText(before);
+      if (wasDirty) model.markDirty();
+      else model.markClean();
+      throw error;
     }
+
+    return {key, changed: model.toText() !== before};
   }
 
   // ------------------------------------------------------------------
@@ -467,7 +555,11 @@ export function createApp(options = {}) {
   app.post(
     '/general',
     mutation('general', (req) => {
+      // The scope names the PANEL the button stands on, and that panel owns the
+      // whole edit form: on "Значения по умолчанию" the general button applies the
+      // DNS text too, on "Общие" it writes the active profile.
       const scope = req.body.scope === 'defaults' ? 'defaults' : 'profile';
+      const kind = scope === 'defaults' ? 'defaults' : 'general';
       const key = scope === 'defaults' ? 'defaults' : 'general';
 
       if (req.body.action === 'reset') {
@@ -478,7 +570,7 @@ export function createApp(options = {}) {
         return {key, notice: `'${field}' убран из профиля: снова действует значение по умолчанию`};
       }
 
-      applyEditForm(key, req);
+      applyEditForm(kind, req);
       return {key, notice: 'Применено — не забудьте сохранить'};
     }),
   );
@@ -486,7 +578,11 @@ export function createApp(options = {}) {
   app.post(
     '/dns',
     mutation('dns', (req) => {
-      const {key} = applyEditForm('dns', req);
+      // Same rule as `/general`: the DNS button of the defaults panel applies the
+      // general fields of that panel as well.
+      const scope = req.body.scope === 'defaults' ? 'defaults' : 'profile';
+      const kind = scope === 'defaults' ? 'defaults' : 'dns';
+      const {key} = applyEditForm(kind, req);
       return {key, notice: 'DNS применён — не забудьте сохранить'};
     }),
   );
@@ -623,7 +719,7 @@ export function createApp(options = {}) {
         // fail for no reason.
         const hasFormFields = Object.keys(req.body ?? {}).some((field) => field !== 'panel');
         let changed = false;
-        if (editFormRoute(kind) !== null && hasFormFields) {
+        if (editFormRoutes(kind).length > 0 && hasFormFields) {
           changed = applyEditForm(kind, req).changed;
         }
 

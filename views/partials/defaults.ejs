@@ -23,8 +23,13 @@
 </table>
 
 <h3>DNS в defaults</h3>
-<form class="form" hx-post="/dns" hx-target="#panel" hx-swap="innerHTML" method="post" action="/dns">
-  <input type="hidden" name="scope" value="defaults">
-  <textarea name="dns" rows="12" cols="70" spellcheck="false"><%= panel.defaultsDns %></textarea>
-  <button type="submit">Применить DNS</button>
-</form>
+<%# The DNS text belongs to the SAME form as the general fields above, even though
+    it sits in its own block: the `form="panel-form"` attribute makes the field and
+    the button part of that form without nesting, which would be invalid HTML.
+    Pressing either button applies the whole panel — otherwise editing the DNS text
+    and pressing «Применить» would lose it exactly as the old save bug did. %>
+<div class="form">
+  <textarea name="dns" form="panel-form" rows="12" cols="70" spellcheck="false"><%= panel.defaultsDns %></textarea>
+  <button type="submit" form="panel-form" formaction="/dns" formmethod="post"
+          hx-post="/dns" hx-target="#panel" hx-swap="innerHTML">Применить DNS</button>
+</div>
