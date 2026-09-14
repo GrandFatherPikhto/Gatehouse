@@ -237,9 +237,12 @@ environment, and the tests point them at the fake scripts of
 
 [`deploy/`](deploy/README.md:1) holds the systemd unit, the sudoers rule, the
 polkit alternative and a step-by-step `deploy/README.md`. Nothing there is applied
-automatically. Two decisions are written out honestly instead of being taken here:
-`ProtectHome=yes` cannot be enabled while the code lives in `/home/denis`, and
-`NoNewPrivileges=yes` breaks `sudo` (setuid), so it belongs to the polkit variant.
+automatically. The code lives in `/opt/sing-box-web-ui`, so the unit enables `ProtectHome=yes`
+and `ProtectSystem=strict`. The latter keeps the service from rewriting its own
+code while leaving the owner's `rsync` alone: the restriction lives in the unit's
+mount namespace, not in the permissions on disk. `NoNewPrivileges=yes` breaks
+`sudo` (setuid), so it belongs to the polkit variant — the one decision these
+files still leave to the owner.
 `UMask=0027` and `StateDirectoryMode=0700` are not optional: the router runs with
 umask `0002` and there is a second account with a shell.
 

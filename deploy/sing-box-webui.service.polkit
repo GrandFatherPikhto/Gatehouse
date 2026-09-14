@@ -24,7 +24,7 @@
 
 [Unit]
 Description=SingBoxWebUI — web editor of webui.json and config.json (polkit)
-Documentation=file:///home/denis/sing-box-web-ui/deploy/README.md
+Documentation=file:///opt/sing-box-web-ui/deploy/README.md
 After=network.target
 Wants=network.target
 
@@ -32,7 +32,7 @@ Wants=network.target
 Type=simple
 User=denis
 Group=denis
-WorkingDirectory=/home/denis/sing-box-web-ui
+WorkingDirectory=/opt/sing-box-web-ui
 ExecStart=/usr/bin/node src/web/server.mjs
 
 StateDirectory=sing-box-webui
@@ -45,6 +45,7 @@ UMask=0027
 Environment=SINGBOX_WEBUI_SETTINGS=/etc/sing-box-webui/webui.json
 Environment=SINGBOX_WEBUI_STATE_DIR=/var/lib/sing-box-webui
 Environment=SINGBOX_WEBUI_HOST=10.95.2.1
+Environment=SINGBOX_WEBUI_PORT=9090
 Environment=SINGBOX_WEBUI_CONFIG=/etc/sing-box/config.json
 Environment=SINGBOX_WEBUI_SINGBOX=/usr/local/bin/sing-box
 Environment=SINGBOX_WEBUI_SYSTEMCTL=/usr/bin/systemctl
@@ -57,11 +58,20 @@ EnvironmentFile=/etc/sing-box-webui/env
 Restart=always
 RestartSec=5
 
-# Теперь setuid не нужен, поэтому ограничение можно включить.
+# Код переехал в /opt, поэтому обе защиты доступны.
+#
+# ProtectSystem=strict делает всю файловую систему доступной только для чтения
+# внутри пространства имён этого юнита. Важное следствие: /opt/sing-box-web-ui
+# принадлежит denis, но сервис всё равно не может переписать собственный код —
+# а rsync владельца, живущий в обычном пространстве, пишет туда свободно.
+# Каталоги из StateDirectory и ConfigurationDirectory systemd открывает на запись
+# сам; /etc/sing-box приходится разрешать явно — туда пишется config.json.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/etc/sing-box
+# Здесь setuid не нужен — рестарт идёт по D-Bus, поэтому доступно и это.
 NoNewPrivileges=yes
-# ProtectHome=yes по-прежнему нельзя: код лежит в домашнем каталоге. Единственный
-# способ его включить — перенести код в /opt и переписать WorkingDirectory и
-# ExecStart. Решение за владельцем.
 
 [Install]
 WantedBy=multi-user.target

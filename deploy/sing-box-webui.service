@@ -6,8 +6,9 @@
 # можно включить `NoNewPrivileges=yes`. Оба варианта — заготовки: применяет
 # владелец руками, см. `deploy/README.md`.
 #
-# Установка (имена путей — как в задании, при другом каталоге кода поправьте
-# WorkingDirectory):
+# Установка. Последняя команда, `enable --now`, делает ровно две вещи: `enable`
+# ставит юнит в автозапуск (поднимется сам при загрузке роутера), `--now`
+# запускает его прямо сейчас, не дожидаясь перезагрузки.
 #
 #   sudo cp deploy/sing-box-webui.service /etc/systemd/system/
 #   sudo install -d -m 0750 -o denis -g denis /etc/sing-box-webui
@@ -22,7 +23,7 @@
 
 [Unit]
 Description=SingBoxWebUI — web editor of webui.json and config.json
-Documentation=file:///home/denis/sing-box-web-ui/deploy/README.md
+Documentation=file:///opt/sing-box-web-ui/deploy/README.md
 After=network.target
 Wants=network.target
 
@@ -30,7 +31,7 @@ Wants=network.target
 Type=simple
 User=denis
 Group=denis
-WorkingDirectory=/home/denis/sing-box-web-ui
+WorkingDirectory=/opt/sing-box-web-ui
 # Системная нода из NodeSource: та же 22.23.2, на которой сняты форматы вывода.
 ExecStart=/usr/bin/node src/web/server.mjs
 
@@ -53,6 +54,7 @@ UMask=0027
 Environment=SINGBOX_WEBUI_SETTINGS=/etc/sing-box-webui/webui.json
 Environment=SINGBOX_WEBUI_STATE_DIR=/var/lib/sing-box-webui
 Environment=SINGBOX_WEBUI_HOST=10.95.2.1
+Environment=SINGBOX_WEBUI_PORT=9090
 Environment=SINGBOX_WEBUI_CONFIG=/etc/sing-box/config.json
 Environment=SINGBOX_WEBUI_SINGBOX=/usr/local/bin/sing-box
 Environment=SINGBOX_WEBUI_SYSTEMCTL=/usr/bin/systemctl
@@ -63,13 +65,21 @@ EnvironmentFile=/etc/sing-box-webui/env
 Restart=always
 RestartSec=5
 
-# ProtectHome=yes здесь включить НЕЛЬЗЯ: код лежит в /home/denis, и сервис
-# перестанет видеть собственные файлы. Либо оставить выключенным (как здесь),
-# либо перенести код в /opt — решение владельца, см. deploy/README.md.
+# Код переехал в /opt, поэтому обе защиты доступны.
 #
-# NoNewPrivileges=yes здесь тоже нельзя: он блокирует setuid, то есть ломает
-# `sudo`, а с ним и рестарт. Вариант без этого ограничения — на polkit, в
-# `deploy/sing-box-webui.service.polkit`.
+# ProtectSystem=strict делает всю файловую систему доступной только для чтения
+# внутри пространства имён этого юнита. Важное следствие: /opt/sing-box-web-ui
+# принадлежит denis, но сервис всё равно не может переписать собственный код —
+# а rsync владельца, живущий в обычном пространстве, пишет туда свободно.
+# Каталоги из StateDirectory и ConfigurationDirectory systemd открывает на запись
+# сам; /etc/sing-box приходится разрешать явно — туда пишется config.json.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/etc/sing-box
+# NoNewPrivileges=yes здесь включить НЕЛЬЗЯ: он блокирует setuid, то есть ломает
+# `sudo`, а с ним и перезапуск демона. Если хочется и его — берите вариант на
+# polkit: deploy/sing-box-webui.service.polkit.
 
 [Install]
 WantedBy=multi-user.target
