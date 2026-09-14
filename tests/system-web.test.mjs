@@ -353,6 +353,46 @@ describe('live journal over SSE', () => {
       await editor.close();
     }
   });
+
+  test('the live stream carries non-empty, colour-free messages', async () => {
+    const editor = await startEditor();
+    try {
+      const controller = new AbortController();
+      const response = await fetch(`${editor.base}/journal/stream`, {signal: controller.signal});
+      assert.equal(response.status, 200);
+
+      // The fake in follow mode (the default one, speaking bytes) prints a line
+      // every 20ms, so a handful of reads is enough. The loop is bounded on
+      // purpose: a stream that never delivers must fail, not hang the suite.
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let text = '';
+      for (let attempt = 0; attempt < 40 && !/follow line 3/.test(text); attempt += 1) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        text += decoder.decode(chunk.value, {stream: true});
+      }
+      controller.abort();
+
+      const messages = [...text.matchAll(/event: log\ndata: (\{.*\})\n/g)].map(
+        (match) => JSON.parse(match[1]).message,
+      );
+      assert.ok(messages.length >= 2, `the stream delivered entries: ${messages.length}`);
+      assert.deepEqual(
+        messages.filter((message) => message.length === 0),
+        [],
+        'not a single blank line, which is what the panel showed on the router',
+      );
+      assert.deepEqual(
+        messages.filter((message) => message.includes('\u001b')),
+        [],
+        'no ANSI escape survives into the panel',
+      );
+      assert.match(messages[0], /follow line 0/);
+    } finally {
+      await editor.close();
+    }
+  });
 });
 
 describe('mass outbound test over SSE', () => {

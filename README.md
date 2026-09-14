@@ -211,9 +211,14 @@ environment, and the tests point them at the fake scripts of
   10 are kept) and is restored byte for byte, followed by a restart.
 * **The journal is live over SSE.** `journalctl -f -o json` is parsed line by line
   on the server (level from `PRIORITY`, time, text) and the client colours and
-  filters by level. The child dies with the connection (`req.on('close')`) —
-  otherwise every page reload would leave a `journalctl -f` behind — and one
-  stream at a time is allowed.
+  filters by level. The structured form is deliberate: `-o cat` would lose the
+  level. `MESSAGE` is NOT always a string — journald encodes any value containing
+  non-printable bytes as an array of byte values, and sing-box colours every line,
+  so every entry of the daemon arrives that way. The parser decodes the array,
+  drops the ANSI escapes and cuts the duplicated `+0000 <date> <time> <level>`
+  prefix a sing-box line starts with. The child dies with the connection
+  (`req.on('close')`) — otherwise every page reload would leave a `journalctl -f`
+  behind — and one stream at a time is allowed.
 * **The outbound test replaces `live_test`.** `sing-box tools fetch` starts its own
   instance, binds no inbound and never touches the running daemon, so checking 148
   servers costs zero restarts. The mass run is capped (4 at a time by default) and

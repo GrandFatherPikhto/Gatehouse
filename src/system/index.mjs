@@ -43,6 +43,12 @@
 // privileges (the owner is in `adm`); keys are `MESSAGE`, `PRIORITY`,
 // `SYSLOG_IDENTIFIER`, `_PID`, `__REALTIME_TIMESTAMP` and other underscored ones.
 //
+// `MESSAGE` is NOT always a string: journald sends any value containing
+// non-printable bytes as an ARRAY of byte values, and sing-box colours every line
+// with ANSI escapes even when it writes to journald. Measured on the router, so
+// EVERY line of the daemon arrives as a byte array — that is why the panel showed
+// an empty message for all of them until `journalMessage` below handled it.
+//
 // `geosite lookup` does NOT work on this build: sing-box 1.14 installs no
 // geosite database (`FATAL open geosite file: open geosite.db: no such file or
 // directory`), the routing of the owner uses plain `domain_suffix`, and the UI
@@ -338,7 +344,63 @@ export function priorityLevel(priority) {
 }
 
 /**
+ * ANSI escape sequences: a whole CSI sequence (`\x1b[36m`, `\x1b[0m`) or a lone
+ * ESC that something else left behind. Removing them is a display concern, but
+ * the parser is where the raw journal text arrives, and the level the panel
+ * colours by comes from `PRIORITY`, so no colour is lost with them.
+ */
+const ANSI_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b/g;
+
+/**
+ * The prefix sing-box puts into the message itself: the offset, the date, the
+ * time and the level word (`+0000 2026-09-14 12:42:18 INFO …`). The panel already
+ * shows the time from `__REALTIME_TIMESTAMP` and the level from `PRIORITY`, so
+ * this copy is pure noise. A message that does not look like this is left exactly
+ * as it is — no guessing.
+ */
+const SINGBOX_PREFIX =
+  /^\s*[+-]\d{4}\s+\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\s+(?:TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL|PANIC)\b[ \t]*/i;
+
+/**
+ * Reads the `MESSAGE` field of a journal entry and cleans it up for the panel.
+ *
+ * Three shapes have to be accepted, because all three really occur:
+ *   * a string — a unit that writes plain text, and every non-sing-box unit;
+ *   * an ARRAY of byte values — what journald does to any value containing
+ *     non-printable bytes, which is every coloured line sing-box writes;
+ *   * anything else — `undefined`, an object, an array holding something that is
+ *     not a byte. That becomes an empty string and never an exception: a panel
+ *     must not break because one journal field had an unexpected type.
+ *
+ * An invalid UTF-8 sequence in the array becomes U+FFFD, the standard Node
+ * replacement, and does not throw. (The core's `decodeUtf8Ignore` drops such
+ * bytes instead, mirroring Python's `errors="ignore"`; that rule exists to keep
+ * `config.json` byte-identical to the reference and has nothing to say about a
+ * log line that is only ever displayed.)
+ *
+ * @param {unknown} value
+ * @returns {string}
+ */
+function journalMessage(value) {
+  let text;
+  if (typeof value === 'string') {
+    text = value;
+  } else if (
+    Array.isArray(value) &&
+    value.every((byte) => typeof byte === 'number' && byte >= 0 && byte <= 255)
+  ) {
+    text = Buffer.from(value).toString('utf8');
+  } else {
+    return '';
+  }
+  return text.replace(ANSI_PATTERN, '').replace(SINGBOX_PREFIX, '');
+}
+
+/**
  * Parses one line of `journalctl -o json`.
+ *
+ * `message` is decoded and cleaned by `journalMessage`: the colour codes are gone
+ * and the duplicated `+0000 <date> <time> <level>` prefix of sing-box is cut off.
  *
  * @param {string} line
  * @returns {{time: string, level: string, priority: number|null, message: string,
@@ -367,7 +429,7 @@ export function parseJournalLine(line) {
     time,
     level: priorityLevel(entry.PRIORITY),
     priority: Number.isFinite(Number(entry.PRIORITY)) ? Number(entry.PRIORITY) : null,
-    message: typeof entry.MESSAGE === 'string' ? entry.MESSAGE : '',
+    message: journalMessage(entry.MESSAGE),
     identifier: typeof entry.SYSLOG_IDENTIFIER === 'string' ? entry.SYSLOG_IDENTIFIER : '',
     pid: entry._PID === undefined ? null : String(entry._PID),
   };

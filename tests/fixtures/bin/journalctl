@@ -7,6 +7,13 @@
 // which is what the SSE tests need in order to prove that the child process is
 // killed when the browser goes away.
 //
+// `MESSAGE` is a byte ARRAY by default, not a string: the daemon colours its lines
+// with ANSI escapes, and journald encodes any value carrying non-printable bytes
+// that way. A fixture that sent a clean string is exactly why the empty-message
+// defect seen on the real router never showed up here, so the default now matches
+// the router. `FAKE_JOURNALCTL_MESSAGE=string` switches back to the plain form a
+// unit without colour writes.
+//
 // `FAKE_JOURNALCTL_PIDFILE` makes the follow mode write its own pid there: the
 // test aborts the SSE connection and then checks that this pid is gone.
 
@@ -27,22 +34,52 @@ function valueOf(flag, fallback = '') {
 
 const lines = Number(valueOf('-n', '200'));
 const follow = argv.includes('-f');
+const messageMode = process.env.FAKE_JOURNALCTL_MESSAGE === 'string' ? 'string' : 'bytes';
+
+//: `PRIORITY` -> the level word sing-box prints into its own line.
+const LEVELS = ['emerg', 'alert', 'crit', 'err', 'warning', 'notice', 'info', 'debug'];
+
+/**
+ * The line the daemon really writes, measured on the router: its own offset, date,
+ * time and level, the level wrapped in ANSI colour, then the text. Both the colour
+ * and this duplicated prefix have to be handled by the parser.
+ *
+ * @param {string} text
+ * @param {number} priority
+ * @returns {string}
+ */
+function coloredLine(text, priority) {
+  const level = (LEVELS[priority] ?? 'info').toUpperCase();
+  return `+0000 2026-09-14 12:42:18 \u001b[36m${level}\u001b[0m [...] ${text}`;
+}
+
+/**
+ * The `MESSAGE` value: bytes with colour for sing-box, a plain string otherwise.
+ *
+ * @param {string} text
+ * @param {number} priority
+ * @returns {string|number[]}
+ */
+function messageOf(text, priority) {
+  if (messageMode === 'string') return text;
+  return [...Buffer.from(coloredLine(text, priority), 'utf8')];
+}
 
 /**
  * One systemd JSON line.
  *
  * @param {number} index
- * @param {string} message
+ * @param {string} text
  * @param {number} priority
  * @returns {string}
  */
-function entry(index, message, priority) {
+function entry(index, text, priority) {
   return JSON.stringify({
     __REALTIME_TIMESTAMP: String(1726300000000000 + index * 1000000),
     PRIORITY: String(priority),
     SYSLOG_IDENTIFIER: 'sing-box',
     _PID: String(1234 + index),
-    MESSAGE: message,
+    MESSAGE: messageOf(text, priority),
   });
 }
 

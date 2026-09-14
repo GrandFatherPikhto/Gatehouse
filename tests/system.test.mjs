@@ -132,6 +132,116 @@ describe('parsing', () => {
   });
 });
 
+// The defect seen on the router: every line of the panel showed its time and level
+// and an empty text. `journalctl -o json` sends a value containing non-printable
+// bytes as an ARRAY of numbers, and sing-box colours every line, so the message of
+// every entry arrived as an array and the old `typeof entry.MESSAGE === 'string'`
+// turned it into ''. The fixture used to print a clean string, which is why the
+// suite never noticed — the fake now speaks bytes (see tests/fixtures/bin/journalctl).
+describe('journal MESSAGE: the bytes of a real journald', () => {
+  // The line as the router shows it: offset, date, time, the level wrapped in ANSI
+  // colour, then the text.
+  const REAL_BYTES = [
+    ...Buffer.from(
+      '+0000 2026-09-14 12:42:18 \u001b[36mINFO\u001b[0m [...] inbound/http[claude]: started',
+      'utf8',
+    ),
+  ];
+  const CLEAN = '[...] inbound/http[claude]: started';
+
+  /**
+   * One journald line with the given `MESSAGE` value.
+   *
+   * @param {unknown} message
+   * @returns {string}
+   */
+  function line(message) {
+    return JSON.stringify({
+      __REALTIME_TIMESTAMP: '1726300000000000',
+      PRIORITY: '6',
+      MESSAGE: message,
+      SYSLOG_IDENTIFIER: 'sing-box',
+      _PID: '4321',
+    });
+  }
+
+  test('a byte array decodes to the same text a string gives', () => {
+    const fromBytes = parseJournalLine(line(REAL_BYTES));
+    const fromString = parseJournalLine(line(CLEAN));
+
+    assert.equal(fromBytes.message, CLEAN, 'the bytes are decoded, not dropped');
+    assert.equal(fromBytes.message, fromString.message);
+  });
+
+  test('ANSI colour and the duplicated sing-box prefix are gone', () => {
+    const entry = parseJournalLine(line(REAL_BYTES));
+
+    assert.ok(!entry.message.includes('\u001b'), 'no ESC byte is left');
+    assert.ok(!entry.message.includes('[36m'), 'no SGR parameter is left');
+    assert.ok(!entry.message.includes('+0000'), 'the offset sing-box prints is cut');
+    assert.ok(!entry.message.includes('INFO ['), 'the duplicated level is cut');
+    assert.match(entry.message, /^\[\.\.\.\] inbound\/http/);
+  });
+
+  test('a message without the prefix is left exactly as it is', () => {
+    const plain = parseJournalLine(line('handshake failed: read: connection reset by peer'));
+    assert.equal(plain.message, 'handshake failed: read: connection reset by peer');
+
+    // A date-like start is NOT the prefix (the offset is missing), so it stays.
+    const datelike = parseJournalLine(line('2026-09-14 12:42:18 something happened'));
+    assert.equal(datelike.message, '2026-09-14 12:42:18 something happened');
+
+    // The same rule through a byte array, colour and all.
+    const coloured = parseJournalLine(
+      line([...Buffer.from('+0000 2026-09-14 12:42:18 \u001b[31mERROR\u001b[0m boom', 'utf8')]),
+    );
+    assert.equal(coloured.message, 'boom');
+  });
+
+  test('invalid UTF-8 in the array does not break the parse', () => {
+    const entry = parseJournalLine(line([0x61, 0xff, 0xfe, 0x62]));
+
+    assert.equal(entry.message, 'a\uFFFD\uFFFDb', 'the bad bytes become the replacement');
+    assert.equal(entry.priority, 6, 'the rest of the line is still parsed');
+  });
+
+  test('a missing or unexpected MESSAGE is an empty string, never an exception', () => {
+    for (const value of [undefined, null, 42, {text: 'x'}, ['x'], [undefined], [300]]) {
+      assert.equal(
+        parseJournalLine(line(value)).message,
+        '',
+        `MESSAGE ${JSON.stringify(value) ?? 'undefined'}`,
+      );
+    }
+  });
+
+  test('the fake journald of the suite really speaks bytes, and the tail is readable', async () => {
+    const result = await tailJournal(3, {env: fakeSystemEnv()});
+
+    assert.equal(result.entries.length, 3);
+    assert.deepEqual(
+      result.entries.filter((entry) => entry.message.length === 0),
+      [],
+      'the fixture reproduces the router: a byte array, and no blank message',
+    );
+    assert.equal(result.entries[0].message, '[...] tail line 0');
+    assert.ok(!result.entries.some((entry) => entry.message.includes('\u001b')));
+  });
+
+  test('a plain string MESSAGE still works (FAKE_JOURNALCTL_MESSAGE=string)', async () => {
+    // Ordinary units write without colour, and journald keeps their value a
+    // string; that shape has to keep working.
+    const result = await tailJournal(2, {
+      env: fakeSystemEnv({FAKE_JOURNALCTL_MESSAGE: 'string'}),
+    });
+
+    assert.deepEqual(
+      result.entries.map((entry) => entry.message),
+      ['tail line 0', 'tail line 1'],
+    );
+  });
+});
+
 describe('checkConfig', () => {
   test('a good config is accepted with exit 0', async () => {
     const dir = makeTempDir();
@@ -233,14 +343,22 @@ describe('followJournal', () => {
       onEntry: (entry) => entries.push(entry),
     });
 
-    assert.equal(journalStreamCount(), 1);
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    assert.ok(entries.length >= 2, 'the fake keeps printing');
-    assert.equal(entries[0].identifier, 'sing-box');
-
     const child = stream.child;
     const pid = child.pid;
-    stream.stop();
+
+    // The `finally` is not decoration: a failed assertion in this block used to
+    // leave `journalctl -f` running, and the test process with it.
+    try {
+      assert.equal(journalStreamCount(), 1);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.ok(entries.length >= 2, 'the fake keeps printing');
+      assert.equal(entries[0].identifier, 'sing-box');
+      assert.match(entries[0].message, /follow line \d+/, 'decoded, not a blank line');
+      assert.ok(!entries[0].message.includes('\u001b'), 'the colour codes are stripped');
+    } finally {
+      stream.stop();
+    }
+
     await new Promise((resolve) => {
       if (child.exitCode !== null || child.signalCode !== null) resolve();
       else child.on('exit', resolve);
