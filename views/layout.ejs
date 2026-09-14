@@ -9,6 +9,9 @@
     <%# htmx is served from our own public/vendor: the editor has to work on a
         router with no internet access. %>
     <script src="/static/vendor/htmx.min.js" defer></script>
+    <%# Filter of the proxy servers picker. A module, so the test suite can import
+        the filter and assert that it hides rows instead of removing them. %>
+    <script src="/static/app.js" type="module"></script>
   </head>
   <body>
     <header id="status"><%- include('partials/status', {status, key}) %></header>

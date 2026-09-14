@@ -96,7 +96,7 @@ legend { color: var(--muted); padding: 0 4px; }
 label { display: block; margin: 8px 0 2px; color: var(--muted); }
 label.check { display: flex; gap: 6px; align-items: center; color: inherit; }
 
-input[type="text"], input[type="number"], textarea, select {
+input[type="text"], input[type="number"], input[type="search"], textarea, select {
   width: 100%;
   max-width: 640px;
   padding: 5px 7px;
@@ -106,7 +106,32 @@ input[type="text"], input[type="number"], textarea, select {
   font-size: 14px;
 }
 
-select[multiple] { max-width: 640px; height: auto; }
+/* --- the servers picker of a proxy --------------------------------------- */
+
+/* The list scrolls instead of growing to a hundred and forty-eight rows. The
+   filter and the clear-all button above it need the script and are unhidden by
+   `public/app.js`; without the script only the list and the checkboxes show. */
+.servers-picker { max-width: 640px; }
+
+.servers-tools { display: flex; gap: 8px; align-items: flex-end; margin: 0 0 8px; }
+.servers-tools label { margin: 0 0 2px; }
+.servers-tools input[type="search"] { max-width: 320px; }
+
+.servers-list {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+  max-height: 320px;
+  overflow: auto;
+  padding: 4px 8px;
+}
+
+.servers-list label.check { margin: 2px 0; }
+/* A row hidden by the filter stays in the form: only its CSS box goes away.
+   `label.check` is a flex box, so the browser default of [hidden] needs a push. */
+.servers-list label.check[hidden] { display: none; }
+
+.server-tag { overflow-wrap: anywhere; }
 
 textarea { white-space: pre; overflow-wrap: normal; overflow-x: auto; }
 
@@ -153,6 +178,11 @@ button[disabled] { opacity: 0.55; cursor: default; }
 .badge.origin-profile { background: #e7f0fd; border-color: var(--accent); color: var(--accent); }
 .badge.origin-defaults { background: #fff4e5; border-color: var(--warn); color: var(--warn); }
 .badge.origin-absent { color: var(--muted); }
+
+/* Membership of a server in `auto-select`, shown next to its checkbox. */
+.badge.server-auto { background: #eaf6ee; border-color: var(--ok); color: var(--ok); }
+.badge.server-excluded { background: #fff4e5; border-color: var(--warn); color: var(--warn); }
+.badge.server-missing { background: #fdecea; border-color: var(--error); color: var(--error); }
 
 /* --- tables and lists ---------------------------------------------------- */
 

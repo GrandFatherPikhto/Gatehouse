@@ -6,7 +6,7 @@
 // here. That split is what keeps the view layer replaceable: swapping EJS for
 // React means reimplementing these builders and the templates, not the model.
 
-import {ConfigError, PROXY_TYPES} from '../core/errors.mjs';
+import {ConfigError, DEFAULT_EXCLUDE, PROXY_TYPES} from '../core/errors.mjs';
 import {listConfigSnapshots} from '../model/storage.mjs';
 
 /** Keys of the tree, without a name part. */
@@ -110,6 +110,21 @@ export function knownOutbounds(model) {
 }
 
 /**
+ * Prefixes kept out of `auto-select`, with the rule of the core: an ABSENT
+ * `exclude_from_auto` falls back to `DEFAULT_EXCLUDE`, while an explicitly empty
+ * list really excludes nothing. The picker of a proxy marks every server with
+ * this answer, so the decision "add this one to the pool" is taken here, where it
+ * is made, and not in the general settings panel.
+ *
+ * @param {import('../model/project.mjs').ProjectModel} model
+ * @returns {string[]}
+ */
+export function autoExcludePrefixes(model) {
+  if (model.fieldOrigin('exclude_from_auto').scope === 'absent') return [...DEFAULT_EXCLUDE];
+  return model.generalValues().exclude_from_auto;
+}
+
+/**
  * Builds the view model of one panel.
  *
  * @param {import('../model/project.mjs').ProjectModel} model
@@ -209,6 +224,7 @@ export function buildPanel(model, key, extra = {}) {
         title: `Прокси: ${name}`,
         proxy,
         tags: info.tags,
+        autoPrefixes: autoExcludePrefixes(model),
         linksError: info.error,
         types: PROXY_TYPES,
       };

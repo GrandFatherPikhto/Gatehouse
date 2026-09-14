@@ -150,12 +150,18 @@ duplicate, remove), Общие, Значения по умолчанию, Фай
   left the links file, and a route naming an unknown outbound, are marked in the
   tree; saving stays possible. Only the generator refuses to build a pool for a
   missing server.
-* **The servers list keeps the stored order.** The multi-select draws the selected
+* **The servers list keeps the stored order.** The picker draws the checked
   servers first, in the order the file holds them, and the rest of the links file
-  after them. A browser submits the selected options in document order, so any
-  other layout would rewrite the list into links-file order on the first save of a
-  form nobody had touched, and a server that left the links file would move to the
-  end.
+  after them. A browser submits checked boxes in document order, so any other
+  layout would rewrite the list into links-file order on the first save of a form
+  nobody had touched, and a server that left the links file would move to the end.
+  The list is a plain set of checkboxes, so it works with JavaScript off; the
+  filter box and the "clear all" button are a dozen lines of
+  [`public/app.js`](public/app.js:1) that only ever HIDE a row — a checkbox
+  detached from the DOM would leave the form and take its server with it. Next to
+  every box the server is marked "в auto-select" or "исключён" according to
+  `exclude_from_auto`, so the decision to add a server to a pool is taken with the
+  facts in front of the owner.
 * **Names may not consist of digits only** — for profiles and for routes alike.
   JavaScript reorders integer-like object keys, so a profile called `2024` would
   silently jump to the front of the file and the order of `webui.json` (and of the

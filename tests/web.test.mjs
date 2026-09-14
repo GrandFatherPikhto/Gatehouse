@@ -14,6 +14,10 @@ import {run as runGenerate} from '../tools/generate.mjs';
 import {canonicalJson, listSnapshots} from '../src/model/storage.mjs';
 import {DEFAULT_PORT, readEnv, startServer} from '../src/web/server.mjs';
 import {FI_TAG, NL_TAG, RU_TAG, makeTempDir, writeLinksFile, writeSettings} from './helpers.mjs';
+// The picker's filter lives in the browser script and is imported as it is: the
+// trap it guards against (a row that leaves the DOM leaves the form with it) is
+// a property of that code, and asserting it here beats asserting the markup.
+import {applyFilter} from '../public/app.js';
 
 /**
  * Starts the editor over a temporary project and returns everything the test
@@ -92,45 +96,62 @@ function panelUrl(key) {
 }
 
 /**
- * The `<option>` tags of the servers multi-select, in DOCUMENT order.
+ * The server checkboxes of the picker, in DOCUMENT order.
  *
  * Reading the order out of the rendered HTML is the whole point: a browser
- * submits the selected options in document order, not in the order the model
- * holds them. The curl-based manual pass sent the model's order, so it could not
- * see this class of defect at all.
+ * submits checked boxes in document order, not in the order the model holds
+ * them. The curl-based manual pass sent the model's order, so it could not see
+ * this class of defect at all.
  *
- * Option values are compared as they are written; a tag containing `&` or `"`
- * would arrive HTML-escaped, which no real tag does.
+ * Values are compared as they are written; a tag containing `&` or `"` would
+ * arrive HTML-escaped, which no real tag does.
  *
  * @param {string} html
- * @returns {RegExpMatchArray[]} Matches with the value in group 1 and the
- *   `selected` suffix in group 2.
+ * @returns {RegExpMatchArray[]} Matches of the whole `<input>` tag.
  */
-function serverOptionTags(html) {
-  const start = html.indexOf('<select name="servers"');
-  assert.ok(start >= 0, 'the servers select must be rendered');
-  const end = html.indexOf('</select>', start);
-  return [...html.slice(start, end).matchAll(/<option value="([^"]*)"( selected)?>/g)];
+function serverInputTags(html) {
+  const start = html.indexOf('data-servers-list');
+  assert.ok(start >= 0, 'the servers picker must be rendered');
+  const end = html.indexOf('</div>', start);
+  assert.ok(end > start, 'the servers list must be closed');
+  return [...html.slice(start, end).matchAll(/<input[^>]*\bname="servers"[^>]*>/g)];
 }
 
 /**
  * @param {string} html
- * @returns {string[]} Values of all options, in document order.
+ * @returns {string[]} Values of all server boxes, in document order.
  */
 function serverOptions(html) {
-  return serverOptionTags(html).map((match) => match[1]);
+  return serverInputTags(html).map((match) => match[0].match(/value="([^"]*)"/)[1]);
 }
 
 /**
- * Exactly what a browser submits for the servers field.
+ * Exactly what a browser submits for the servers field: every checked box, no
+ * matter whether the filter has hidden its row.
  *
  * @param {string} html
  * @returns {string[]}
  */
 function submittedServers(html) {
-  return serverOptionTags(html)
-    .filter((match) => match[2] === ' selected')
-    .map((match) => match[1]);
+  return serverInputTags(html)
+    .filter((match) => /\schecked/.test(match[0]))
+    .map((match) => match[0].match(/value="([^"]*)"/)[1]);
+}
+
+/**
+ * The `<label>` of one server as rendered, so a test can look at the state of its
+ * checkbox and at its badges without depending on the layout of the whole list.
+ *
+ * @param {string} html
+ * @param {string} tag
+ * @returns {string}
+ */
+function serverRow(html, tag) {
+  const start = html.indexOf(`data-tag="${tag}"`);
+  assert.ok(start >= 0, `the row of '${tag}' must be rendered`);
+  const end = html.indexOf('</label>', start);
+  assert.ok(end > start, `the row of '${tag}' must be closed`);
+  return html.slice(start, end);
 }
 
 describe('pages and static files', () => {
@@ -152,6 +173,21 @@ describe('pages and static files', () => {
       assert.equal(vendor.status, 200);
       assert.match(vendor.headers.get('content-type') ?? '', /javascript/);
       assert.ok((await vendor.text()).length > 1000);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('the picker script is served from our own host as a module', async () => {
+    const editor = await startEditor();
+    try {
+      const html = await (await fetch(`${editor.base}/`)).text();
+      assert.match(html, /src="\/static\/app\.js"/);
+
+      const script = await fetch(`${editor.base}/static/app.js`);
+      assert.equal(script.status, 200);
+      assert.match(script.headers.get('content-type') ?? '', /javascript/);
+      assert.match(await script.text(), /export function applyFilter/, 'a module the tests can import');
     } finally {
       await editor.close();
     }
@@ -526,9 +562,10 @@ describe('saving and generating from the UI', () => {
     try {
       const list = await fetch(`${editor.base}${panelUrl('proxy:main-socks')}`);
       const html = await list.text();
+      const row = serverRow(html, '🇩🇪 Germany - Berlin');
 
-      assert.match(html, /value="🇩🇪 Germany - Berlin" selected/);
-      assert.match(html, /\(нет в файле ссылок\)/);
+      assert.match(row, /value="🇩🇪 Germany - Berlin" checked/);
+      assert.match(row, /нет в файле ссылок/);
     } finally {
       await editor.close();
     }
@@ -537,9 +574,9 @@ describe('saving and generating from the UI', () => {
   test('a browser submits the servers in document order, and the stored order does not move', async () => {
     // The stored order deliberately differs from the order of links.txt, and a
     // server that is not in the file sits in the MIDDLE of the list. Rendering the
-    // options in links order (with `selected` on top of it) would make the first
-    // save of an untouched form rewrite the list into links order and push the
-    // missing server to the end.
+    // boxes in links order (with the checked ones on top of it) would make the
+    // first save of an untouched form rewrite the list into links order and push
+    // the missing server to the end.
     const stored = [RU_TAG, FI_TAG, '🇩🇪 Germany - Berlin'];
     const editor = await startEditor({
       overrides: {proxies: [{tag: 'main-socks', type: 'socks', port: 54321, servers: stored}]},
@@ -550,7 +587,7 @@ describe('saving and generating from the UI', () => {
       assert.deepEqual(
         serverOptions(html).slice(0, stored.length),
         stored,
-        'the selected options come first, in their stored order',
+        'the checked servers come first, in their stored order',
       );
       assert.deepEqual(
         serverOptions(html).slice(stored.length),
@@ -572,6 +609,155 @@ describe('saving and generating from the UI', () => {
         stored,
         'saving a form nobody edited must not reorder the servers',
       );
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('unchecking one server removes exactly that server and keeps the rest in order', async () => {
+    const editor = await startEditor({
+      overrides: {
+        proxies: [{tag: 'main-socks', type: 'socks', port: 54321, servers: [RU_TAG, FI_TAG, NL_TAG]}],
+      },
+    });
+    try {
+      const html = await (await fetch(`${editor.base}${panelUrl('proxy:main-socks')}`)).text();
+
+      // A browser posts every checked box; clearing one simply leaves it out.
+      const submitted = submittedServers(html).filter((tag) => tag !== FI_TAG);
+      await post(editor.base, '/proxy', {
+        current: 'main-socks',
+        tag: 'main-socks',
+        type: 'socks',
+        port: '54321',
+        servers: submitted,
+        note: '',
+      });
+
+      assert.deepEqual(
+        editor.model.getProxy('main-socks').servers,
+        [RU_TAG, NL_TAG],
+        'exactly the cleared server goes away, the order of the rest is untouched',
+      );
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('a filter hides a checked server instead of removing it from the form', async () => {
+    const editor = await startEditor({
+      overrides: {proxies: [{tag: 'main-socks', type: 'socks', port: 54321, servers: [RU_TAG, FI_TAG]}]},
+    });
+    try {
+      const html = await (await fetch(`${editor.base}${panelUrl('proxy:main-socks')}`)).text();
+
+      // The filter is client-side sugar: it flips `hidden` on the row and must
+      // never detach it. A detached checkbox leaves the form, and the next save
+      // would drop that server from the proxy without a word.
+      const rows = [
+        {text: RU_TAG, hidden: false},
+        {text: FI_TAG, hidden: false},
+      ];
+      applyFilter(rows, 'fi');
+      assert.deepEqual(rows.map((row) => row.hidden), [true, false]);
+      assert.equal(rows.length, 2, 'the hidden row must stay in the list');
+
+      // The rendered form says the same: the box is there and is checked, so a
+      // browser submits it even while the filter hides its row.
+      assert.match(serverRow(html, RU_TAG), /value="🇷🇺 Russia - Moscow" checked/);
+      assert.match(html, /data-servers-tools hidden/, 'the inert controls start hidden');
+
+      await post(editor.base, '/proxy', {
+        current: 'main-socks',
+        tag: 'main-socks',
+        type: 'socks',
+        port: '54321',
+        servers: submittedServers(html),
+        note: '',
+      });
+
+      assert.deepEqual(editor.model.getProxy('main-socks').servers, [RU_TAG, FI_TAG]);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('clearing every box saves an empty server list, as an empty multi-select did', async () => {
+    const editor = await startEditor({
+      overrides: {proxies: [{tag: 'main-socks', type: 'socks', port: 54321, servers: [FI_TAG, NL_TAG]}]},
+    });
+    try {
+      // Nothing is checked, so the browser sends no `servers` field at all — the
+      // very body an empty multi-select produced.
+      const response = await post(editor.base, '/proxy', {
+        current: 'main-socks',
+        tag: 'main-socks',
+        type: 'socks',
+        port: '54321',
+        note: '',
+      });
+
+      assert.equal(response.status, 200);
+      const proxy = editor.model.getProxy('main-socks');
+      assert.ok(!Object.hasOwn(proxy, 'servers'), 'the key is dropped, exactly as before');
+      assert.deepEqual(proxy.servers ?? [], [], 'an empty pool, not a failure');
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('the picker marks the servers of auto-select and the excluded ones', async () => {
+    const editor = await startEditor({
+      overrides: {
+        exclude_from_auto: ['🇷🇺'],
+        proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
+      },
+    });
+    try {
+      const html = await (await fetch(`${editor.base}${panelUrl('proxy:main-socks')}`)).text();
+      const excluded = serverRow(html, RU_TAG);
+
+      assert.match(excluded, /исключён/);
+      assert.ok(!/в auto-select/.test(excluded), 'an excluded server is not advertised as auto');
+      assert.match(serverRow(html, FI_TAG), /в auto-select/);
+      assert.match(serverRow(html, NL_TAG), /в auto-select/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('an empty exclude_from_auto marks every server as auto-select', async () => {
+    const editor = await startEditor({
+      overrides: {
+        exclude_from_auto: [],
+        proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
+      },
+    });
+    try {
+      const html = await (await fetch(`${editor.base}${panelUrl('proxy:main-socks')}`)).text();
+      const row = serverRow(html, RU_TAG);
+
+      assert.match(row, /в auto-select/);
+      assert.ok(!/исключён/.test(row), 'an explicit empty list excludes nothing');
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('an absent exclude_from_auto falls back to the default prefix, like the core', async () => {
+    const editor = await startEditor({
+      // `undefined` drops the key as the document is written: an old webui.json
+      // that never carried `exclude_from_auto` at all.
+      overrides: {
+        exclude_from_auto: undefined,
+        proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
+      },
+    });
+    try {
+      const html = await (await fetch(`${editor.base}${panelUrl('proxy:main-socks')}`)).text();
+
+      assert.match(serverRow(html, RU_TAG), /исключён/);
+      assert.match(serverRow(html, FI_TAG), /в auto-select/);
     } finally {
       await editor.close();
     }

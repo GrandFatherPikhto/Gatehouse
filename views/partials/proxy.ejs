@@ -1,11 +1,12 @@
 <%# One proxy: its own inbound with its own port and its own list of servers.
-    Servers that disappeared from the links file stay in the list as selected
-    options, marked — otherwise the first save would silently drop them. %>
+    Servers that disappeared from the links file stay in the list as checked
+    boxes, marked — otherwise the first save would silently drop them. %>
 <% const proxy = panel.proxy; %>
 <% const servers = Array.isArray(proxy.servers)
      ? proxy.servers
      : (proxy.servers ? [proxy.servers] : []); %>
 <% const known = new Set(panel.tags); %>
+<% const excludePrefixes = panel.autoPrefixes ?? []; %>
 <h2><%= panel.title %></h2>
 
 <form class="form" hx-post="/proxy" hx-target="#panel" hx-swap="innerHTML" method="post" action="/proxy">
@@ -30,27 +31,52 @@
     <p class="hint">
       Ничего не отмечено — прокси идёт в auto-select (все серверы, кроме
       исключённых). Отмеченные серверы образуют пул
-      <code>pool-<%= proxy.tag %></code>.
+      <code>pool-<%= proxy.tag %></code>; снятая галочка убирает сервер из пула.
     </p>
     <% if (panel.linksError) { %>
       <p class="error"><%= panel.linksError %></p>
     <% } %>
-    <%# The selected options come FIRST, in their stored order, and only then the
-        rest in links-file order. A browser submits the selected options in
-        DOCUMENT order, so any other layout would silently rewrite the list on the
-        first save of a form nobody edited: the stored order of the servers would
-        become the order of links.txt, and a server missing from that file would
-        move to the end. Keeping document order equal to storage order makes an
-        untouched save a no-op, and puts the chosen servers on top, which is also
-        handier. %>
-    <select name="servers" multiple size="12">
-      <% for (const tag of servers) { %>
-        <option value="<%= tag %>" selected><%= tag %><%= known.has(tag) ? '' : ' (нет в файле ссылок)' %></option>
-      <% } %>
-      <% for (const tag of panel.tags.filter((tag) => !servers.includes(tag))) { %>
-        <option value="<%= tag %>"><%= tag %></option>
-      <% } %>
-    </select>
+    <%# The checked servers come FIRST, in their stored order, and only then the
+        rest in links-file order. A browser submits checked boxes in DOCUMENT
+        order, so any other layout would silently rewrite the list on the first
+        save of a form nobody edited: the stored order of the servers would become
+        the order of links.txt, and a server missing from that file would move to
+        the end. Keeping document order equal to storage order makes an untouched
+        save a no-op, and puts the chosen servers on top, which is also handier. %>
+    <% const ordered = [
+         ...servers.map((tag) => ({tag, checked: true})),
+         ...panel.tags
+           .filter((tag) => !servers.includes(tag))
+           .map((tag) => ({tag, checked: false})),
+       ]; %>
+    <div class="servers-picker" data-servers-picker>
+      <%# The filter and the clear-all button need the script; without it they stay
+          hidden instead of sitting there doing nothing. The checkboxes and the
+          submit button work with JavaScript off. %>
+      <div class="servers-tools" data-servers-tools hidden>
+        <label for="servers-filter">Фильтр</label>
+        <input type="search" id="servers-filter" data-servers-filter
+               placeholder="страна или город" autocomplete="off">
+        <button type="button" class="secondary" data-servers-clear hidden>Снять все</button>
+      </div>
+      <div class="servers-list" data-servers-list>
+        <% for (const {tag, checked} of ordered) { %>
+          <% const excluded = excludePrefixes.filter((prefix) => tag.startsWith(prefix)); %>
+          <label class="check server" data-server data-tag="<%= tag %>">
+            <input type="checkbox" name="servers" value="<%= tag %>"<%= checked ? ' checked' : '' %>>
+            <span class="server-tag"><%= tag %></span>
+            <% if (!known.has(tag)) { %>
+              <span class="badge server-missing">нет в файле ссылок</span>
+            <% } %>
+            <% if (excluded.length === 0) { %>
+              <span class="badge server-auto" title="уходит в auto-select">в auto-select</span>
+            <% } else { %>
+              <span class="badge server-excluded" title="<%= `исключён по exclude_from_auto: ${excluded.join(', ')}` %>">исключён</span>
+            <% } %>
+          </label>
+        <% } %>
+      </div>
+    </div>
   </fieldset>
 
   <fieldset>
