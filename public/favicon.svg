@@ -1,0 +1,8 @@
+<!-- GateHouse icon: a gatehouse (roof, body, doorway). Drawn as plain geometry
+     so it stays crisp at any size and needs no build step; favicon.ico carries the
+     same shape as a raster for browsers that ask for it. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="GateHouse">
+  <polygon points="16,1 31,13 1,13" fill="#9e2b25"/>
+  <rect x="4" y="12" width="24" height="19" rx="1" fill="#2f4858"/>
+  <path d="M12 31V22a4 4 0 0 1 8 0v9z" fill="#e8ded0"/>
+</svg>

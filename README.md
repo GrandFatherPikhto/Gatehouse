@@ -474,7 +474,7 @@ placeholders, so the golden file carries no secrets.
 | [`src/watchdog/clash.mjs`](src/watchdog/clash.mjs:1) | Clash-compatible HTTP API client: list and close connections of one inbound |
 | [`src/web/auth.mjs`](src/web/auth.mjs:1) | token transport, loopback check, the startup refusal |
 | [`deploy/`](deploy/README.md:1) | systemd unit, sudoers and polkit variants, deployment notes |
-| [`views/`](views/layout.ejs:1), [`public/`](public/app.css:1) | EJS templates, stylesheet, vendored htmx |
+| [`views/`](views/layout.ejs:1), [`public/`](public/app.css:1) | EJS templates, stylesheet, favicon, vendored htmx |
 | [`tools/generate.mjs`](tools/generate.mjs:1) | CLI that writes `config.json` |
 | [`tools/dev.mjs`](tools/dev.mjs:1) | `npm run dev`: the editor over the `dev/` sandbox |
 | [`tools/vendor-htmx.mjs`](tools/vendor-htmx.mjs:1) | refreshes `public/vendor/htmx.min.js` from the npm package |

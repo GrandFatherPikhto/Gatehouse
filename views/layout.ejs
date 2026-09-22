@@ -5,6 +5,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>webui.json — <%= status.name %></title>
+    <%# The icon lives under /static like the rest of the assets, and the same
+        bytes answer /favicon.ico, which a browser requests without being asked. %>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="icon" href="/static/favicon.ico" sizes="any">
     <link rel="stylesheet" href="/static/app.css">
     <%# htmx is served from our own public/vendor: the editor has to work on a
         router with no internet access. %>

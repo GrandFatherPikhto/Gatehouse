@@ -229,6 +229,15 @@ export function createApp(options = {}) {
   app.use(express.urlencoded({extended: false, limit: '4mb'}));
   app.use('/static', express.static(PUBLIC));
 
+  // Browsers request `/favicon.ico` by default, and the file itself lives under
+  // `/static`. This one route answers that request without widening the static
+  // mount to the repository root. It stands next to `/static`, BEFORE the token
+  // middleware: a browser that has not stored the token yet must still get its
+  // icon, exactly as it gets the stylesheet and htmx.
+  app.get('/favicon.ico', (req, res) => {
+    res.sendFile(path.join(PUBLIC, 'favicon.ico'));
+  });
+
   // ------------------------------------------------------------------
   // Access control
   // ------------------------------------------------------------------

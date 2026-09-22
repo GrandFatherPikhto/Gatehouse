@@ -471,7 +471,7 @@ polkit и пошаговый `deploy/README.md`. Ничего оттуда не 
 | [`src/watchdog/clash.mjs`](src/watchdog/clash.mjs:1) | клиент Clash-совместимого HTTP-API: список и закрытие соединений одного инбаунда |
 | [`src/web/auth.mjs`](src/web/auth.mjs:1) | перенос токена, проверка петли, отказ старта |
 | [`deploy/`](deploy/README.md:1) | systemd-юнит, варианты sudoers и polkit, заметки о развёртывании |
-| [`views/`](views/layout.ejs:1), [`public/`](public/app.css:1) | шаблоны EJS, стили, закоммиченный htmx |
+| [`views/`](views/layout.ejs:1), [`public/`](public/app.css:1) | шаблоны EJS, стили, favicon, закоммиченный htmx |
 | [`tools/generate.mjs`](tools/generate.mjs:1) | CLI, который пишет `config.json` |
 | [`tools/dev.mjs`](tools/dev.mjs:1) | `npm run dev`: морда против песочницы `dev/` |
 | [`tools/vendor-htmx.mjs`](tools/vendor-htmx.mjs:1) | обновляет `public/vendor/htmx.min.js` из npm-пакета |

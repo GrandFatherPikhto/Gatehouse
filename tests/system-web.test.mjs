@@ -442,3 +442,29 @@ describe('system panels render', () => {
     }
   });
 });
+
+describe('favicon', () => {
+  test('the page links an icon and /favicon.ico is a real ICO', async () => {
+    const editor = await startEditor();
+    try {
+      const page = await (await fetch(`${editor.base}/`)).text();
+      assert.match(page, /rel="icon" type="image\/svg\+xml" href="\/static\/favicon\.svg"/);
+      assert.match(page, /rel="icon" href="\/static\/favicon\.ico"/);
+
+      // The default request a browser makes without being asked.
+      const icon = await fetch(`${editor.base}/favicon.ico`);
+      assert.equal(icon.status, 200);
+      const bytes = Buffer.from(await icon.arrayBuffer());
+      assert.equal(bytes.readUInt16LE(0), 0, 'ICO reserved field');
+      assert.equal(bytes.readUInt16LE(2), 1, 'ICO type: icon');
+      assert.equal(bytes.readUInt16LE(4), 2, '16x16 and 32x32 are both carried');
+      assert.ok(bytes.length > 1000, 'a real raster, not a placeholder');
+
+      const svg = await fetch(`${editor.base}/static/favicon.svg`);
+      assert.equal(svg.status, 200);
+      assert.match(svg.headers.get('content-type') ?? '', /svg/);
+    } finally {
+      await editor.close();
+    }
+  });
+});
