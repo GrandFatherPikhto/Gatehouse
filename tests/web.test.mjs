@@ -34,10 +34,10 @@ async function startEditor(options = {}) {
 
   const {server, model, url} = await startServer({
     env: {
-      SINGBOX_WEBUI_SETTINGS: settingsFile,
-      SINGBOX_WEBUI_HOST: '127.0.0.1',
-      SINGBOX_WEBUI_PORT: '0',
-      SINGBOX_WEBUI_STATE_DIR: stateDir,
+      GATEHOUSE_SETTINGS: settingsFile,
+      GATEHOUSE_HOST: '127.0.0.1',
+      GATEHOUSE_PORT: '0',
+      GATEHOUSE_STATE_DIR: stateDir,
     },
   });
 
@@ -780,17 +780,17 @@ describe('environment of the server', () => {
 
   test('the variables override the defaults', () => {
     const env = readEnv({
-      SINGBOX_WEBUI_SETTINGS: '/tmp/other.json',
-      SINGBOX_WEBUI_HOST: '10.0.0.5',
-      SINGBOX_WEBUI_PORT: '9000',
-      SINGBOX_WEBUI_STATE_DIR: '/var/lib/sing-box-webui',
+      GATEHOUSE_SETTINGS: '/tmp/other.json',
+      GATEHOUSE_HOST: '10.0.0.5',
+      GATEHOUSE_PORT: '9000',
+      GATEHOUSE_STATE_DIR: '/var/lib/gatehouse',
     });
 
     assert.deepEqual(env, {
       settings: '/tmp/other.json',
       host: '10.0.0.5',
       port: '9000',
-      stateDir: '/var/lib/sing-box-webui',
+      stateDir: '/var/lib/gatehouse',
     });
   });
 
@@ -799,7 +799,7 @@ describe('environment of the server', () => {
     const missing = path.join(dir, 'webui.json');
 
     const {server, model, url} = await startServer({
-      env: {SINGBOX_WEBUI_SETTINGS: missing, SINGBOX_WEBUI_PORT: '0', SINGBOX_WEBUI_HOST: '127.0.0.1'},
+      env: {GATEHOUSE_SETTINGS: missing, GATEHOUSE_PORT: '0', GATEHOUSE_HOST: '127.0.0.1'},
     });
     try {
       assert.equal(model.path, missing);

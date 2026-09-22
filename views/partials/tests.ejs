@@ -32,10 +32,10 @@
   </table>
 
   <script>
-    // Тот же приём, что и у журнала: EventSource и построчный вывод, без
-    // библиотеки и без сборки. GET разрешён, потому что кэш отключён, а
-    // состояние прогона живёт на сервере одной строкой (второй тест отклоняется
-    // с 409).
+    // EventSource и построчный вывод, без библиотеки и без сборки. Сервер
+    // отвечает 200 всегда, даже на отказ: EventSource после ответа не-200 не
+    // переподключается, поэтому «тест уже идёт» приходит событием `refused`, а
+    // не кодом 409.
     (function () {
       var start = document.getElementById('tests-start');
       var stop = document.getElementById('tests-stop');
@@ -98,6 +98,9 @@
               : 'готово: ' + data.done + ' из ' + data.total,
             'badge clean',
           );
+        });
+        source.addEventListener('refused', function (event) {
+          finish('отказ: ' + JSON.parse(event.data).message, 'badge dirty');
         });
         source.addEventListener('failed', function (event) {
           finish('ошибка: ' + JSON.parse(event.data).message, 'badge dirty');

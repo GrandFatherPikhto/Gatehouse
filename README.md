@@ -1,4 +1,4 @@
-# SingBoxWebUI — the sing-box config generator and its web editor
+# GateHouse — the sing-box config generator and its web editor
 
 This repository holds the tool that turns a subscription of VLESS links plus a
 settings file into a `config.json` for sing-box, and the browser editor that
@@ -16,7 +16,7 @@ maintains that settings file. It is built in three stages:
   `config.json` for the active profile. Functionally it replaces the Qt GUI of
   the Python project.
 * **stage 3 — everything that touches the host machine**: `sing-box check`, the
-  daemon restart and the rollback, the live journal, the outbound test, geosite,
+  daemon restart and the rollback, the journal snapshot, the outbound test, geosite,
   the systemd unit, rights, deployment and authentication. Implemented:
   [`src/system/index.mjs`](src/system/index.mjs:1) is the only module that runs a
   command, and it always uses `execFile`/`spawn` with an argument array.
@@ -43,15 +43,13 @@ and the system layer in
 * Node **22** (`.nvmrc` pins the major; verified on 22.23.2 with npm 10.9.8, the
   same versions the router runs)
 * npm — the runtime dependencies are `ajv`, `express` and `ejs`
-* Python with PyYAML — **only** for the optional byte-level comparison against
-  the reference; the test suite itself needs no Python
 
 ## Install and test
 
 ```bash
-npm ci          # runtime: ajv, express, ejs; dev: yaml (converter), htmx.org
-node --test     # 307 checks, no network, no root, no sing-box
-npm run compare # byte-level equality with the reference, needs Python
+npm ci          # runtime: ajv, express, ejs; dev: htmx.org
+node --test     # no network, no root, no sing-box
+npm run dev     # the editor over the dev/ sandbox, not the router
 ```
 
 The system-layer tests run the fake binaries of `tests/fixtures/bin/` instead of
@@ -74,6 +72,31 @@ and is refreshed from the `htmx.org` development dependency:
 ```bash
 npm run vendor:htmx          # copy the pinned build into public/vendor/
 node tools/vendor-htmx.mjs --check   # fail if the committed copy is stale
+```
+
+## Development without the router
+
+`npm run dev` starts the editor against the sandbox in `dev/`, so working on the
+UI never touches the live router:
+
+```bash
+npm run dev      # http://127.0.0.1:9091/
+```
+
+`dev/bin/systemctl` and `dev/bin/sudo` are stubs that print the arguments they
+received and exit 0 — nothing on the host is changed. `sing-box` stays the real
+binary, because `check` and `tools fetch` have to behave exactly as they do on the
+router. The editor detects that its paths point into `dev/` and shows a
+«песочница» marker in the page header, so a dev instance cannot be mistaken for
+the real one.
+
+The sandbox data (`dev/root/`) is deliberately not in the repository — it carries
+keys and personal server lists. `dev/root.example/` holds anonymised samples:
+
+```bash
+mkdir -p dev/root/etc/sing-box
+cp dev/root.example/webui.json dev/root/webui.json
+cp dev/root.example/etc/sing-box/config.json dev/root/etc/sing-box/config.json
 ```
 
 ## Usage
@@ -113,28 +136,28 @@ npm start        # Веб-редактор webui.json: http://127.0.0.1:8080/
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `SINGBOX_WEBUI_SETTINGS` | `webui.json` | settings file to edit; created on the first save when missing |
-| `SINGBOX_WEBUI_HOST` | `127.0.0.1` | listen address. A non-loopback address **requires** a token, see "Authentication" below |
-| `SINGBOX_WEBUI_PORT` | `8080` | listen port; `0` picks a free one |
-| `SINGBOX_WEBUI_STATE_DIR` | `./.state` | where snapshots go; on the router this becomes `/var/lib/sing-box-webui` |
-| `SINGBOX_WEBUI_TOKEN` | *(empty)* | access token. Required whenever the bind address is not the loopback |
+| `GATEHOUSE_SETTINGS` | `webui.json` | settings file to edit; created on the first save when missing |
+| `GATEHOUSE_HOST` | `127.0.0.1` | listen address. A non-loopback address **requires** a token, see "Authentication" below |
+| `GATEHOUSE_PORT` | `8080` | listen port; `0` picks a free one |
+| `GATEHOUSE_STATE_DIR` | `./.state` | where snapshots go; on the router this becomes `/var/lib/gatehouse` |
+| `GATEHOUSE_TOKEN` | *(empty)* | access token. Required whenever the bind address is not the loopback |
 
 The system layer reads its own variables, again from the environment and never
 from a request:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `SINGBOX_WEBUI_SINGBOX` | `/usr/local/bin/sing-box` | binary used by `check` and `tools fetch` |
-| `SINGBOX_WEBUI_SYSTEMCTL` | `/usr/bin/systemctl` | `systemctl`; this path must match the sudoers rule |
-| `SINGBOX_WEBUI_JOURNALCTL` | `/usr/bin/journalctl` | `journalctl` |
-| `SINGBOX_WEBUI_CURL` | `/usr/bin/curl` | binary the watchdog probes an inbound with |
-| `SINGBOX_WEBUI_SUDO` | `/usr/bin/sudo` | `sudo`; the value `none` calls `systemctl` directly (the polkit variant) |
-| `SINGBOX_WEBUI_UNIT` | `sing-box` | unit name |
-| `SINGBOX_WEBUI_CONFIG` | `/etc/sing-box/config.json` | default config of the commands; the UI passes the generated path |
-| `SINGBOX_WEBUI_TEST_URL` | `https://ipinfo.io` | target of the outbound test |
-| `SINGBOX_WEBUI_TEST_TIMEOUT` | `8000` | timeout of one outbound test, ms |
-| `SINGBOX_WEBUI_TEST_CONCURRENCY` | `4` | outbound tests running at once |
-| `SINGBOX_WEBUI_API_SECRET` | *(empty)* | secret of `experimental.clash_api`. **Never stored in `webui.json`**; the generator refuses to enable the API without it |
+| `GATEHOUSE_SINGBOX` | `/usr/local/bin/sing-box` | binary used by `check` and `tools fetch` |
+| `GATEHOUSE_SYSTEMCTL` | `/usr/bin/systemctl` | `systemctl`; this path must match the sudoers rule |
+| `GATEHOUSE_JOURNALCTL` | `/usr/bin/journalctl` | `journalctl` |
+| `GATEHOUSE_CURL` | `/usr/bin/curl` | binary the watchdog probes an inbound with |
+| `GATEHOUSE_SUDO` | `/usr/bin/sudo` | `sudo`; the value `none` calls `systemctl` directly (the polkit variant) |
+| `GATEHOUSE_UNIT` | `sing-box` | unit name |
+| `GATEHOUSE_CONFIG` | `/etc/sing-box/config.json` | default config of the commands; the UI passes the generated path |
+| `GATEHOUSE_TEST_URL` | `https://ipinfo.io` | target of the outbound test |
+| `GATEHOUSE_TEST_TIMEOUT` | `8000` | timeout of one outbound test, ms |
+| `GATEHOUSE_TEST_CONCURRENCY` | `4` | outbound tests running at once |
+| `GATEHOUSE_API_SECRET` | *(empty)* | secret of `experimental.clash_api`. **Never stored in `webui.json`**; the generator refuses to enable the API without it |
 
 The path of the settings file comes from the environment and from nowhere else.
 There is deliberately no "open file" box in the UI: a path arriving from the
@@ -211,8 +234,8 @@ duplicate, remove), Общие, Значения по умолчанию, Фай
 * **Generation runs on the saved file**, through the same `generateConfigFile` the
   CLI uses, and says so when the editor had unsaved edits at that moment.
 * **The system layer is one module.** [`src/system/index.mjs`](src/system/index.mjs:1)
-  exports `restartSingBox`, `checkConfig`, `tailJournal`, `followJournal`,
-  `testOutbound`, `testOutbounds` and `geositeLookup`, and it is the only place
+  exports `restartSingBox`, `checkConfig`, `tailJournal`, `testOutbound`,
+  `testOutbounds` and `geositeLookup`, and it is the only place
   that runs a command. Always `execFile`/`spawn` with an argument array — tags look
   like `🇨🇾 Cyprus - Limassol` and break a shell command line with no attacker
   involved.
@@ -236,16 +259,20 @@ environment, and the tests point them at the fake scripts of
 * **The rollback is one click.** Before each generation the previous
   `config.json` is copied to `<state-dir>/snapshots/config-<ISO>.json` (the last
   10 are kept) and is restored byte for byte, followed by a restart.
-* **The journal is live over SSE.** `journalctl -f -o json` is parsed line by line
-  on the server (level from `PRIORITY`, time, text) and the client colours and
-  filters by level. The structured form is deliberate: `-o cat` would lose the
-  level. `MESSAGE` is NOT always a string — journald encodes any value containing
-  non-printable bytes as an array of byte values, and sing-box colours every line,
-  so every entry of the daemon arrives that way. The parser decodes the array,
-  drops the ANSI escapes and cuts the duplicated `+0000 <date> <time> <level>`
-  prefix a sing-box line starts with. The child dies with the connection
-  (`req.on('close')`) — otherwise every page reload would leave a `journalctl -f`
-  behind — and one stream at a time is allowed.
+* **The journal is a snapshot, not a live stream.** The panel runs `journalctl -u
+  <unit> -n 200 -o json` once and renders the last lines; the query carries the
+  unit and the minimum level. One request, no server state, no process left
+  behind. The live tail was removed on 22.09.2026: `journalctl -f` over SSE needed
+  a stream counter, a 409 refusal and a child killed on `req.on('close')`, and the
+  real scenario is "something broke, show me why", not "watch the lines scroll".
+  The structured form is kept: `-o cat` would lose the level. `MESSAGE` is NOT
+  always a string — journald encodes any value containing non-printable bytes as
+  an array of byte values, and sing-box colours every line, so every entry of the
+  daemon arrives that way. The parser decodes the array, drops the ANSI escapes
+  and cuts the duplicated `+0000 <date> <time> <level>` prefix a sing-box line
+  starts with. Every SSE route answers `200` even when it refuses: `EventSource`
+  never reconnects after a non-200 response, so the mass test reports "already
+  running" as an event inside the stream.
 * **The outbound test replaces `live_test`.** `sing-box tools fetch` starts its own
   instance, binds no inbound and never touches the running daemon, so checking 148
   servers costs zero restarts. The mass run is capped (4 at a time by default) and
@@ -279,7 +306,7 @@ on the far end watches where the login comes from. `claude-http` is fixed to
   output stays byte-identical to the reference. `external_controller` may only name
   `127.0.0.1` — on the router the WAN address lives on the same host, and an open
   API is full control of the daemon from the internet — and the secret comes from
-  `SINGBOX_WEBUI_API_SECRET`, never from `webui.json`, which would put it into the
+  `GATEHOUSE_API_SECRET`, never from `webui.json`, which would put it into the
   snapshots and the backups. An enabled API with an empty secret is a refusal with
   a sentence, like the token rule above. This is the first deliberate divergence
   from the Python reference, which cannot emit such a block.
@@ -319,8 +346,8 @@ on the far end watches where the login comes from. `claude-http` is fixed to
 ## Authentication and security
 
 * **A non-loopback bind without a token refuses to start.** From this stage on the
-  editor can restart the daemon and shows the VLESS keys, so `SINGBOX_WEBUI_HOST`
-  that is not a loopback address together with an empty `SINGBOX_WEBUI_TOKEN` is a
+  editor can restart the daemon and shows the VLESS keys, so `GATEHOUSE_HOST`
+  that is not a loopback address together with an empty `GATEHOUSE_TOKEN` is a
   startup error with the reason and both ways out — not a line in a log.
 * **Every route is behind the token, SSE included.** `Authorization: Bearer …` or
   `?token=…`; the query form is answered with an `HttpOnly`, `SameSite=Strict`
@@ -336,7 +363,7 @@ on the far end watches where the login comes from. `claude-http` is fixed to
 
 [`deploy/`](deploy/README.md:1) holds the systemd unit, the sudoers rule, the
 polkit alternative and a step-by-step `deploy/README.md`. Nothing there is applied
-automatically. The code lives in `/opt/sing-box-web-ui`, so the unit enables `ProtectHome=yes`
+automatically. The code lives in `/opt/gatehouse`, so the unit enables `ProtectHome=yes`
 and `ProtectSystem=strict`. The latter keeps the service from rewriting its own
 code while leaving the owner's `rsync` alone: the restriction lives in the unit's
 mount namespace, not in the permissions on disk. `NoNewPrivileges=yes` breaks
@@ -409,42 +436,22 @@ Rules of the format:
 * `webui.json` and every `*.txt` are git-ignored: they carry personal lists. The
   only committed links file is the synthetic `tests/fixtures/links.txt`.
 
-## Migration from `settings.yaml`
+## Golden file acceptance
 
-The converter is a one-off tool and the only place allowed to use the `yaml`
-package:
+The byte-level comparison against the reference generator was removed on
+22.09.2026: the port no longer needs a Python toolchain, and the reference is not
+maintained. The property it protected is kept by a golden file instead:
 
-```bash
-node tools/import-settings.mjs --settings settings.yaml --output webui.json
-# keep the real links file in place, no copying:
-node tools/import-settings.mjs --settings /srv/sing-box/settings.yaml \
-    --output /tmp/webui.json --absolute-paths
-```
+* `tests/fixtures/golden/config.json` is the byte-exact output of the generator
+  for the fixture model (`tests/fixtures/settings.json` + `tests/fixtures/links.txt`);
+* `tests/build.test.mjs` requires generation to match it byte for byte, and still
+  asserts the two format invariants — 2704 bytes and no trailing newline;
+* an **intentional** change to the output updates the fixture in the same commit,
+  so the difference is visible line by line in review instead of surfacing on the
+  router a week later.
 
-It maps the known keys into the profile `default`, reports unknown keys instead
-of dropping them silently, and `--absolute-paths` rewrites `links_file`/
-`output_file` against the directory of the YAML file.
-
-## Byte-level acceptance against the reference
-
-```bash
-npm run compare                                    # the repo fixtures
-node tools/compare-with-python.mjs --yaml /srv/sing-box/settings.yaml
-```
-
-The tool runs the reference generator and this port on the same data and compares
-the two `config.json` files byte by byte, printing the first differing line with
-context when they diverge. The reference project is only read: it is invoked with
-an absolute `--settings` path and writes into a temp directory.
-
-Two levels of verification exist:
-
-1. **automated, no Python needed** — `tests/build.test.mjs` compares the produced
-   config against the committed `tests/fixtures/expected-config.json`, which was
-   generated by the reference once and is regenerated with the command above;
-2. **manual, against real data** — the command above on the owner's own
-   `settings.yaml` (148 servers, emoji tags, six inbounds). Both runs currently
-   report identical bytes; see the report in `techdocs/`.
+The fixtures are synthetic and anonymised: their UUIDs and endpoints are
+placeholders, so the golden file carries no secrets.
 
 ## Project layout
 
@@ -462,18 +469,17 @@ Two levels of verification exist:
 | [`src/web/app.mjs`](src/web/app.mjs:1) | Express app: routes, form parsing, fragments |
 | [`src/web/server.mjs`](src/web/server.mjs:1) | `npm start`: environment, listen address |
 | [`src/web/panel.mjs`](src/web/panel.mjs:1) | view models handed to the templates |
-| [`src/system/index.mjs`](src/system/index.mjs:1) | system boundary: `checkConfig`, `restartSingBox`, `tailJournal`, `followJournal`, `testOutbound`, `testOutbounds`, `testInbound`, `geositeLookup` |
+| [`src/system/index.mjs`](src/system/index.mjs:1) | system boundary: `checkConfig`, `restartSingBox`, `tailJournal`, `testOutbound`, `testOutbounds`, `testInbound`, `geositeLookup` |
 | [`src/watchdog/watchdog.mjs`](src/watchdog/watchdog.mjs:1) | liveness watchdog: fuses, the two-rung ladder, the 20-event history |
 | [`src/watchdog/clash.mjs`](src/watchdog/clash.mjs:1) | Clash-compatible HTTP API client: list and close connections of one inbound |
 | [`src/web/auth.mjs`](src/web/auth.mjs:1) | token transport, loopback check, the startup refusal |
 | [`deploy/`](deploy/README.md:1) | systemd unit, sudoers and polkit variants, deployment notes |
 | [`views/`](views/layout.ejs:1), [`public/`](public/app.css:1) | EJS templates, stylesheet, vendored htmx |
 | [`tools/generate.mjs`](tools/generate.mjs:1) | CLI that writes `config.json` |
-| [`tools/import-settings.mjs`](tools/import-settings.mjs:1) | one-off `settings.yaml` → `webui.json` converter |
-| [`tools/compare-with-python.mjs`](tools/compare-with-python.mjs:1) | byte-level comparison with the reference |
+| [`tools/dev.mjs`](tools/dev.mjs:1) | `npm run dev`: the editor over the `dev/` sandbox |
 | [`tools/vendor-htmx.mjs`](tools/vendor-htmx.mjs:1) | refreshes `public/vendor/htmx.min.js` from the npm package |
-| [`tests/`](tests/helpers.mjs:1) | `node:test` suite, fixtures and the coverage table |
-| [`techdocs/`](techdocs/port-coverage.md:1) | porting notes, URL probe, coverage table, reports |
+| [`tests/`](tests/helpers.mjs:1) | `node:test` suite and fixtures, the golden file included |
+| [`techdocs/`](techdocs/architecture.md:1) | internal design notes and reports (git-ignored) |
 
 ## Porting notes
 
@@ -482,8 +488,6 @@ Two levels of verification exist:
   and continued. The port collects them into an array returned together with the
   config, so the future web UI can show them; the CLI prints them to stderr in
   the reference wording.
-* **No YAML in the core.** Only `tools/import-settings.mjs` touches YAML, and the
-  `yaml` package sits in `devDependencies` accordingly.
 * **The core has no dependencies of its own.** `src/core/` uses `ajv` and
   nothing else; the editor adds `express` and `ejs`, which the task allows, and
   brings 67 transitive packages with it. No test runner (Node 22 ships

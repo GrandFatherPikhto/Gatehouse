@@ -1,8 +1,8 @@
-# SingBoxWebUI — веб-редактор webui.json и config.json.
+# GateHouse — веб-редактор webui.json и config.json.
 #
 # Вариант по умолчанию: рестарт демона через `sudo -n systemctl restart sing-box`
-# и правило из `deploy/sudoers.d-singbox-webui`. Рядом лежит вариант на polkit
-# (`deploy/sing-box-webui.service.polkit`), где sudo не нужен вовсе и потому
+# и правило из `deploy/sudoers.d-gatehouse`. Рядом лежит вариант на polkit
+# (`deploy/gatehouse.service.polkit`), где sudo не нужен вовсе и потому
 # можно включить `NoNewPrivileges=yes`. Оба варианта — заготовки: применяет
 # владелец руками, см. `deploy/README.md`.
 #
@@ -10,20 +10,20 @@
 # ставит юнит в автозапуск (поднимется сам при загрузке роутера), `--now`
 # запускает его прямо сейчас, не дожидаясь перезагрузки.
 #
-#   sudo cp deploy/sing-box-webui.service /etc/systemd/system/
-#   sudo install -d -m 0750 -o denis -g denis /etc/sing-box-webui
-#   sudo cp deploy/sing-box-webui.env.example /etc/sing-box-webui/env
-#   sudo chown root:denis /etc/sing-box-webui/env
-#   sudo chmod 0640 /etc/sing-box-webui/env
-#   sudoedit /etc/sing-box-webui/env            # вписать токен
-#   sudo install -m 0440 deploy/sudoers.d-singbox-webui /etc/sudoers.d/sing-box-webui
+#   sudo cp deploy/gatehouse.service /etc/systemd/system/
+#   sudo install -d -m 0750 -o denis -g denis /etc/gatehouse
+#   sudo cp deploy/gatehouse.env.example /etc/gatehouse/env
+#   sudo chown root:denis /etc/gatehouse/env
+#   sudo chmod 0640 /etc/gatehouse/env
+#   sudoedit /etc/gatehouse/env            # вписать токен
+#   sudo install -m 0440 deploy/sudoers.d-gatehouse /etc/sudoers.d/gatehouse
 #   sudo visudo -c                              # обязательно проверить синтаксис
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now sing-box-webui
+#   sudo systemctl enable --now gatehouse
 
 [Unit]
-Description=SingBoxWebUI — web editor of webui.json and config.json
-Documentation=file:///opt/sing-box-web-ui/deploy/README.md
+Description=GateHouse — web editor of webui.json and config.json
+Documentation=file:///opt/gatehouse/deploy/README.md
 After=network.target
 Wants=network.target
 
@@ -31,16 +31,16 @@ Wants=network.target
 Type=simple
 User=denis
 Group=denis
-WorkingDirectory=/opt/sing-box-web-ui
+WorkingDirectory=/opt/gatehouse
 # Системная нода из NodeSource: та же 22.23.2, на которой сняты форматы вывода.
 ExecStart=/usr/bin/node src/web/server.mjs
 
 # systemd создаёт оба каталога от имени denis. Режимы заданы явно: по умолчанию
 # StateDirectory получает 0755, а в нём лежат снапшоты config.json с ключами
 # VLESS владельца, поэтому 0700.
-StateDirectory=sing-box-webui
+StateDirectory=gatehouse
 StateDirectoryMode=0700
-ConfigurationDirectory=sing-box-webui
+ConfigurationDirectory=gatehouse
 ConfigurationDirectoryMode=0750
 
 # ОБЯЗАТЕЛЬНО. На роутере umask 0002: без этой строки снапшоты и config.json
@@ -51,16 +51,16 @@ UMask=0027
 # Пути к исполняемым файлам и адрес привязки — не секреты, им место в юните.
 # Токен — в EnvironmentFile с правами 0640: содержимое юнита видно любому через
 # `systemctl cat`, поэтому секрета в юните быть не должно.
-Environment=SINGBOX_WEBUI_SETTINGS=/etc/sing-box-webui/webui.json
-Environment=SINGBOX_WEBUI_STATE_DIR=/var/lib/sing-box-webui
-Environment=SINGBOX_WEBUI_HOST=10.95.2.1
-Environment=SINGBOX_WEBUI_PORT=9090
-Environment=SINGBOX_WEBUI_CONFIG=/etc/sing-box/config.json
-Environment=SINGBOX_WEBUI_SINGBOX=/usr/local/bin/sing-box
-Environment=SINGBOX_WEBUI_SYSTEMCTL=/usr/bin/systemctl
-Environment=SINGBOX_WEBUI_JOURNALCTL=/usr/bin/journalctl
-Environment=SINGBOX_WEBUI_UNIT=sing-box
-EnvironmentFile=/etc/sing-box-webui/env
+Environment=GATEHOUSE_SETTINGS=/etc/gatehouse/webui.json
+Environment=GATEHOUSE_STATE_DIR=/var/lib/gatehouse
+Environment=GATEHOUSE_HOST=10.95.2.1
+Environment=GATEHOUSE_PORT=9090
+Environment=GATEHOUSE_CONFIG=/etc/sing-box/config.json
+Environment=GATEHOUSE_SINGBOX=/usr/local/bin/sing-box
+Environment=GATEHOUSE_SYSTEMCTL=/usr/bin/systemctl
+Environment=GATEHOUSE_JOURNALCTL=/usr/bin/journalctl
+Environment=GATEHOUSE_UNIT=sing-box
+EnvironmentFile=/etc/gatehouse/env
 
 Restart=always
 RestartSec=5
@@ -68,7 +68,7 @@ RestartSec=5
 # Код переехал в /opt, поэтому обе защиты доступны.
 #
 # ProtectSystem=strict делает всю файловую систему доступной только для чтения
-# внутри пространства имён этого юнита. Важное следствие: /opt/sing-box-web-ui
+# внутри пространства имён этого юнита. Важное следствие: /opt/gatehouse
 # принадлежит denis, но сервис всё равно не может переписать собственный код —
 # а rsync владельца, живущий в обычном пространстве, пишет туда свободно.
 # Каталоги из StateDirectory и ConfigurationDirectory systemd открывает на запись
@@ -79,7 +79,7 @@ PrivateTmp=yes
 ReadWritePaths=/etc/sing-box
 # NoNewPrivileges=yes здесь включить НЕЛЬЗЯ: он блокирует setuid, то есть ломает
 # `sudo`, а с ним и перезапуск демона. Если хочется и его — берите вариант на
-# polkit: deploy/sing-box-webui.service.polkit.
+# polkit: deploy/gatehouse.service.polkit.
 
 [Install]
 WantedBy=multi-user.target

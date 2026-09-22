@@ -10,7 +10,9 @@
 //   * a token protects every route, the SSE endpoints included;
 //   * the restart is not offered — and not accepted — unless the check passed;
 //   * the rollback restores `config.json` byte for byte;
-//   * an SSE stream kills its child process when the browser goes away.
+//   * the journal snapshot leaves no child process behind;
+//   * an SSE refusal is an event, never a non-200 status;
+//   * paths under `dev/` show the sandbox marker.
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -18,7 +20,6 @@ import path from 'node:path';
 import {describe, test} from 'node:test';
 
 import {listConfigSnapshots} from '../src/model/storage.mjs';
-import {journalStreamCount} from '../src/system/index.mjs';
 import {startServer} from '../src/web/server.mjs';
 import {makeTempDir, fakeSystemEnv, writeLinksFile, writeSettings} from './helpers.mjs';
 
@@ -37,12 +38,12 @@ async function startEditor(options = {}) {
 
   const env = {
     ...fakeSystemEnv(options.system),
-    SINGBOX_WEBUI_SETTINGS: settingsFile,
-    SINGBOX_WEBUI_HOST: options.host ?? '127.0.0.1',
-    SINGBOX_WEBUI_PORT: '0',
-    SINGBOX_WEBUI_STATE_DIR: stateDir,
+    GATEHOUSE_SETTINGS: settingsFile,
+    GATEHOUSE_HOST: options.host ?? '127.0.0.1',
+    GATEHOUSE_PORT: '0',
+    GATEHOUSE_STATE_DIR: stateDir,
   };
-  if (options.token) env.SINGBOX_WEBUI_TOKEN = options.token;
+  if (options.token) env.GATEHOUSE_TOKEN = options.token;
 
   const {server, model, url} = await startServer({env});
 
@@ -84,32 +85,6 @@ async function post(base, route, fields = {}, headers = {}) {
   });
 }
 
-/**
- * Polls `check` until it is true or the budget runs out.
- *
- * @param {() => boolean} check
- * @param {number} [timeout]
- * @returns {Promise<boolean>}
- */
-async function waitFor(check, timeout = 3000) {
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    if (check()) return true;
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  return check();
-}
-
-/** True when a process with this pid no longer exists. */
-function isGone(pid) {
-  try {
-    process.kill(pid, 0);
-    return false;
-  } catch {
-    return true;
-  }
-}
-
 describe('authentication configuration', () => {
   test('a non-loopback bind without a token refuses to start', async () => {
     const dir = makeTempDir();
@@ -118,15 +93,15 @@ describe('authentication configuration', () => {
     await assert.rejects(
       startServer({
         env: {
-          SINGBOX_WEBUI_SETTINGS: settingsFile,
-          SINGBOX_WEBUI_HOST: '10.95.2.1',
-          SINGBOX_WEBUI_PORT: '0',
+          GATEHOUSE_SETTINGS: settingsFile,
+          GATEHOUSE_HOST: '10.95.2.1',
+          GATEHOUSE_PORT: '0',
         },
       }),
       (error) =>
         /отказ запуска/.test(error.message) &&
         /не адрес обратной петли/.test(error.message) &&
-        /SINGBOX_WEBUI_TOKEN/.test(error.message),
+        /GATEHOUSE_TOKEN/.test(error.message),
     );
   });
 
@@ -136,7 +111,7 @@ describe('authentication configuration', () => {
 
     await assert.rejects(
       startServer({
-        env: {SINGBOX_WEBUI_SETTINGS: settingsFile, SINGBOX_WEBUI_HOST: '0.0.0.0', SINGBOX_WEBUI_PORT: '0'},
+        env: {GATEHOUSE_SETTINGS: settingsFile, GATEHOUSE_HOST: '0.0.0.0', GATEHOUSE_PORT: '0'},
       }),
       /отказ запуска/,
     );
@@ -156,9 +131,9 @@ describe('authentication configuration', () => {
       });
       assert.equal(bearer.status, 200);
 
-      // The SSE endpoint of the journal is a route like any other: leaving it open
-      // would hand a stranger a `journalctl -f` process on the host.
-      const stream = await fetch(`${editor.base}/journal/stream`);
+      // The SSE endpoint of the mass test is a route like any other: leaving it
+      // open would hand a stranger a run over the host.
+      const stream = await fetch(`${editor.base}/tests/stream`);
       assert.equal(stream.status, 401);
     } finally {
       await editor.close();
@@ -171,10 +146,10 @@ describe('authentication configuration', () => {
       const response = await fetch(`${editor.base}/?token=secret-token`);
       assert.equal(response.status, 200);
       const cookie = response.headers.get('set-cookie') ?? '';
-      assert.match(cookie, /singbox_webui_token=secret-token/);
+      assert.match(cookie, /gatehouse_token=secret-token/);
       assert.match(cookie, /HttpOnly/i);
 
-      const followUp = await fetch(`${editor.base}/`, {headers: {Cookie: 'singbox_webui_token=secret-token'}});
+      const followUp = await fetch(`${editor.base}/`, {headers: {Cookie: 'gatehouse_token=secret-token'}});
       assert.equal(followUp.status, 200);
     } finally {
       await editor.close();
@@ -302,95 +277,92 @@ describe('rollback', () => {
   });
 });
 
-describe('live journal over SSE', () => {
-  test('the child process dies when the connection is closed', async () => {
+describe('journal snapshot', () => {
+  test('the panel renders the last lines of the unit', async () => {
+    const editor = await startEditor();
+    try {
+      const panel = await (await fetch(`${editor.base}/panel/journal`)).text();
+      assert.match(panel, /Журнал sing-box/);
+      assert.match(panel, /tail line 0</, 'the first line of the fake is warning');
+      assert.match(panel, /tail line 199</, 'the snapshot reads 200 lines by default');
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('the minimum level parameter filters the snapshot', async () => {
+    const editor = await startEditor();
+    try {
+      const all = await (await fetch(`${editor.base}/panel/journal?lines=14&level=debug`)).text();
+      assert.match(all, /tail line 1</, 'an info line is visible at level debug');
+      assert.match(all, /tail line 0</, 'a warning line is visible too');
+
+      const warnings = await (
+        await fetch(`${editor.base}/panel/journal?lines=14&level=warning`)
+      ).text();
+      assert.doesNotMatch(warnings, /tail line 1</, 'the info line is filtered out');
+      assert.match(warnings, /tail line 0</, 'the warning line stays');
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('the snapshot leaves no journalctl process behind', async () => {
     const dir = makeTempDir();
     const pidFile = path.join(dir, 'journalctl.pid');
     const editor = await startEditor({system: {FAKE_JOURNALCTL_PIDFILE: pidFile}});
-
     try {
-      const controller = new AbortController();
-      const response = await fetch(`${editor.base}/journal/stream`, {signal: controller.signal});
-      assert.equal(response.status, 200);
-      assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/);
-
-      const reader = response.body.getReader();
-      const first = await reader.read();
-      assert.ok(!first.done);
-      assert.match(new TextDecoder().decode(first.value), /event: hello/);
-
-      assert.ok(await waitFor(() => fs.existsSync(pidFile)), 'the fake wrote its pid');
-      const pid = Number(fs.readFileSync(pidFile, 'utf8'));
-      assert.ok(pid > 0);
-      assert.equal(isGone(pid), false, 'the child is running while the stream is open');
-      assert.equal(journalStreamCount(), 1);
-
-      // The browser goes away — a page reload, a closed tab.
-      controller.abort();
-
-      assert.ok(await waitFor(() => isGone(pid)), 'the journalctl -f child was killed');
-      assert.ok(await waitFor(() => journalStreamCount() === 0), 'the stream slot was released');
+      const panel = await (await fetch(`${editor.base}/panel/journal`)).text();
+      assert.match(panel, /tail line 0</);
+      // The fake writes its pid only in follow mode (`-f`). The snapshot never
+      // passes `-f`, so no pid file appears — and there is no child to kill when
+      // the connection closes.
+      assert.equal(fs.existsSync(pidFile), false);
     } finally {
       await editor.close();
     }
   });
 
-  test('a second concurrent stream is refused', async () => {
+  test('the unit may be overridden in the query', async () => {
     const editor = await startEditor();
     try {
-      const controller = new AbortController();
-      const first = await fetch(`${editor.base}/journal/stream`, {signal: controller.signal});
-      assert.equal(first.status, 200);
-      await first.body.getReader().read();
-
-      const second = await fetch(`${editor.base}/journal/stream`);
-      assert.equal(second.status, 409);
-      assert.match(await second.text(), /одновременных потоков/);
-
-      controller.abort();
-      assert.ok(await waitFor(() => journalStreamCount() === 0));
+      const panel = await (await fetch(`${editor.base}/panel/journal?unit=gatehouse-test`)).text();
+      assert.match(panel, /value="gatehouse-test"/);
     } finally {
       await editor.close();
     }
   });
+});
 
-  test('the live stream carries non-empty, colour-free messages', async () => {
-    const editor = await startEditor();
+describe('dev sandbox marker', () => {
+  test('paths under dev/ show the marker, the router paths do not', async () => {
+    const dir = makeTempDir();
+    const sandbox = path.join(dir, 'dev', 'root');
+    fs.mkdirSync(path.join(sandbox, 'etc', 'sing-box'), {recursive: true});
+    const settingsFile = writeSettings(sandbox);
+    writeLinksFile(sandbox);
+
+    const sandboxEditor = await startServer({
+      env: {
+        ...fakeSystemEnv(),
+        GATEHOUSE_SETTINGS: settingsFile,
+        GATEHOUSE_CONFIG: path.join(sandbox, 'etc', 'sing-box', 'config.json'),
+        GATEHOUSE_STATE_DIR: path.join(sandbox, 'state'),
+        GATEHOUSE_HOST: '127.0.0.1',
+        GATEHOUSE_PORT: '0',
+      },
+    });
+    const routerEditor = await startEditor();
+
     try {
-      const controller = new AbortController();
-      const response = await fetch(`${editor.base}/journal/stream`, {signal: controller.signal});
-      assert.equal(response.status, 200);
+      const sandboxPage = await (await fetch(sandboxEditor.url)).text();
+      assert.match(sandboxPage, /Песочница/, 'the dev paths must be visible on the page');
 
-      // The fake in follow mode (the default one, speaking bytes) prints a line
-      // every 20ms, so a handful of reads is enough. The loop is bounded on
-      // purpose: a stream that never delivers must fail, not hang the suite.
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let text = '';
-      for (let attempt = 0; attempt < 40 && !/follow line 3/.test(text); attempt += 1) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        text += decoder.decode(chunk.value, {stream: true});
-      }
-      controller.abort();
-
-      const messages = [...text.matchAll(/event: log\ndata: (\{.*\})\n/g)].map(
-        (match) => JSON.parse(match[1]).message,
-      );
-      assert.ok(messages.length >= 2, `the stream delivered entries: ${messages.length}`);
-      assert.deepEqual(
-        messages.filter((message) => message.length === 0),
-        [],
-        'not a single blank line, which is what the panel showed on the router',
-      );
-      assert.deepEqual(
-        messages.filter((message) => message.includes('\u001b')),
-        [],
-        'no ANSI escape survives into the panel',
-      );
-      assert.match(messages[0], /follow line 0/);
+      const routerPage = await (await fetch(`${routerEditor.base}/`)).text();
+      assert.doesNotMatch(routerPage, /Песочница/, 'a normal instance shows no marker');
     } finally {
-      await editor.close();
+      await new Promise((resolve) => sandboxEditor.server.close(resolve));
+      await routerEditor.close();
     }
   });
 });
@@ -413,6 +385,29 @@ describe('mass outbound test over SSE', () => {
       assert.match(text, /"city":"Limassol"/);
       assert.match(text, /event: done/);
       assert.match(text, /"done":3/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('a second concurrent run is refused by an event, and the connection stays open', async () => {
+    const editor = await startEditor({system: {FAKE_SINGBOX_DELAY_MS: '150'}});
+    try {
+      await post(editor.base, '/save', {panel: 'output'});
+      await post(editor.base, '/generate', {});
+
+      const controller = new AbortController();
+      const first = await fetch(`${editor.base}/tests/stream`, {signal: controller.signal});
+      assert.equal(first.status, 200);
+      await first.body.getReader().read(); // the run has started
+
+      const second = await fetch(`${editor.base}/tests/stream`);
+      assert.equal(second.status, 200, 'a refusal is never a non-200: EventSource would die');
+      const text = await second.text();
+      assert.match(text, /event: refused/);
+      assert.match(text, /уже идёт/);
+
+      controller.abort();
     } finally {
       await editor.close();
     }

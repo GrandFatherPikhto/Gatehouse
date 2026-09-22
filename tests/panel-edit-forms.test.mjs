@@ -37,10 +37,10 @@ async function startEditor(options = {}) {
 
   const {server, model, url} = await startServer({
     env: {
-      SINGBOX_WEBUI_SETTINGS: settingsFile,
-      SINGBOX_WEBUI_HOST: '127.0.0.1',
-      SINGBOX_WEBUI_PORT: '0',
-      SINGBOX_WEBUI_STATE_DIR: stateDir,
+      GATEHOUSE_SETTINGS: settingsFile,
+      GATEHOUSE_HOST: '127.0.0.1',
+      GATEHOUSE_PORT: '0',
+      GATEHOUSE_STATE_DIR: stateDir,
     },
   });
 
@@ -359,6 +359,10 @@ const EDITABLE_ACTION_FORMS = Object.freeze({
     {route: '/profiles', hidden: 'rename'},
     {route: '/profiles', hidden: 'create'},
   ],
+  // The journal is a snapshot: its refresh form carries the unit and the level and
+  // GETs the panel again. It is an action form, not an edit form — there is
+  // nothing to save, so it must not be `id="panel-form"`.
+  journal: [{route: '/panel/journal', hidden: null}],
 });
 
 /**

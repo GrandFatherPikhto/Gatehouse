@@ -1,0 +1,20 @@
+#!/usr/bin/env node
+// Stub for `sudo` in the dev sandbox. It escalates nothing: it prints its own
+// argv and then runs the command it was asked to run — which, under
+// `npm run dev`, is the `dev/bin/systemctl` stub one directory away. Chaining is
+// deliberate: `restartSingBox` calls `sudo -n <systemctl> restart <unit>`, so
+// without the chain the systemctl stub would never see its arguments and the dev
+// profile could not prove that a restart reached it.
+//
+// A caller that passes something other than `-n` gets the same treatment: the
+// arguments are forwarded as they are, and no privilege is ever gained.
+import {spawnSync} from 'node:child_process';
+
+const argv = process.argv.slice(2);
+process.stdout.write(`fake-sudo ${JSON.stringify(argv)}\n`);
+
+const command = argv[0] === '-n' ? argv.slice(1) : argv;
+if (command.length === 0) process.exit(0);
+
+const result = spawnSync(command[0], command.slice(1), {stdio: 'inherit'});
+process.exit(result.status ?? 0);

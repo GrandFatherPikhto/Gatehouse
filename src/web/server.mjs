@@ -39,10 +39,10 @@ export {TOKEN_VAR, assertAuthentication, isLoopbackHost, tokenMatches};
  */
 export function readEnv(env = process.env) {
   return {
-    settings: env.SINGBOX_WEBUI_SETTINGS || DEFAULT_SETTINGS_FILE,
-    host: env.SINGBOX_WEBUI_HOST || '127.0.0.1',
-    port: env.SINGBOX_WEBUI_PORT ?? DEFAULT_PORT,
-    stateDir: env.SINGBOX_WEBUI_STATE_DIR || null,
+    settings: env.GATEHOUSE_SETTINGS || DEFAULT_SETTINGS_FILE,
+    host: env.GATEHOUSE_HOST || '127.0.0.1',
+    port: env.GATEHOUSE_PORT ?? DEFAULT_PORT,
+    stateDir: env.GATEHOUSE_STATE_DIR || null,
   };
 }
 

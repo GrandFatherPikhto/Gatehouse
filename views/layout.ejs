@@ -14,6 +14,15 @@
     <script src="/static/app.js" type="module"></script>
   </head>
   <body>
+    <%# The marker is derived from the paths, not from a flag: in the sandbox
+        `systemctl` does nothing, so the difference has to be impossible to miss. %>
+    <% if (sandbox) { %>
+      <p class="notice sandbox-note" role="status">
+        <strong>Песочница:</strong> пути ведут в <code>dev/</code>, а
+        <code>systemctl</code> и <code>sudo</code> — заглушки. Боевые службы и
+        роутер не затрагиваются.
+      </p>
+    <% } %>
     <header id="status"><%- include('partials/status', {status, key, editForm: panel.editForm}) %></header>
     <main>
       <nav id="tree"><%- include('partials/tree', {tree, key}) %></nav>
@@ -25,7 +34,7 @@
     <footer>
       Редактор <code>webui.json</code> и генерация <code>config.json</code>.
       Раздел «Система» умеет проверять конфиг, перезапускать демон и откатывать
-      предыдущий файл; там же живой журнал, тест серверов и сторож связи.
+      предыдущий файл; там же снимок журнала, тест серверов и сторож связи.
       <span class="muted">Через открытый HTTP токен идёт без шифрования —
         надёжнее <code>127.0.0.1</code> плюс ssh-туннель.</span>
     </footer>

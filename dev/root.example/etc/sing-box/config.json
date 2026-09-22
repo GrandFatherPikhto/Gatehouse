@@ -1,0 +1,34 @@
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "local",
+        "tag": "dns-local"
+      }
+    ],
+    "final": "dns-local"
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "main",
+      "listen": "127.0.0.1",
+      "listen_port": 54321
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [],
+    "final": "direct",
+    "default_domain_resolver": "dns-local"
+  }
+}

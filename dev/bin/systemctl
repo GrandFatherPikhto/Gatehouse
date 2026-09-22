@@ -1,0 +1,11 @@
+#!/usr/bin/env node
+// Stub for `systemctl` in the dev sandbox. It changes NOTHING on the host: it
+// prints the argv it received in one parseable line and exits 0. That is enough
+// for the editor (and its tests) to observe which unit would have been acted on,
+// while the real router is never reached by `npm run dev`.
+//
+// The output format is free but unambiguous on purpose: one line, a marker and
+// the JSON array of arguments, so a test can assert on the exact argv without
+// depending on the rest of the log.
+process.stdout.write(`fake-systemctl ${JSON.stringify(process.argv.slice(2))}\n`);
+process.exit(0);

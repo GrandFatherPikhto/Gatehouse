@@ -21,12 +21,12 @@ import {ProjectModel} from '../model/project.mjs';
 import {restoreLatestConfig, snapshotConfig} from '../model/storage.mjs';
 import {API_SECRET_VAR} from '../core/build.mjs';
 import {
+  PRIORITY_LEVELS,
   SystemError,
   checkConfig,
-  followJournal,
-  journalStreamCount,
   restartSingBox,
   systemConfig,
+  tailJournal,
   testOutbounds,
 } from '../system/index.mjs';
 import {Watchdog} from '../watchdog/watchdog.mjs';
@@ -46,11 +46,35 @@ const ROOT = path.join(import.meta.dirname, '..', '..');
 const VIEWS = path.join(ROOT, 'views');
 const PUBLIC = path.join(ROOT, 'public');
 
+/**
+ * True when the host-facing paths of the process point into a `dev/` directory.
+ *
+ * That is how `npm run dev` marks the sandbox: the settings file, the generated
+ * config and the state directory all live under `dev/root/`. The marker is derived
+ * from the paths and not from a flag, so a stray variable cannot make a
+ * production instance pretend to be a sandbox — and the tests can reproduce it by
+ * pointing the variables at a directory literally called `dev`.
+ *
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {boolean}
+ */
+export function isDevSandbox(env = process.env) {
+  const marker = `${path.sep}dev${path.sep}`;
+  return ['GATEHOUSE_SETTINGS', 'GATEHOUSE_CONFIG', 'GATEHOUSE_STATE_DIR'].some((key) => {
+    const value = env[key];
+    return typeof value === 'string' && value.length > 0 && value.includes(marker);
+  });
+}
+
 /** Panel shown when nothing else is asked for. */
 export const DEFAULT_PANEL = 'profiles';
 
-/** How many journal lines a live stream replays before following. */
-export const JOURNAL_REPLAY_LINES = 50;
+/** How many journal lines one snapshot of the journal shows. */
+export const JOURNAL_SNAPSHOT_LINES = 200;
+/** Minimum level a journal snapshot starts from; `debug` shows everything. */
+export const DEFAULT_JOURNAL_LEVEL = 'info';
+/** The most lines a snapshot may ask for, so one request stays cheap. */
+const JOURNAL_MAX_LINES = 1000;
 
 /** How long a check may take before it is killed; `sing-box check` is instant. */
 const CHECK_TIMEOUT = 15000;
@@ -145,6 +169,7 @@ export function createApp(options = {}) {
   // never does. `systemConfig` reads the same variables the CLI does.
   const systemEnv = options.env ?? process.env;
   const system = systemConfig(systemEnv);
+  const sandbox = isDevSandbox(systemEnv);
 
   // Runtime state of the host layer. It lives on the app, not in a module global,
   // so two editors in one process (the tests start many) cannot see each other's
@@ -281,7 +306,9 @@ export function createApp(options = {}) {
         lastRestart: state.lastRestart,
         unit: system.unit,
         testConcurrency: system.testConcurrency,
-        journalLines: JOURNAL_REPLAY_LINES,
+        journalLines: JOURNAL_SNAPSHOT_LINES,
+        journalLevel: DEFAULT_JOURNAL_LEVEL,
+        journalLevels: PRIORITY_LEVELS,
       },
       watchdog: state.watchdog === null ? undefined : state.watchdog.snapshot(),
       auth: {tokenRequired: token.length > 0, apiSecretPresent: apiSecret.length > 0},
@@ -294,6 +321,7 @@ export function createApp(options = {}) {
       tree: model.treeSpec(),
       status: buildStatus(model),
       extra: resolved.extra,
+      sandbox,
     };
   }
 
@@ -320,6 +348,58 @@ export function createApp(options = {}) {
     const view = buildView(key, extra);
     res.set('HX-Push-Url', panelUrl(view.key));
     res.render('partials/response', view);
+  }
+
+  /**
+   * Reads one journal snapshot for the panel.
+   *
+   * Every value comes from the query string with a bounded fallback: the unit is
+   * an argument to `journalctl -u` (never a shell word), the line count is
+   * clamped, and an unknown level falls back to the default. The request leaves
+   * no state — the panel renders what `journalctl` printed once.
+   *
+   * @param {import('express').Request} req
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async function journalSnapshot(req) {
+    const requested = Number(req.query?.lines);
+    const lines = Number.isFinite(requested)
+      ? Math.min(Math.max(Math.trunc(requested), 1), JOURNAL_MAX_LINES)
+      : JOURNAL_SNAPSHOT_LINES;
+    const requestedLevel =
+      typeof req.query?.level === 'string' ? req.query.level.trim().toLowerCase() : '';
+    const level = PRIORITY_LEVELS.includes(requestedLevel) ? requestedLevel : DEFAULT_JOURNAL_LEVEL;
+    const unit = typeof req.query?.unit === 'string' ? req.query.unit.trim() : '';
+
+    const result = await tailJournal(lines, {
+      env: systemEnv,
+      level,
+      unit: unit.length > 0 ? unit : undefined,
+    });
+
+    return {
+      ok: result.ok,
+      error: result.error,
+      entries: result.entries,
+      lines: result.lines,
+      unit: result.unit,
+      level: result.level,
+    };
+  }
+
+  /**
+   * Extra data a panel needs before it can be built. Only the journal has any:
+   * its snapshot comes from the host, so it is fetched by a ROUTE and handed to
+   * the panel, whose builders stay pure.
+   *
+   * @param {string} key
+   * @param {import('express').Request} req
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async function panelExtra(key, req) {
+    const kind = typeof key === 'string' && key.includes(':') ? key.slice(0, key.indexOf(':')) : key;
+    if (kind !== 'journal') return {};
+    return {journal: await journalSnapshot(req)};
   }
 
   /**
@@ -501,14 +581,16 @@ export function createApp(options = {}) {
   // Pages
   // ------------------------------------------------------------------
 
-  app.get('/', (req, res) => {
+  app.get('/', async (req, res) => {
     const requested = typeof req.query.panel === 'string' ? req.query.panel : DEFAULT_PANEL;
-    renderPage(res, requested.length > 0 ? requested : DEFAULT_PANEL);
+    const key = requested.length > 0 ? requested : DEFAULT_PANEL;
+    renderPage(res, key, await panelExtra(key, req));
   });
 
-  app.get('/panel/:key', (req, res) => {
-    if (req.get('HX-Request')) renderFragment(res, req.params.key);
-    else renderPage(res, req.params.key);
+  app.get('/panel/:key', async (req, res) => {
+    const extra = await panelExtra(req.params.key, req);
+    if (req.get('HX-Request')) renderFragment(res, req.params.key, extra);
+    else renderPage(res, req.params.key, extra);
   });
 
   // ------------------------------------------------------------------
@@ -860,42 +942,14 @@ export function createApp(options = {}) {
   );
 
   // ------------------------------------------------------------------
-  // Live journal (SSE)
+  // Journal
   // ------------------------------------------------------------------
   //
-  // The stream is the one place that leaves a process running, so it is also the
-  // place with the sharpest edges: the child must die with the connection
-  // (`req.on('close')`), and only one stream may exist at a time. Without the
-  // kill, every page reload leaves a `journalctl -f` behind.
-
-  app.get('/journal/stream', (req, res) => {
-    let stream;
-    try {
-      stream = followJournal({
-        env: systemEnv,
-        lines: JOURNAL_REPLAY_LINES,
-        onEntry: (entry) => writeEvent(res, 'log', entry),
-        onRaw: (line) => writeEvent(res, 'raw', {message: line}),
-        onStderr: (text) => writeEvent(res, 'stderr', {message: text}),
-        onExit: () => {
-          writeEvent(res, 'end', {});
-          res.end();
-        },
-      });
-    } catch (error) {
-      if (!(error instanceof SystemError)) throw error;
-      res.status(409).type('text/plain').send(`${error.message}\n`);
-      return;
-    }
-
-    res.status(200).set(SSE_HEADERS);
-    res.flushHeaders();
-    writeEvent(res, 'hello', {unit: stream.unit, streams: journalStreamCount()});
-
-    const close = () => stream.stop();
-    req.on('close', close);
-    res.on('close', close);
-  });
+  // The journal is a snapshot, served by `/panel/journal`: the panel route reads
+  // `journalctl` once and renders the last lines. There is deliberately no live
+  // SSE stream — it needed a counter, a cap and a child killed on
+  // `req.on('close')`, and the real scenario is "show me why", not "watch the
+  // lines".
 
   // ------------------------------------------------------------------
   // Mass outbound test (SSE)
@@ -907,14 +961,22 @@ export function createApp(options = {}) {
   // minutes, and the concurrency cap keeps the router from opening 148 sockets.
 
   app.get('/tests/stream', async (req, res) => {
+    // An SSE route answers `200` ALWAYS, refusals included: `EventSource` does
+    // not reconnect after a non-200 response, so a 409 here would kill the panel
+    // until the page was reloaded. A refusal is an event inside the stream.
+    res.status(200).set(SSE_HEADERS);
+    res.flushHeaders();
+
     if (state.testsRunning) {
-      res.status(409).type('text/plain').send('тест серверов уже идёт: дождитесь конца\n');
+      writeEvent(res, 'refused', {message: 'тест серверов уже идёт: дождитесь конца'});
+      res.end();
       return;
     }
 
     const info = model.linksInfo();
     if (info.error !== null) {
-      res.status(400).type('text/plain').send(`${info.error}\n`);
+      writeEvent(res, 'refused', {message: info.error});
+      res.end();
       return;
     }
 
@@ -922,8 +984,6 @@ export function createApp(options = {}) {
     const controller = new AbortController();
     state.testsRunning = true;
 
-    res.status(200).set(SSE_HEADERS);
-    res.flushHeaders();
     writeEvent(res, 'start', {total: tags.length, concurrency: system.testConcurrency});
 
     const abort = () => controller.abort();

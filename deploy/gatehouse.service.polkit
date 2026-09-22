@@ -1,30 +1,30 @@
-# SingBoxWebUI — вариант на polkit.
+# GateHouse — вариант на polkit.
 #
-# Отличие от `deploy/sing-box-webui.service` ровно в трёх строках:
+# Отличие от `deploy/gatehouse.service` ровно в трёх строках:
 #
-#   1. `SINGBOX_WEBUI_SUDO=none` — редактор вызывает `systemctl` напрямую и ни
+#   1. `GATEHOUSE_SUDO=none` — редактор вызывает `systemctl` напрямую и ни
 #      разу не трогает sudo;
 #   2. `NoNewPrivileges=yes` — можно, потому что setuid больше не нужен:
 #      `systemctl` ходит к systemd по D-Bus, а не через setuid-хелпер;
-#   3. правило polkit из `deploy/polkit/10-sing-box-webui.rules` разрешает ровно
+#   3. правило polkit из `deploy/polkit/10-gatehouse.rules` разрешает ровно
 #      `restart` ровно юнита `sing-box.service` от имени denis.
 #
 # Установка:
 #
-#   sudo cp deploy/sing-box-webui.service.polkit /etc/systemd/system/sing-box-webui.service
+#   sudo cp deploy/gatehouse.service.polkit /etc/systemd/system/gatehouse.service
 #   sudo install -d -m 0755 /etc/polkit-1/rules.d
-#   sudo install -m 0644 deploy/polkit/10-sing-box-webui.rules /etc/polkit-1/rules.d/
+#   sudo install -m 0644 deploy/polkit/10-gatehouse.rules /etc/polkit-1/rules.d/
 #   # правило sudoers при этом варианте не нужно вовсе
 #   sudo systemctl daemon-reload
-#   sudo systemctl restart sing-box-webui
+#   sudo systemctl restart gatehouse
 #
 # Проверка, что правило живо (от имени denis):
 #   systemctl restart sing-box
 # Ответ «Interactive authentication required» означает, что правило не подхватилось.
 
 [Unit]
-Description=SingBoxWebUI — web editor of webui.json and config.json (polkit)
-Documentation=file:///opt/sing-box-web-ui/deploy/README.md
+Description=GateHouse — web editor of webui.json and config.json (polkit)
+Documentation=file:///opt/gatehouse/deploy/README.md
 After=network.target
 Wants=network.target
 
@@ -32,28 +32,28 @@ Wants=network.target
 Type=simple
 User=denis
 Group=denis
-WorkingDirectory=/opt/sing-box-web-ui
+WorkingDirectory=/opt/gatehouse
 ExecStart=/usr/bin/node src/web/server.mjs
 
-StateDirectory=sing-box-webui
+StateDirectory=gatehouse
 StateDirectoryMode=0700
-ConfigurationDirectory=sing-box-webui
+ConfigurationDirectory=gatehouse
 ConfigurationDirectoryMode=0750
 
 UMask=0027
 
-Environment=SINGBOX_WEBUI_SETTINGS=/etc/sing-box-webui/webui.json
-Environment=SINGBOX_WEBUI_STATE_DIR=/var/lib/sing-box-webui
-Environment=SINGBOX_WEBUI_HOST=10.95.2.1
-Environment=SINGBOX_WEBUI_PORT=9090
-Environment=SINGBOX_WEBUI_CONFIG=/etc/sing-box/config.json
-Environment=SINGBOX_WEBUI_SINGBOX=/usr/local/bin/sing-box
-Environment=SINGBOX_WEBUI_SYSTEMCTL=/usr/bin/systemctl
-Environment=SINGBOX_WEBUI_JOURNALCTL=/usr/bin/journalctl
-Environment=SINGBOX_WEBUI_UNIT=sing-box
+Environment=GATEHOUSE_SETTINGS=/etc/gatehouse/webui.json
+Environment=GATEHOUSE_STATE_DIR=/var/lib/gatehouse
+Environment=GATEHOUSE_HOST=10.95.2.1
+Environment=GATEHOUSE_PORT=9090
+Environment=GATEHOUSE_CONFIG=/etc/sing-box/config.json
+Environment=GATEHOUSE_SINGBOX=/usr/local/bin/sing-box
+Environment=GATEHOUSE_SYSTEMCTL=/usr/bin/systemctl
+Environment=GATEHOUSE_JOURNALCTL=/usr/bin/journalctl
+Environment=GATEHOUSE_UNIT=sing-box
 # Никакого sudo: рестарт идёт через D-Bus и правило polkit.
-Environment=SINGBOX_WEBUI_SUDO=none
-EnvironmentFile=/etc/sing-box-webui/env
+Environment=GATEHOUSE_SUDO=none
+EnvironmentFile=/etc/gatehouse/env
 
 Restart=always
 RestartSec=5
@@ -61,7 +61,7 @@ RestartSec=5
 # Код переехал в /opt, поэтому обе защиты доступны.
 #
 # ProtectSystem=strict делает всю файловую систему доступной только для чтения
-# внутри пространства имён этого юнита. Важное следствие: /opt/sing-box-web-ui
+# внутри пространства имён этого юнита. Важное следствие: /opt/gatehouse
 # принадлежит denis, но сервис всё равно не может переписать собственный код —
 # а rsync владельца, живущий в обычном пространстве, пишет туда свободно.
 # Каталоги из StateDirectory и ConfigurationDirectory systemd открывает на запись

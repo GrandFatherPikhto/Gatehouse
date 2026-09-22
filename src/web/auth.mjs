@@ -25,10 +25,10 @@
 import {timingSafeEqual} from 'node:crypto';
 
 /** Environment variable that carries the access token. */
-export const TOKEN_VAR = 'SINGBOX_WEBUI_TOKEN';
+export const TOKEN_VAR = 'GATEHOUSE_TOKEN';
 
 /** Cookie that carries the token to the SSE endpoints. */
-export const TOKEN_COOKIE = 'singbox_webui_token';
+export const TOKEN_COOKIE = 'gatehouse_token';
 
 /**
  * True when an address is only reachable from the machine itself.
@@ -62,7 +62,7 @@ export function assertAuthentication(host, token) {
   if (isLoopbackHost(host)) return;
   if (typeof token === 'string' && token.length > 0) return;
   throw new Error(
-    `отказ запуска: SINGBOX_WEBUI_HOST=${host} — не адрес обратной петли, а ${TOKEN_VAR} пуст. ` +
+    `отказ запуска: GATEHOUSE_HOST=${host} — не адрес обратной петли, а ${TOKEN_VAR} пуст. ` +
       'Редактор умеет перезапускать sing-box и показывает ключи VLESS, поэтому выставлять его ' +
       `в сеть без токена нельзя. Либо задайте ${TOKEN_VAR}, либо привяжитесь к 127.0.0.1 и ` +
       'ходите через ssh-туннель.',

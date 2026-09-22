@@ -1,5 +1,4 @@
-// CLI and tooling tests: tools/generate.mjs, tools/import-settings.mjs and the
-// byte-level acceptance tool.
+// CLI and tooling tests: tools/generate.mjs and tools/dev.mjs.
 //
 // The reference TUI (`pick_proxy`, `filter_and_select`, `ask_wqx`) is out of
 // scope, but the non-interactive CLI scenario of the reference `main()` is kept,
@@ -11,16 +10,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {describe, test} from 'node:test';
 
-import {convertSettings, importSettingsFile, run as runImport} from '../tools/import-settings.mjs';
-import {DEFAULT_PYTHON_REPO} from '../tools/compare-with-python.mjs';
 import {FI_TAG, FIXTURES_DIR, makeTempDir, NL_TAG, REPO_ROOT, writeLinksFile, writeSettings} from './helpers.mjs';
 
 const FIXTURE_SETTINGS = path.join(FIXTURES_DIR, 'settings.json');
-const FIXTURE_LINKS = path.join(FIXTURES_DIR, 'links.txt');
-const EXPECTED_CONFIG = path.join(FIXTURES_DIR, 'expected-config.json');
-
-const REFERENCE_REPO = process.env.SINGBOXTOOLS_REPO || DEFAULT_PYTHON_REPO;
-const referenceAvailable = fs.existsSync(path.join(REFERENCE_REPO, 'generate_config.py'));
+const GOLDEN_CONFIG = path.join(FIXTURES_DIR, 'golden', 'config.json');
 
 /**
  * Runs one of the tools in a child process, exactly as the acceptance commands
@@ -38,7 +31,7 @@ function runTool(tool, args) {
 }
 
 // Reference: test_main_generate_config_flag (CLI scenario of the reference main()).
-test('generate.mjs: builds the fixture config byte-identical to the reference', () => {
+test('generate.mjs: builds the fixture config byte-identical to the golden file', () => {
   const output = path.join(makeTempDir(), 'config.json');
 
   const result = runTool('generate.mjs', ['--settings', FIXTURE_SETTINGS, '--output', output]);
@@ -51,7 +44,7 @@ test('generate.mjs: builds the fixture config byte-identical to the reference', 
   assert.match(result.stdout, /\[HTTP\] apps-http/);
   assert.match(result.stdout, /auto-select \(все, кроме exclude_from_auto\)/);
   assert.match(result.stderr, /Исключены из auto-select \(1\): 🇷🇺 Russia - Moscow/);
-  assert.deepEqual(fs.readFileSync(output), fs.readFileSync(EXPECTED_CONFIG));
+  assert.deepEqual(fs.readFileSync(output), fs.readFileSync(GOLDEN_CONFIG));
 });
 
 // Reference: test_main_override_flags_switch_off_tui (the override part)
@@ -240,114 +233,61 @@ describe('generate.mjs: argument handling (NEW)', () => {
   });
 });
 
-// NEW: the one-off migration converter.
-describe('import-settings.mjs: settings.yaml -> webui.json (NEW)', () => {
-  test('convertSettings maps the known keys and warns about unknown ones', () => {
-    const {document, warnings} = convertSettings(
-      {
-        listen_ip: '127.0.0.1',
-        links_file: 'links.txt',
-        exclude_from_auto: ['🇷🇺'],
-        proxies: [{tag: 'main-socks', type: 'socks', port: 54321, sevrers: ['typo']}],
-        something_new: 1,
-      },
-      {settingsDir: '/tmp'},
-    );
-
-    assert.equal(document.version, 1);
-    assert.equal(document.active, 'default');
-    assert.deepEqual(document.profiles.default.listen_ip, '127.0.0.1');
-    assert.deepEqual(document.profiles.default.proxies, [{tag: 'main-socks', type: 'socks', port: 54321}]);
-    assert.equal(warnings.length, 2);
-    assert.match(warnings[0], /неизвестные ключи settings.yaml: something_new/);
-    assert.match(warnings[1], /proxies\[0\]: пропущены неизвестные ключи: sevrers/);
+// NEW: the dev launcher never reaches the router and refuses to start without
+// the sandbox data, printing how to create it.
+describe('dev.mjs: sandbox launcher (NEW)', () => {
+  test('the stub binaries are committed and executable', () => {
+    for (const name of ['systemctl', 'sudo']) {
+      const file = path.join(REPO_ROOT, 'dev', 'bin', name);
+      const mode = fs.statSync(file).mode;
+      assert.ok((mode & 0o111) !== 0, `${name} must be executable`);
+    }
   });
 
-  test('convertSettings refuses a non-mapping document', () => {
-    assert.throws(() => convertSettings(['nope']), /ожидается mapping/);
-  });
+  test('the sudo stub forwards its argv to the systemctl stub', () => {
+    const systemctl = path.join(REPO_ROOT, 'dev', 'bin', 'systemctl');
+    const sudo = path.join(REPO_ROOT, 'dev', 'bin', 'sudo');
 
-  test('--absolute-paths resolves links_file and output_file against the YAML', async () => {
-    const dir = makeTempDir();
-    writeLinksFile(dir);
-    const yamlPath = path.join(dir, 'settings.yaml');
-    fs.writeFileSync(
-      yamlPath,
-      'listen_ip: 127.0.0.1\nlinks_file: links.txt\noutput_file: config.json\nproxies:\n- tag: main\n  type: socks\n  port: 54321\n',
-      'utf8',
-    );
-    const output = path.join(dir, 'webui.json');
-
-    const {outputFile, warnings} = await importSettingsFile({
-      settings: yamlPath,
-      output,
-      absolutePaths: true,
+    const result = spawnSync(sudo, ['-n', systemctl, 'restart', 'gatehouse-test'], {
+      encoding: 'utf8',
     });
 
-    assert.equal(outputFile, output);
-    assert.deepEqual(warnings, []);
-    const document = JSON.parse(fs.readFileSync(output, 'utf8'));
-    assert.equal(document.profiles.default.links_file, path.join(dir, 'links.txt'));
-    assert.equal(document.profiles.default.output_file, path.join(dir, 'config.json'));
-    // webui.json is a hand-edited source file, so it keeps a trailing newline.
-    assert.ok(fs.readFileSync(output, 'utf8').endsWith('\n'));
-  });
-
-  test('the CLI wrapper reports success and exits with 0', () => {
-    const dir = makeTempDir();
-    const output = path.join(dir, 'webui.json');
-
-    const result = runTool('import-settings.mjs', [
-      '--settings',
-      path.join(FIXTURES_DIR, 'settings.yaml'),
-      '--output',
-      output,
-    ]);
-
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Готово! Настройки сконвертированы в:/);
-    assert.deepEqual(fs.readFileSync(output), fs.readFileSync(FIXTURE_SETTINGS));
+    const lines = result.stdout.trim().split('\n');
+    const sudoArgv = JSON.parse(lines[0].replace(/^fake-sudo /, ''));
+    const systemctlArgv = JSON.parse(lines[1].replace(/^fake-systemctl /, ''));
+
+    assert.deepEqual(sudoArgv, ['-n', systemctl, 'restart', 'gatehouse-test']);
+    assert.deepEqual(systemctlArgv, ['restart', 'gatehouse-test']);
   });
 
-  test('run() returns 1 instead of throwing on a bad invocation', async () => {
-    assert.equal(await runImport([]), 1);
+  test('a restart over the stubs uses the dev paths, never the real systemctl', async () => {
+    const {restartSingBox} = await import('../src/system/index.mjs');
+    const systemctl = path.join(REPO_ROOT, 'dev', 'bin', 'systemctl');
+    const sudo = path.join(REPO_ROOT, 'dev', 'bin', 'sudo');
+
+    const result = await restartSingBox({
+      env: {
+        GATEHOUSE_SUDO: sudo,
+        GATEHOUSE_SYSTEMCTL: systemctl,
+        GATEHOUSE_UNIT: 'gatehouse-test',
+      },
+    });
+
+    assert.equal(result.ok, true, result.stderr);
+    // The command the editor built names the sandbox binaries by PATH — this is
+    // what "the router is not touched" means, not the absence of an exception.
+    assert.deepEqual(result.command, [sudo, '-n', systemctl, 'restart', 'gatehouse-test']);
+    assert.match(result.stdout, /fake-systemctl \["restart","gatehouse-test"\]/);
   });
-});
 
-// Reference: test_shims_generate_config / test_legacy_shim_is_non_interactive_by_default
-// (the reference shims are replaced by the tool path used above).
-describe('integration with the reference project', () => {
-  test(
-    'the committed expected-config.json really is what the reference produces',
-    {skip: referenceAvailable ? false : `reference project not found at ${REFERENCE_REPO}`},
-    () => {
-      const dir = makeTempDir();
-      const output = path.join(dir, 'config-python.json');
-      const result = spawnSync(
-        path.join(REFERENCE_REPO, '.venv/bin/python'),
-        [
-          path.join(REFERENCE_REPO, 'generate_config.py'),
-          '--settings',
-          path.join(FIXTURES_DIR, 'settings.yaml'),
-          '--output',
-          output,
-        ],
-        {cwd: REFERENCE_REPO, encoding: 'utf8'},
-      );
-
-      assert.equal(result.status, 0, result.stderr);
-      assert.deepEqual(fs.readFileSync(output), fs.readFileSync(EXPECTED_CONFIG));
-    },
-  );
-
-  test(
-    'tools/compare-with-python.mjs reports identical bytes on the fixtures',
-    {skip: referenceAvailable ? false : `reference project not found at ${REFERENCE_REPO}`},
-    () => {
-      const result = runTool('compare-with-python.mjs', []);
-
-      assert.equal(result.status, 0, result.stderr);
-      assert.match(result.stdout, /cmp молчит: файлы идентичны побайтово/);
-    },
-  );
+  test('the anonymised samples of dev/root.example are present', () => {
+    for (const file of [
+      path.join(REPO_ROOT, 'dev', 'root.example', 'webui.json'),
+      path.join(REPO_ROOT, 'dev', 'root.example', 'etc', 'sing-box', 'config.json'),
+      path.join(REPO_ROOT, 'dev', 'root.example', 'links.txt'),
+    ]) {
+      assert.ok(fs.existsSync(file), `${path.relative(REPO_ROOT, file)} is missing`);
+    }
+  });
 });

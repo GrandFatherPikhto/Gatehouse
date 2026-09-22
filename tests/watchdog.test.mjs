@@ -514,10 +514,10 @@ describe('watchdog over HTTP', () => {
 
     const env = {
       ...fakeSystemEnv(options.system),
-      SINGBOX_WEBUI_SETTINGS: settingsFile,
-      SINGBOX_WEBUI_HOST: '127.0.0.1',
-      SINGBOX_WEBUI_PORT: '0',
-      SINGBOX_WEBUI_STATE_DIR: stateDir,
+      GATEHOUSE_SETTINGS: settingsFile,
+      GATEHOUSE_HOST: '127.0.0.1',
+      GATEHOUSE_PORT: '0',
+      GATEHOUSE_STATE_DIR: stateDir,
     };
     const {server, model, url} = await startServer({env});
 

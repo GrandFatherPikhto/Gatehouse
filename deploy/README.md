@@ -1,8 +1,8 @@
-# Развёртывание SingBoxWebUI на роутере
+# Развёртывание GateHouse на роутере
 
 Это **заготовки и порядок действий**, а не установщик. Ни один файл отсюда не
 применяется автоматически: команды выполняет владелец руками. Всё описано для
-машины, где код лежит в `/opt/sing-box-web-ui`, нода системная
+машины, где код лежит в `/opt/gatehouse`, нода системная
 (NodeSource, 22.23.2), а демон `sing-box` управляется systemd-юнитом
 `sing-box.service`.
 
@@ -10,15 +10,15 @@
 
 Два вопроса из задания, на которые этот файл не даёт ответа за владельца:
 
-1. ~~**Где лежит код.**~~ Решено: `/opt/sing-box-web-ui`, владелец `denis`.
+1. ~~**Где лежит код.**~~ Решено: `/opt/gatehouse`, владелец `denis`.
    Благодаря этому в юните включены `ProtectHome=yes` и `ProtectSystem=strict`.
    Второе делает код нередактируемым для самого сервиса, но не мешает `rsync`
    владельца: ограничение живёт в пространстве имён юнита, а не в правах на диске.
 2. **Как давать право на рестарт.** Два равнозначных варианта, оба лежат здесь:
-   * `sudoers.d-singbox-webui` + `sing-box-webui.service` — привычнее, но
+   * `sudoers.d-gatehouse` + `gatehouse.service` — привычнее, но
      `NoNewPrivileges=yes` включить нельзя: он блокирует setuid, то есть ломает
      `sudo`, а с ним и рестарт;
-   * `polkit/10-sing-box-webui.rules` + `sing-box-webui.service.polkit` — sudo не
+   * `polkit/10-gatehouse.rules` + `gatehouse.service.polkit` — sudo не
      нужен вовсе, `NoNewPrivileges=yes` включается, правило узкое (ровно
      `restart` ровно `sing-box.service`).
 
@@ -31,16 +31,16 @@
   мешает, потому что `npm ci` пишет `node_modules`, а запускать сервис будет
   `denis`, и от прав на этот каталог зависит работоспособность.
 * Каталоги под состояние и конфигурацию создаёт systemd (см. ниже) — руками их
-  создавать не надо, кроме `/etc/sing-box-webui` для `env`, если выбран этот
+  создавать не надо, кроме `/etc/gatehouse` для `env`, если выбран этот
   порядок.
 
 ## 2. Подготовка кода
 
 ```bash
-cd /opt/sing-box-web-ui
+cd /opt/gatehouse
 npm ci --prefer-offline       # .npmrc ставит maxsockets=2: холодный ci иначе
                               # уходит в ETIMEDOUT
-node --test                   # 219 прежних + тесты этапа 3, без сети и root
+node --test                   # без сети, root и sing-box
 ```
 
 `npm ci` — не `npm install`: на роутере нужен воспроизводимый набор из
@@ -51,25 +51,25 @@ node --test                   # 219 прежних + тесты этапа 3, б
 
 ```bash
 # каталог конфигурации и секреты
-sudo install -d -m 0750 -o denis -g denis /etc/sing-box-webui
-sudo cp deploy/sing-box-webui.env.example /etc/sing-box-webui/env
-sudo chown root:denis /etc/sing-box-webui/env
-sudo chmod 0640 /etc/sing-box-webui/env
-sudoedit /etc/sing-box-webui/env          # вписать токен: openssl rand -hex 32
+sudo install -d -m 0750 -o denis -g denis /etc/gatehouse
+sudo cp deploy/gatehouse.env.example /etc/gatehouse/env
+sudo chown root:denis /etc/gatehouse/env
+sudo chmod 0640 /etc/gatehouse/env
+sudoedit /etc/gatehouse/env          # вписать токен: openssl rand -hex 32
 ```
 
 `webui.json` редактор создаст сам при первом сохранении по пути
-`SINGBOX_WEBUI_SETTINGS`. Права на него редактор выставляет сам (0600), но
-каталог `/etc/sing-box-webui` должен принадлежать `denis`.
+`GATEHOUSE_SETTINGS`. Права на него редактор выставляет сам (0600), но
+каталог `/etc/gatehouse` должен принадлежать `denis`.
 
-**Токен обязателен при привязке к LAN.** Если `SINGBOX_WEBUI_HOST` не адрес
-обратной петли, а `SINGBOX_WEBUI_TOKEN` пуст, сервер **откажется стартовать** —
+**Токен обязателен при привязке к LAN.** Если `GATEHOUSE_HOST` не адрес
+обратной петли, а `GATEHOUSE_TOKEN` пуст, сервер **откажется стартовать** —
 это не предупреждение в логе, а отказ. Проверить:
 
 ```bash
-SINGBOX_WEBUI_HOST=10.95.2.1 SINGBOX_WEBUI_TOKEN= node src/web/server.mjs
-# → Ошибка: отказ запуска: SINGBOX_WEBUI_HOST=10.95.2.1 — не адрес обратной петли,
-#   а SINGBOX_WEBUI_TOKEN пуст. ...
+GATEHOUSE_HOST=10.95.2.1 GATEHOUSE_TOKEN= node src/web/server.mjs
+# → Ошибка: отказ запуска: GATEHOUSE_HOST=10.95.2.1 — не адрес обратной петли,
+#   а GATEHOUSE_TOKEN пуст. ...
 #   код возврата 1
 ```
 
@@ -92,7 +92,7 @@ sudo chown root:root /etc/sing-box/config.json
 Редактор пишет `config.json` от имени `denis`. Поэтому либо `denis` должен
 иметь право записи в каталог (например, общая группа с правом `rwx`), либо
 генерация выполняется в другой каталог и файл перекладывается отдельно. В
-заготовке юнита `SINGBOX_WEBUI_CONFIG=/etc/sing-box/config.json`, а `output_file`
+заготовке юнита `GATEHOUSE_CONFIG=/etc/sing-box/config.json`, а `output_file`
 в `webui.json` должен указывать туда же.
 
 ## 5. systemd
@@ -100,22 +100,22 @@ sudo chown root:root /etc/sing-box/config.json
 Вариант с sudo (по умолчанию):
 
 ```bash
-sudo cp deploy/sing-box-webui.service /etc/systemd/system/
-sudo install -m 0440 -o root -g root deploy/sudoers.d-singbox-webui /etc/sudoers.d/sing-box-webui
+sudo cp deploy/gatehouse.service /etc/systemd/system/
+sudo install -m 0440 -o root -g root deploy/sudoers.d-gatehouse /etc/sudoers.d/gatehouse
 sudo visudo -c                            # ОБЯЗАТЕЛЬНО: сломанный файл ломает sudo целиком
 sudo systemctl daemon-reload
-sudo systemctl enable --now sing-box-webui
-systemctl status sing-box-webui --no-pager
+sudo systemctl enable --now gatehouse
+systemctl status gatehouse --no-pager
 ```
 
 Вариант с polkit:
 
 ```bash
-sudo cp deploy/sing-box-webui.service.polkit /etc/systemd/system/sing-box-webui.service
-sudo install -m 0644 deploy/polkit/10-sing-box-webui.rules /etc/polkit-1/rules.d/
+sudo cp deploy/gatehouse.service.polkit /etc/systemd/system/gatehouse.service
+sudo install -m 0644 deploy/polkit/10-gatehouse.rules /etc/polkit-1/rules.d/
 sudo systemctl restart polkit
 sudo systemctl daemon-reload
-sudo systemctl enable --now sing-box-webui
+sudo systemctl enable --now gatehouse
 ```
 
 Проверка правила полномочий (от имени `denis`):

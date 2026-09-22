@@ -3,7 +3,7 @@
 //
 // It repeats the output shapes measured on the owner's router (see the header of
 // `src/system/index.mjs`) and nothing else: no network, no router, no root, and
-// no real daemon. The tests point `SINGBOX_WEBUI_SINGBOX` at this file.
+// no real daemon. The tests point `GATEHOUSE_SINGBOX` at this file.
 //
 // Behaviour is driven by the arguments and by the CONTENT of the config it is
 // asked to check, not by a random number: a test that sets up a failing check

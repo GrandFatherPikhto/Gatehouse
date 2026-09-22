@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/singbox-webui/schemas/webui.schema.json",
+  "$id": "https://github.com/gatehouse/schemas/webui.schema.json",
   "title": "webui.json",
   "description": "Settings of the sing-box config generator. Replaces settings.yaml of the reference implementation.",
   "type": "object",
@@ -174,7 +174,7 @@
           }
         },
         "clash_api": {
-          "description": "External HTTP API of the daemon (Clash-compatible). Off by default; disabled means config.json stays byte-identical to the reference. The secret is NEVER stored here: it comes from SINGBOX_WEBUI_API_SECRET.",
+          "description": "External HTTP API of the daemon (Clash-compatible). Off by default; disabled means config.json stays byte-identical to the reference. The secret is NEVER stored here: it comes from GATEHOUSE_API_SECRET.",
           "type": "object",
           "additionalProperties": false,
           "properties": {

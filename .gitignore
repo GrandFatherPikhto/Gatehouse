@@ -6,6 +6,13 @@ node_modules/
 config.json
 webui.json
 *.json.bak
+# ...except the golden acceptance fixture: without it a clean clone has nothing
+# to compare its own generation against. The rule is not anchored, so it matches
+# at any depth — the negation has to be as explicit about the path.
+!tests/fixtures/golden/config.json
+# The anonymised samples of the dev sandbox are committed for the same reason.
+!dev/root.example/etc/sing-box/config.json
+!dev/root.example/webui.json
 
 # --- Local data ------------------------------------------------------------
 # Subscription dumps and personal server lists never go to the repository.
@@ -13,11 +20,19 @@ webui.json
 # ...except the synthetic test fixture: without it the suite cannot run
 # from a clean clone (this exact problem already bit the Python project).
 !tests/fixtures/links.txt
+# ...and the sandbox sample, which is synthetic and safe to commit.
+!dev/root.example/links.txt
 
 # Runtime state of the web editor: snapshots of webui.json taken before every
-# save. The location is configurable (SINGBOX_WEBUI_STATE_DIR); this is the
+# save. The location is configurable (GATEHOUSE_STATE_DIR); this is the
 # default one, and it belongs to the machine, not to the repository.
 .state/
+
+# --- Development sandbox ---------------------------------------------------
+# Real copies of the owner's config.json and webui.json, and of the links file,
+# used by `npm run dev`. They carry keys and personal server lists, so they
+# never go to the repository; dev/root.example/ holds the anonymised samples.
+dev/root/
 
 # --- OS / IDE --------------------------------------------------------------
 .DS_Store

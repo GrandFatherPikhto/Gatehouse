@@ -315,7 +315,12 @@ export function buildPanel(model, key, extra = {}) {
         ...base,
         title: 'Журнал sing-box',
         unit: system.unit ?? 'sing-box',
-        lines: system.journalLines ?? 50,
+        lines: system.journalLines ?? 200,
+        level: system.journalLevel ?? 'info',
+        levels: system.journalLevels ?? [],
+        // The snapshot is fetched by the ROUTE and handed in as `extra.journal`;
+        // this builder only arranges what it was given, it never runs a command.
+        snapshot: extra.journal ?? null,
       };
 
     case 'tests': {

@@ -18,11 +18,9 @@ import {describe, test} from 'node:test';
 import {
   DEFAULT_JOURNAL_LINES,
   DEFAULT_TEST_CONCURRENCY,
-  SystemError,
   checkConfig,
-  followJournal,
   geositeLookup,
-  journalStreamCount,
+  levelPriority,
   mapWithConcurrency,
   parseJournal,
   parseJournalLine,
@@ -65,7 +63,7 @@ describe('system boundary: shape of the module', () => {
     assert.equal(config.testUrl, 'https://ipinfo.io');
     assert.equal(config.testConcurrency, DEFAULT_TEST_CONCURRENCY);
 
-    const overridden = systemConfig({SINGBOX_WEBUI_UNIT: 'sing-box-test', SINGBOX_WEBUI_TEST_CONCURRENCY: '2'});
+    const overridden = systemConfig({GATEHOUSE_UNIT: 'sing-box-test', GATEHOUSE_TEST_CONCURRENCY: '2'});
     assert.equal(overridden.unit, 'sing-box-test');
     assert.equal(overridden.testConcurrency, 2);
   });
@@ -269,7 +267,7 @@ describe('checkConfig', () => {
 
   test('a missing binary is reported, not thrown', async () => {
     const result = await checkConfig('/tmp/x.json', {
-      env: fakeSystemEnv({SINGBOX_WEBUI_SINGBOX: '/nonexistent/sing-box'}),
+      env: fakeSystemEnv({GATEHOUSE_SINGBOX: '/nonexistent/sing-box'}),
     });
 
     assert.equal(result.ok, false);
@@ -289,16 +287,16 @@ describe('restartSingBox', () => {
     // The whole point: the sudoers rule matches this exact command line.
     assert.deepEqual(JSON.parse(fs.readFileSync(log, 'utf8').trim()), [
       '-n',
-      env.SINGBOX_WEBUI_SYSTEMCTL,
+      env.GATEHOUSE_SYSTEMCTL,
       'restart',
       'sing-box',
     ]);
   });
 
-  test('SINGBOX_WEBUI_SUDO=none skips sudo and calls systemctl directly', async () => {
+  test('GATEHOUSE_SUDO=none skips sudo and calls systemctl directly', async () => {
     const dir = makeTempDir();
     const log = path.join(dir, 'argv.log');
-    const env = fakeSystemEnv({SINGBOX_WEBUI_SUDO: 'none', FAKE_SYSTEMCTL_ARGV_LOG: log});
+    const env = fakeSystemEnv({GATEHOUSE_SUDO: 'none', FAKE_SYSTEMCTL_ARGV_LOG: log});
 
     await restartSingBox({env});
 
@@ -326,65 +324,47 @@ describe('tailJournal', () => {
     // Every seventh line of the fake is a warning, so levels really are parsed.
     assert.equal(result.entries[0].level, 'warning');
     assert.equal(result.entries[1].level, 'info');
+    assert.equal(result.unit, 'sing-box');
+    assert.equal(result.level, null, 'no level means no filter');
   });
 
   test('honours an explicit line count', async () => {
     const result = await tailJournal(3, {env: fakeSystemEnv()});
     assert.equal(result.entries.length, 3);
   });
-});
 
-describe('followJournal', () => {
-  test('streams parsed entries, then stop() kills the child', async () => {
-    const entries = [];
-    const stream = followJournal({
-      env: fakeSystemEnv(),
-      lines: 1,
-      onEntry: (entry) => entries.push(entry),
-    });
+  test('the minimum level keeps that level and everything more severe', async () => {
+    // 14 lines of the fake: indices 0 and 7 are warnings (priority 4), the other
+    // twelve are info (6). A minimum of `warning` drops the info lines.
+    const all = await tailJournal(14, {env: fakeSystemEnv()});
+    assert.equal(all.entries.length, 14);
+    assert.equal(all.entries.filter((entry) => entry.level === 'info').length, 12);
 
-    const child = stream.child;
-    const pid = child.pid;
-
-    // The `finally` is not decoration: a failed assertion in this block used to
-    // leave `journalctl -f` running, and the test process with it.
-    try {
-      assert.equal(journalStreamCount(), 1);
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      assert.ok(entries.length >= 2, 'the fake keeps printing');
-      assert.equal(entries[0].identifier, 'sing-box');
-      assert.match(entries[0].message, /follow line \d+/, 'decoded, not a blank line');
-      assert.ok(!entries[0].message.includes('\u001b'), 'the colour codes are stripped');
-    } finally {
-      stream.stop();
-    }
-
-    await new Promise((resolve) => {
-      if (child.exitCode !== null || child.signalCode !== null) resolve();
-      else child.on('exit', resolve);
-    });
-
-    assert.equal(journalStreamCount(), 0, 'the stream is released');
-    // The fake traps SIGTERM and exits cleanly, so the proof is the pid, not the
-    // signal name: the process must be gone.
-    assert.throws(
-      () => process.kill(pid, 0),
-      /ESRCH/,
-      'the journalctl -f child was killed, not left running',
-    );
+    const warnings = await tailJournal(14, {env: fakeSystemEnv(), level: 'warning'});
+    assert.equal(warnings.entries.length, 2);
+    assert.deepEqual([...new Set(warnings.entries.map((entry) => entry.level))], ['warning']);
+    assert.equal(warnings.level, 'warning');
   });
 
-  test('only one live stream is allowed by default', () => {
-    const first = followJournal({env: fakeSystemEnv()});
-    try {
-      assert.throws(
-        () => followJournal({env: fakeSystemEnv()}),
-        (error) => error instanceof SystemError && /одновременных потоков/.test(error.message),
-      );
-    } finally {
-      first.stop();
-    }
-    assert.equal(journalStreamCount(), 0);
+  test('an unknown level name does not filter', async () => {
+    const result = await tailJournal(5, {env: fakeSystemEnv(), level: 'nope'});
+    assert.equal(result.entries.length, 5);
+  });
+
+  test('the unit may be overridden per request', async () => {
+    const result = await tailJournal(2, {env: fakeSystemEnv(), unit: 'gatehouse-test'});
+    assert.equal(result.unit, 'gatehouse-test');
+  });
+});
+
+describe('levelPriority', () => {
+  test('maps a level name to its syslog priority, unknown names to null', () => {
+    assert.equal(levelPriority('emerg'), 0);
+    assert.equal(levelPriority('info'), 6);
+    assert.equal(levelPriority('debug'), 7);
+    assert.equal(levelPriority('INFO'), 6, 'the name is case-insensitive');
+    assert.equal(levelPriority('nope'), null);
+    assert.equal(levelPriority(undefined), null);
   });
 });
 
@@ -469,7 +449,7 @@ describe('mass run: concurrency and order', () => {
     const seen = [];
 
     const {results, concurrency} = await testOutbounds(['a', 'b', 'c', 'd', 'e'], {
-      env: fakeSystemEnv({SINGBOX_WEBUI_TEST_CONCURRENCY: '2'}),
+      env: fakeSystemEnv({GATEHOUSE_TEST_CONCURRENCY: '2'}),
       onResult: (result) => seen.push(result.tag),
       runner: async (tag) => {
         active += 1;

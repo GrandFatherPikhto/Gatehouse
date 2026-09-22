@@ -814,7 +814,7 @@ export class ProjectModel {
 
   /**
    * Writes the API form into the active profile. The SECRET is deliberately not a
-   * field here: it comes from `SINGBOX_WEBUI_API_SECRET` and never lands in
+   * field here: it comes from `GATEHOUSE_API_SECRET` and never lands in
    * `webui.json`, its snapshots or a backup.
    *
    * @param {{enabled?: boolean, controller?: string}} values

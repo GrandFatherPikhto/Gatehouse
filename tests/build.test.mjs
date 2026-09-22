@@ -2,8 +2,8 @@
 //
 // Ported from tests/test_sing_box_manager.py of the reference project; the name
 // of the original Python test stands above each case. Cases marked NEW cover
-// what the reference suite did not need: byte-level equality with the output of
-// the reference generator, and the key order that equality depends on.
+// what the reference suite did not need: byte-level equality with the committed
+// golden file, and the key order that equality depends on.
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -19,7 +19,7 @@ import {validateProxies} from '../src/core/validate.mjs';
 
 const FIXTURE_SETTINGS = path.join(FIXTURES_DIR, 'settings.json');
 const FIXTURE_LINKS = path.join(FIXTURES_DIR, 'links.txt');
-const EXPECTED_CONFIG = path.join(FIXTURES_DIR, 'expected-config.json');
+const GOLDEN_CONFIG = path.join(FIXTURES_DIR, 'golden', 'config.json');
 
 /** Reference: the `_proxy(**overrides)` helper of the Python test file. */
 function proxy(overrides = {}) {
@@ -231,33 +231,25 @@ describe('buildConfig: key order matches the reference (NEW)', () => {
   });
 });
 
-// NEW: the automated half of the acceptance criterion — the paired fixture must
-// come out byte for byte identical to the output of the reference generator.
-describe('buildConfig: byte-identical to the reference output (NEW)', () => {
-  test('stringifyConfig reproduces tests/fixtures/expected-config.json', () => {
+// NEW: the automated half of the acceptance criterion — the generation from the
+// fixture model must come out byte for byte identical to the committed golden
+// file. An intentional change to the output updates the fixture in the same
+// commit, so the difference is visible in review.
+describe('buildConfig: byte-identical to the golden file (NEW)', () => {
+  test('stringifyConfig reproduces tests/fixtures/golden/config.json', () => {
     const settings = loadProfileSettings(FIXTURE_SETTINGS).settings;
     const [config] = buildConfig(settings, parseLinks(FIXTURE_LINKS), '127.0.0.1');
-    const expected = fs.readFileSync(EXPECTED_CONFIG, 'utf8');
+    const golden = fs.readFileSync(GOLDEN_CONFIG, 'utf8');
 
-    assert.equal(stringifyConfig(config), expected);
-    assert.equal(Buffer.byteLength(expected, 'utf8'), 2704);
+    assert.equal(stringifyConfig(config), golden);
+    assert.equal(Buffer.byteLength(golden, 'utf8'), 2704, 'the format invariant: 2704 bytes');
   });
 
-  test('the reference produces no trailing newline, and neither do we', () => {
-    const expected = fs.readFileSync(EXPECTED_CONFIG, 'utf8');
+  test('the golden file has no trailing newline, and neither do we', () => {
+    const golden = fs.readFileSync(GOLDEN_CONFIG, 'utf8');
 
-    assert.ok(!expected.endsWith('\n'));
+    assert.ok(!golden.endsWith('\n'));
     assert.ok(!stringifyConfig({}).endsWith('\n'));
-  });
-
-  test('the converter keeps settings.yaml and settings.json in sync', async () => {
-    const {convertSettings} = await import('../tools/import-settings.mjs');
-    const {parse: parseYaml} = await import('yaml');
-    const yamlText = fs.readFileSync(path.join(FIXTURES_DIR, 'settings.yaml'), 'utf8');
-    const {document} = convertSettings(parseYaml(yamlText), {settingsDir: FIXTURES_DIR});
-    const committed = fs.readFileSync(FIXTURE_SETTINGS, 'utf8');
-
-    assert.equal(`${JSON.stringify(document, null, 2)}\n`, committed);
   });
 });
 

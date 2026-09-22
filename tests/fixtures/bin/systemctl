@@ -2,7 +2,7 @@
 // Fake `systemctl`, doubling as the `sudo` stand-in of the tests.
 //
 // `restartSingBox` runs `sudo -n <systemctl> restart sing-box`. Pointing both
-// `SINGBOX_WEBUI_SUDO` and `SINGBOX_WEBUI_SYSTEMCTL` at this file makes the argv
+// `GATEHOUSE_SUDO` and `GATEHOUSE_SYSTEMCTL` at this file makes the argv
 // observable without touching the real systemd, and keeps the test suite free of
 // `sudo` and of root.
 //

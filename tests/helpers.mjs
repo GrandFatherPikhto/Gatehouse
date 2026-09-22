@@ -154,7 +154,7 @@ export function ensureFakeBins() {
 /**
  * Environment for the system layer, pointed at the fakes of `tests/fixtures/bin`.
  *
- * `SINGBOX_WEBUI_SUDO` points at the fake `systemctl`: `restartSingBox` runs
+ * `GATEHOUSE_SUDO` points at the fake `systemctl`: `restartSingBox` runs
  * `sudo -n <systemctl> restart <unit>`, and the tests observe its argv without
  * touching sudo or systemd.
  *
@@ -164,13 +164,13 @@ export function ensureFakeBins() {
 export function fakeSystemEnv(overrides = {}) {
   const bin = ensureFakeBins();
   return {
-    SINGBOX_WEBUI_SINGBOX: path.join(bin, 'sing-box'),
-    SINGBOX_WEBUI_SYSTEMCTL: path.join(bin, 'systemctl'),
-    SINGBOX_WEBUI_JOURNALCTL: path.join(bin, 'journalctl'),
-    SINGBOX_WEBUI_CURL: path.join(bin, 'curl'),
-    SINGBOX_WEBUI_SUDO: path.join(bin, 'systemctl'),
-    SINGBOX_WEBUI_UNIT: 'sing-box',
-    SINGBOX_WEBUI_TEST_URL: 'https://ipinfo.io',
+    GATEHOUSE_SINGBOX: path.join(bin, 'sing-box'),
+    GATEHOUSE_SYSTEMCTL: path.join(bin, 'systemctl'),
+    GATEHOUSE_JOURNALCTL: path.join(bin, 'journalctl'),
+    GATEHOUSE_CURL: path.join(bin, 'curl'),
+    GATEHOUSE_SUDO: path.join(bin, 'systemctl'),
+    GATEHOUSE_UNIT: 'sing-box',
+    GATEHOUSE_TEST_URL: 'https://ipinfo.io',
     ...overrides,
   };
 }

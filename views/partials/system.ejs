@@ -78,6 +78,14 @@
   <% if (panel.lastRestart.error) { %>
     <p class="error"><%= panel.lastRestart.error %></p>
   <% } %>
+  <%# «Показать почему» стоит там, где поломка замечена, а не в отдельном
+      разделе: снимок последних строк открывается одним переходом. %>
+  <% if (!panel.lastRestart.ok) { %>
+    <p class="hint">
+      <a href="/panel/journal?unit=<%= encodeURIComponent(panel.unit) %>&level=warning">Показать журнал</a>
+      — последние строки юнита, чтобы понять, почему демон не поднялся.
+    </p>
+  <% } %>
 <% } %>
 
 <h3>3. Откат предыдущего конфига</h3>

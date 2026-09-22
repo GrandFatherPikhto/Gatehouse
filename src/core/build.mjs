@@ -18,7 +18,7 @@ import {asList, requireMapping, urltestBlock, validateExclude, validateProxies} 
  */
 export const DEFAULT_CLASH_CONTROLLER = '127.0.0.1:9090';
 /** Environment variable that carries the API secret. Never stored in webui.json. */
-export const API_SECRET_VAR = 'SINGBOX_WEBUI_API_SECRET';
+export const API_SECRET_VAR = 'GATEHOUSE_API_SECRET';
 /** Hosts the loopback-only external_controller may use. */
 const LOOPBACK_HOSTS = Object.freeze(['127.0.0.1']);
 
@@ -134,11 +134,11 @@ export function buildRules(proxies, routes, knownOutbounds, warnings = []) {
  *     WAN address lives on the same host, so a `0.0.0.0` controller would be full
  *     control of the daemon from the internet;
  *   * the secret must be non-empty, and it is passed in from the environment
- *     (`SINGBOX_WEBUI_API_SECRET`) so that it never lands in `webui.json`, its
+ *     (`GATEHOUSE_API_SECRET`) so that it never lands in `webui.json`, its
  *     snapshots or a backup.
  *
  * @param {unknown} clashApi The `clash_api` section of the effective settings.
- * @param {string} secret Value of `SINGBOX_WEBUI_API_SECRET`.
+ * @param {string} secret Value of `GATEHOUSE_API_SECRET`.
  * @returns {{external_controller: string, secret: string}|null}
  */
 export function clashApiBlock(clashApi, secret) {
@@ -181,7 +181,7 @@ export function clashApiBlock(clashApi, secret) {
  * @param {string} listenIp
  * @param {string[]} [warnings] Collector for non-fatal problems.
  * @param {{apiSecret?: string}} [options] `apiSecret` is the value of
- *   `SINGBOX_WEBUI_API_SECRET`; only read when `clash_api.enabled` is true.
+ *   `GATEHOUSE_API_SECRET`; only read when `clash_api.enabled` is true.
  * @returns {[Record<string, unknown>, Record<string, unknown>]}
  */
 export function buildConfig(settings, outbounds, listenIp, warnings = [], options = {}) {

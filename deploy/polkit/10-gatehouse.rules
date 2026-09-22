@@ -1,4 +1,4 @@
-// SingBoxWebUI: вариант на polkit вместо sudo.
+// GateHouse: вариант на polkit вместо sudo.
 //
 // Зачем: `sudo` работает через setuid, а setuid ломается от
 // `NoNewPrivileges=yes`. `systemctl` ходит к systemd по D-Bus, setuid там не
@@ -6,12 +6,12 @@
 // `NoNewPrivileges=yes` и перезапускать демон без sudoers вовсе.
 //
 // Установка:
-//   sudo install -m 0644 deploy/polkit/10-sing-box-webui.rules \
-//        /etc/polkit-1/rules.d/10-sing-box-webui.rules
+//   sudo install -m 0644 deploy/polkit/10-gatehouse.rules \
+//        /etc/polkit-1/rules.d/10-gatehouse.rules
 //   sudo systemctl restart polkit
 //
 // В юните при этом варианте должно стоять:
-//   Environment=SINGBOX_WEBUI_SUDO=none
+//   Environment=GATEHOUSE_SUDO=none
 //
 // Правило разрешает РОВНО restart РОВНО юнита sing-box.service от имени denis.
 // Проверка (от имени denis):

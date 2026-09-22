@@ -14,7 +14,7 @@
 //
 // The module stays testable on a desktop where sing-box is not installed, without
 // a router, without root and without network: the binary paths arrive through
-// `SINGBOX_WEBUI_*` variables (or an explicit options object), and the test suite
+// `GATEHOUSE_*` variables (or an explicit options object), and the test suite
 // points them at the shell scripts of `tests/fixtures/bin/`.
 //
 // Signatures of `restartSingBox`, `checkConfig`, `tailJournal`, `testOutbound`
@@ -55,8 +55,7 @@
 // deliberately has no panel for it. `geositeLookup` therefore only runs the
 // command and turns "no database" into a sentence instead of a bare FATAL.
 
-import {execFile, spawn} from 'node:child_process';
-import readline from 'node:readline';
+import {execFile} from 'node:child_process';
 
 /** Default path of the sing-box binary. */
 export const DEFAULT_SINGBOX_PATH = '/usr/local/bin/sing-box';
@@ -89,10 +88,6 @@ export const DEFAULT_TEST_TIMEOUT = 8000;
 export const DEFAULT_TEST_CONCURRENCY = 4;
 /** Default number of journal lines `tailJournal` reads. */
 export const DEFAULT_JOURNAL_LINES = 200;
-/** Default number of journal lines a live stream replays before following. */
-export const DEFAULT_JOURNAL_STREAM_LINES = 50;
-/** Default cap of simultaneous live journal streams; one browser tab needs one. */
-export const DEFAULT_MAX_JOURNAL_STREAMS = 1;
 
 /** Marker the stage-2 stubs carried. Kept so an old caller can still detect it. */
 export const STAGE_MARKER = 'не реализовано (этап 3)';
@@ -157,17 +152,17 @@ export function systemConfig(env = process.env, overrides = {}) {
   };
 
   return Object.freeze({
-    singbox: read('SINGBOX_WEBUI_SINGBOX', DEFAULT_SINGBOX_PATH),
-    curl: read('SINGBOX_WEBUI_CURL', DEFAULT_CURL_PATH),
-    systemctl: read('SINGBOX_WEBUI_SYSTEMCTL', DEFAULT_SYSTEMCTL_PATH),
-    journalctl: read('SINGBOX_WEBUI_JOURNALCTL', DEFAULT_JOURNALCTL_PATH),
-    sudo: read('SINGBOX_WEBUI_SUDO', DEFAULT_SUDO_PATH),
-    unit: read('SINGBOX_WEBUI_UNIT', DEFAULT_UNIT),
-    testUrl: read('SINGBOX_WEBUI_TEST_URL', DEFAULT_TEST_URL),
-    configPath: read('SINGBOX_WEBUI_CONFIG', DEFAULT_CONFIG_PATH),
-    testTimeout: number(overrides.testTimeout ?? env.SINGBOX_WEBUI_TEST_TIMEOUT, DEFAULT_TEST_TIMEOUT),
+    singbox: read('GATEHOUSE_SINGBOX', DEFAULT_SINGBOX_PATH),
+    curl: read('GATEHOUSE_CURL', DEFAULT_CURL_PATH),
+    systemctl: read('GATEHOUSE_SYSTEMCTL', DEFAULT_SYSTEMCTL_PATH),
+    journalctl: read('GATEHOUSE_JOURNALCTL', DEFAULT_JOURNALCTL_PATH),
+    sudo: read('GATEHOUSE_SUDO', DEFAULT_SUDO_PATH),
+    unit: read('GATEHOUSE_UNIT', DEFAULT_UNIT),
+    testUrl: read('GATEHOUSE_TEST_URL', DEFAULT_TEST_URL),
+    configPath: read('GATEHOUSE_CONFIG', DEFAULT_CONFIG_PATH),
+    testTimeout: number(overrides.testTimeout ?? env.GATEHOUSE_TEST_TIMEOUT, DEFAULT_TEST_TIMEOUT),
     testConcurrency: number(
-      overrides.concurrency ?? env.SINGBOX_WEBUI_TEST_CONCURRENCY,
+      overrides.concurrency ?? env.GATEHOUSE_TEST_CONCURRENCY,
       DEFAULT_TEST_CONCURRENCY,
     ),
   });
@@ -331,7 +326,7 @@ function balancedObject(text) {
 }
 
 /** syslog priorities of systemd, as `PRIORITY` carries them. */
-const PRIORITY_LEVELS = Object.freeze([
+export const PRIORITY_LEVELS = Object.freeze([
   'emerg',
   'alert',
   'crit',
@@ -353,6 +348,22 @@ export function priorityLevel(priority) {
   const index = Number(priority);
   if (!Number.isInteger(index) || index < 0 || index >= PRIORITY_LEVELS.length) return 'info';
   return PRIORITY_LEVELS[index];
+}
+
+/**
+ * Maps a level name to its syslog priority, or `null` for an unknown name.
+ *
+ * The priority counts DOWN from the most severe: `emerg` is 0 and `debug` is 7,
+ * so "minimum level `info`" means "priority at most 6". `null` (an unknown or
+ * absent name) means "do not filter".
+ *
+ * @param {unknown} level
+ * @returns {number|null}
+ */
+export function levelPriority(level) {
+  const name = typeof level === 'string' ? level.trim().toLowerCase() : '';
+  const index = PRIORITY_LEVELS.indexOf(name);
+  return index < 0 ? null : index;
 }
 
 /**
@@ -522,7 +533,7 @@ export async function restartSingBox(options = {}) {
   const systemctl = options.systemctl ?? config.systemctl;
   const unit = options.unit ?? config.unit;
 
-  // `SINGBOX_WEBUI_SUDO=none` means "do not escalate": the polkit rule grants the
+  // `GATEHOUSE_SUDO=none` means "do not escalate": the polkit rule grants the
   // restart over D-Bus, and `NoNewPrivileges=yes` would block the setuid of
   // `sudo` anyway. Both deployment variants are files of `deploy/`.
   const useSudo = sudoSetting !== 'none' && sudoSetting !== '';
@@ -551,21 +562,38 @@ export async function restartSingBox(options = {}) {
 }
 
 /**
- * Reads the tail of the daemon log once.
+ * Reads a one-shot snapshot of the daemon log.
+ *
+ * This used to be the fetch half of a live `journalctl -f` stream. The stream was
+ * removed on 22.09.2026: it needed a counter, a cap, a 409 refusal and a child
+ * killed on `req.on('close')`, while the real scenario is "something broke, show
+ * me why" — a snapshot. One `execFile`, no state and no process left behind.
  *
  * `journalctl` needs no privileges for the unit log as long as the account may
  * read the journal (the owner is in `adm`), so the editor never escalates here.
+ * The unit may be overridden per request (a future tunnel unit has its own
+ * journal); `level` is the minimum syslog level, so a lower priority number —
+ * a more severe message — is kept.
  *
  * @param {number} [lines]
  * @param {{env?: Record<string, string|undefined>, timeout?: number,
- *   signal?: AbortSignal}} [options]
+ *   signal?: AbortSignal, unit?: string, level?: string}} [options]
  * @returns {Promise<{ok: boolean, code: number|null, stdout: string, stderr: string,
- *   error: string|null, entries: Array<Record<string, unknown>>, lines: number}>}
+ *   error: string|null, entries: Array<Record<string, unknown>>, lines: number,
+ *   unit: string, level: string|null}>}
  */
 export async function tailJournal(lines = DEFAULT_JOURNAL_LINES, options = {}) {
   const config = systemConfig(options.env, options);
   const count = positive(lines, DEFAULT_JOURNAL_LINES);
-  const args = ['-u', config.unit, '-n', String(count), '-o', 'json', '--no-pager'];
+  const unit =
+    typeof options.unit === 'string' && options.unit.trim().length > 0
+      ? options.unit.trim()
+      : config.unit;
+  const level = typeof options.level === 'string' && options.level.trim().length > 0
+    ? options.level.trim().toLowerCase()
+    : null;
+  const threshold = levelPriority(level);
+  const args = ['-u', unit, '-n', String(count), '-o', 'json', '--no-pager'];
 
   const result = await run(config.journalctl, args, {
     timeout: positive(options.timeout, config.testTimeout * 2),
@@ -573,100 +601,24 @@ export async function tailJournal(lines = DEFAULT_JOURNAL_LINES, options = {}) {
     signal: options.signal,
   });
 
+  // `priority === null` means the field was missing or unparsable: such an entry
+  // is kept rather than dropped, because a level filter may not hide a line it
+  // cannot classify.
+  const entries = parseJournal(result.stdout).filter(
+    (entry) => threshold === null || entry.priority === null || entry.priority <= threshold,
+  );
+
   return {
     ok: result.ok,
     code: result.code,
     stdout: result.stdout,
     stderr: result.stderr,
     error: result.error,
-    entries: parseJournal(result.stdout),
+    entries,
     lines: count,
+    unit,
+    level,
   };
-}
-
-/** How many live journal streams are open in this process. */
-let activeJournalStreams = 0;
-
-/** @returns {number} Live streams, exposed for the tests and for the route. */
-export function journalStreamCount() {
-  return activeJournalStreams;
-}
-
-/**
- * Follows the daemon log live (`journalctl -f`), one line at a time.
- *
- * The caller owns the process: it has to call `stop()` when the browser goes
- * away, otherwise a `journalctl -f` stays behind every page reload. That is why
- * this function returns a handle and not a promise, and why the default cap is
- * one stream.
- *
- * A daemon restart does not break the stream: the unit journal is a file, and
- * `journalctl -f` keeps reading it across the restart.
- *
- * @param {{env?: Record<string, string|undefined>, lines?: number,
- *   maxStreams?: number, onEntry?: (entry: Record<string, unknown>) => void,
- *   onRaw?: (line: string) => void, onStderr?: (text: string) => void,
- *   onExit?: () => void}} [options]
- * @returns {{child: import('node:child_process').ChildProcess, stop: () => void,
- *   args: string[], unit: string}}
- * @throws {SystemError} When the configured number of streams is already running.
- */
-export function followJournal(options = {}) {
-  const config = systemConfig(options.env, options);
-  const maxStreams = positive(options.maxStreams, DEFAULT_MAX_JOURNAL_STREAMS);
-  if (activeJournalStreams >= maxStreams) {
-    throw new SystemError(
-      `слишком много одновременных потоков журнала (разрешено: ${maxStreams}); закройте лишние вкладки`,
-    );
-  }
-
-  const lines = positive(options.lines, DEFAULT_JOURNAL_STREAM_LINES);
-  const args = ['-u', config.unit, '-f', '-n', String(lines), '-o', 'json', '--no-pager'];
-  const child = spawn(config.journalctl, args, {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: {...process.env, ...options.env},
-    windowsHide: true,
-  });
-
-  activeJournalStreams += 1;
-  let stopped = false;
-
-  const stop = () => {
-    if (stopped) return;
-    stopped = true;
-    activeJournalStreams -= 1;
-    if (!child.killed) child.kill('SIGTERM');
-  };
-
-  child.on('exit', () => {
-    if (!stopped) {
-      stopped = true;
-      activeJournalStreams -= 1;
-    }
-    if (typeof options.onExit === 'function') options.onExit();
-  });
-  child.on('error', (error) => {
-    if (typeof options.onStderr === 'function') options.onStderr(error.message);
-  });
-
-  const reader = readline.createInterface({input: child.stdout});
-  reader.on('line', (line) => {
-    const entry = parseJournalLine(line);
-    if (entry !== null) {
-      if (typeof options.onEntry === 'function') options.onEntry(entry);
-      return;
-    }
-    if (typeof options.onRaw === 'function') options.onRaw(line);
-  });
-
-  if (child.stderr) {
-    const errors = readline.createInterface({input: child.stderr});
-    errors.on('line', (line) => {
-      if (typeof options.onStderr === 'function') options.onStderr(line);
-    });
-  }
-
-  return {child, stop, args, unit: config.unit};
 }
 
 /**
