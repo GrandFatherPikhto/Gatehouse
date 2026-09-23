@@ -33,10 +33,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import {ConfigError, isMapping} from './errors.mjs';
+import {DEFAULT_PROVIDERS_ROOT} from './paths.mjs';
 import {decodeUtf8Ignore, parseLinks, parseVless, pythonStrip} from './vless.mjs';
 
-/** Default root of the provider folders. */
-export const DEFAULT_PROVIDERS_ROOT = '/var/lib/gatehouse/providers';
+// The default root now lives in `paths.mjs`, next to the tunnel directory, so
+// the build keeps its directories in one place. The name stays published here:
+// the model and the CLI keep importing it from the reader that uses it.
+export {DEFAULT_PROVIDERS_ROOT};
 
 /** File a provider folder carries its VLESS links in. */
 export const LINKS_FILENAME = 'links.txt';
@@ -56,7 +59,8 @@ export const PROVIDER_LABEL_SEPARATOR = ' · ';
 export const PROVIDER_ID_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
 
 /**
- * Resolves the providers root. The order is deliberate:
+ * Resolves the providers root AND says where it came from. The order is
+ * deliberate:
  *
  *   1. `GATEHOUSE_PROVIDERS` — the one root the owner names, and the only one the
  *      router ever uses (the unit sets it);
@@ -65,23 +69,40 @@ export const PROVIDER_ID_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
  *      mirrors the old `<settingsDir>/sources` rule;
  *   3. the build default `/var/lib/gatehouse/providers`.
  *
- * The variable is read from the process environment because the core and the CLI
- * must agree; the web layer may still override it per instance.
+ * Both answers come from ONE function on purpose: the panel prints the source
+ * next to the resolved path, and a second implementation of the same three rules
+ * is a second chance for the two to disagree. The variable is read from the
+ * process environment because the core and the CLI must agree; the web layer may
+ * still override the root per instance.
+ *
+ * @param {string} [settingsDir] Directory of `webui.json`, for rule 2.
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {{root: string, source: 'GATEHOUSE_PROVIDERS'|'рядом с webui.json'|'умолчание'}}
+ */
+export function providersRootInfo(settingsDir = process.cwd(), env = process.env) {
+  const configured = env.GATEHOUSE_PROVIDERS;
+  if (typeof configured === 'string' && configured.length > 0) {
+    return {root: configured, source: 'GATEHOUSE_PROVIDERS'};
+  }
+  const beside = path.join(settingsDir, 'providers');
+  try {
+    if (fs.statSync(beside).isDirectory()) return {root: beside, source: 'рядом с webui.json'};
+  } catch {
+    // no folder next to the settings: fall through to the build default
+  }
+  return {root: DEFAULT_PROVIDERS_ROOT, source: 'умолчание'};
+}
+
+/**
+ * The resolved root alone. Kept because callers that only need the path — and
+ * the tests — should not have to unwrap the pair.
  *
  * @param {string} [settingsDir] Directory of `webui.json`, for rule 2.
  * @param {Record<string, string|undefined>} [env]
  * @returns {string}
  */
 export function resolveProvidersRoot(settingsDir = process.cwd(), env = process.env) {
-  const configured = env.GATEHOUSE_PROVIDERS;
-  if (typeof configured === 'string' && configured.length > 0) return configured;
-  const beside = path.join(settingsDir, 'providers');
-  try {
-    if (fs.statSync(beside).isDirectory()) return beside;
-  } catch {
-    // no folder next to the settings: fall through to the build default
-  }
-  return DEFAULT_PROVIDERS_ROOT;
+  return providersRootInfo(settingsDir, env).root;
 }
 
 /**

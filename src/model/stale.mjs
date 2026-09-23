@@ -190,8 +190,8 @@ function node(key, title, kind, extra = {}) {
 }
 
 /**
- * Diagnoses of one provider folder, keyed by the state the sources reader
- * reports. The difference runs on the SOURCE, not on the number: a folder that
+ * Diagnoses of one provider folder, keyed by the state the provider reader
+ * reports. The difference runs on the PROVIDER, not on the number: a folder that
  * was read and happens to list none of the proxies' servers still produces the
  * per-proxy fourth message, while a folder that was never read produces one of
  * the first three and nothing else.
@@ -200,8 +200,8 @@ function node(key, title, kind, extra = {}) {
  * @returns {string} Empty for a readable folder.
  */
 export function providerDiagnosis(provider) {
-  // The noun follows the shape of the origin: a links file, a tunnels directory,
-  // or a legacy folder under the sources root.
+  // The noun follows the shape of the entry: a stray file in the root, a folder
+  // that is not there, or a folder the process may not read.
   const noun =
     provider.type === 'file' ? ['файл', 'не найден', 'недоступен']
       : provider.type === 'folder' ? ['папка', 'не найдена', 'недоступна']

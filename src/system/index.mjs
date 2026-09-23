@@ -58,6 +58,7 @@
 import {execFile} from 'node:child_process';
 import fs from 'node:fs';
 
+import {DEFAULT_AMNEZIA_DIR, DEFAULT_PROVIDERS_ROOT} from '../core/paths.mjs';
 import {tunnelStartupGuard} from './tunnel-file.mjs';
 
 /** Default path of the sing-box binary. */
@@ -94,8 +95,12 @@ export const TUNNEL_UNIT_PREFIX = 'gatehouse-tunnel@';
  * here, and the start-up fuse judges the very same file. There is no document
  * value and no environment fallback beside it — a per-document value could point
  * the fuse at one file while the unit read another.
+ *
+ * Defined in `core/paths.mjs` next to the providers root and re-exported here:
+ * a directory constant of the build must not have to be imported FROM the host
+ * boundary, while the deploy tests keep reading the name at this path.
  */
-export const DEFAULT_AMNEZIA_DIR = '/etc/gatehouse/tunnels';
+export {DEFAULT_AMNEZIA_DIR};
 /**
  * Default path of the sudoers file the editor READS to learn which tunnel units
  * it may control. It never writes this file — installing the rules is the
@@ -183,7 +188,7 @@ export function systemConfig(env = process.env, overrides = {}) {
     sudo: read('GATEHOUSE_SUDO', DEFAULT_SUDO_PATH),
     unit: read('GATEHOUSE_UNIT', DEFAULT_UNIT),
     amneziaDir: read('GATEHOUSE_AMNEZIA_DIR', DEFAULT_AMNEZIA_DIR),
-    providersDir: read('GATEHOUSE_PROVIDERS', '/var/lib/gatehouse/providers'),
+    providersDir: read('GATEHOUSE_PROVIDERS', DEFAULT_PROVIDERS_ROOT),
     sudoers: read('GATEHOUSE_SUDOERS', DEFAULT_SUDOERS_PATH),
     testUrl: read('GATEHOUSE_TEST_URL', DEFAULT_TEST_URL),
     configPath: read('GATEHOUSE_CONFIG', DEFAULT_CONFIG_PATH),

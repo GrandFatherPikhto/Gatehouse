@@ -42,7 +42,7 @@ export const BUILTIN_OUTBOUNDS = Object.freeze(['auto-select', 'direct']);
  * @param {unknown} kind
  * @returns {string}
  */
-export function sourceKindLabel(kind) {
+export function providerKindLabel(kind) {
   switch (kind) {
     case 'links':
       return 'Sing-Box';
@@ -279,7 +279,7 @@ export function buildPanel(model, key, extra = {}) {
               typeof provider.label === 'string' && provider.label.length > 0
                 ? provider.label
                 : provider.id,
-            kindLabel: sourceKindLabel(provider.kind),
+            kindLabel: providerKindLabel(provider.kind),
           })),
           unread: info.unread.map((entry) => ({
             ...entry,
@@ -308,7 +308,7 @@ export function buildPanel(model, key, extra = {}) {
         enabled: provider.enabled === true,
         // What the origin FEEDS: Sing-Box for a links file, Amnezia for a tunnel
         // directory. It is a label of the panel, not of the folder.
-        kindLabel: sourceKindLabel(provider.kind),
+        kindLabel: providerKindLabel(provider.kind),
         // One row per `.conf`: the «включить» mark and the two editable names.
         // Only an ENABLED provider offers them — a disabled one says so instead.
         tunnelRows: provider.enabled === true ? model.providerTunnelRows(name) : [],
