@@ -291,7 +291,8 @@ preview with the policy-routing switch.
   JavaScript off: then both branches are visible and the ignored one is discarded on
   save. The script only hides the other branch and disables its fields; a `Tunnel`
   mode without a tunnel is refused with a sentence, never silently turned into
-  `auto-select`.
+  `auto-select`. The `pinned` mark («выход зафиксирован») sits INSIDE the `Sing-box`
+  branch, next to the pool it forbids, and is cleared in `Tunnel` mode.
 * **The servers list keeps the stored order.** The picker draws the checked
   servers first, in the order the file holds them, and the rest of the links file
   after them. A browser submits checked boxes in document order, so any other

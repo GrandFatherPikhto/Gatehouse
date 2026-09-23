@@ -115,6 +115,17 @@ describe('the proxy exit choice (NEW)', () => {
       assert.match(html, /<select id="tunnel" name="tunnel">/);
       // An ordinary proxy opens in the Sing-box mode.
       assert.match(html, /<option value="singbox" selected>/);
+
+      // «выход зафиксирован» belongs to the Sing-box branch: it forbids a pool, and
+      // a tunnel proxy has one exit by construction, so the mark is not shown there.
+      const singboxAt = html.indexOf('data-exit-branch="singbox"');
+      const pinnedAt = html.indexOf('name="pinned"');
+      const tunnelAt = html.indexOf('data-exit-branch="tunnel"');
+      assert.ok(singboxAt >= 0, 'the sing-box branch is rendered');
+      assert.ok(
+        pinnedAt > singboxAt && pinnedAt < tunnelAt,
+        'the pinned flag lives inside the Sing-box branch',
+      );
     } finally {
       await editor.close();
     }
@@ -123,18 +134,43 @@ describe('the proxy exit choice (NEW)', () => {
   test('Sing-box keeps the outbounds and clears the tunnel', async () => {
     const editor = await startEditor();
     try {
+      // One server, because `pinned` forbids a POOL: the mark and the outbound
+      // picker live in the same branch and are submitted together.
       await post(editor.base, '/proxy', {
         current: 'main-socks',
         tag: 'main-socks',
         type: 'socks',
         port: '54321',
         exit_kind: 'singbox',
-        servers: [FI_TAG, NL_TAG],
+        servers: [FI_TAG],
+        pinned: '1',
       });
 
       const proxy = editor.model.getProxy('main-socks');
-      assert.deepEqual(proxy.servers, [FI_TAG, NL_TAG]);
+      assert.deepEqual(proxy.servers, [FI_TAG]);
+      assert.equal(proxy.pinned, true, 'the pinned flag is kept in Sing-box mode');
       assert.ok(!('tunnel' in proxy), 'no tunnel key on a sing-box proxy');
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('a pool of two outbounds is still refused when the exit is pinned', async () => {
+    const editor = await startEditor();
+    try {
+      const response = await post(editor.base, '/proxy', {
+        current: 'main-socks',
+        tag: 'main-socks',
+        type: 'socks',
+        port: '54321',
+        exit_kind: 'singbox',
+        servers: [FI_TAG, NL_TAG],
+        pinned: '1',
+      });
+
+      assert.match(await response.text(), /у прокси зафиксирован выход/);
+      const proxy = editor.model.getProxy('main-socks');
+      assert.ok(!('servers' in proxy), 'a pinned proxy never gains a pool');
     } finally {
       await editor.close();
     }
@@ -154,6 +190,7 @@ describe('the proxy exit choice (NEW)', () => {
         // A hidden branch may still travel in the body when the script is absent;
         // it must be discarded, never mixed in.
         servers: [FI_TAG],
+        pinned: '1',
       });
 
       const proxy = editor.model.getProxy('main-socks');
@@ -161,6 +198,7 @@ describe('the proxy exit choice (NEW)', () => {
       assert.equal(proxy.tunnel.file, 'AustriaGrazS4.conf');
       assert.equal(proxy.tunnel.interface, 'hmn-graz4');
       assert.ok(!('servers' in proxy), 'the posted servers are ignored');
+      assert.ok(!('pinned' in proxy), 'the pinned flag is cleared in Tunnel mode');
 
       const html = await (await fetch(`${editor.base}/panel/proxy:main-socks`)).text();
       assert.match(html, /<option value="tunnel" selected>/);

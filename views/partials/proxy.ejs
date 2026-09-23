@@ -61,22 +61,6 @@
   </fieldset>
 
   <fieldset>
-    <legend>Выход</legend>
-    <label class="check">
-      <input type="checkbox" name="pinned" value="1" <%= proxy.pinned === true ? 'checked' : '' %>>
-      выход зафиксирован
-    </label>
-    <p class="hint">
-      Отметка запрещает пул: у закреплённого прокси не может быть двух и более
-      серверов. Сохранение с двумя серверами отвергается текстом «у прокси
-      зафиксирован выход — снимите отметку, если нужен пул», молча список не
-      обрезается. Ядро этот ключ отбрасывает: в <code>config.json</code> он не
-      попадает. Отметка осмысленна только для выхода через Sing-box; в режиме
-      Tunnel она сохраняется, но ни на что не влияет.
-    </p>
-  </fieldset>
-
-  <fieldset>
     <legend>Куда выходит прокси</legend>
     <label for="exit_kind">Режим выхода</label>
     <%# The combo picks the branch. The SERVER is the arbiter: it reads `exit_kind`
@@ -95,6 +79,20 @@
 
     <div class="exit-branch" data-exit-branch="singbox">
       <h4>Аутбаунды sing-box</h4>
+      <%# «Выход зафиксирован» forbids a POOL, so it belongs here, next to the pool
+          it protects: a tunnel proxy has exactly one exit and the mark has nothing
+          to forbid. In Tunnel mode the script disables it, and the server clears it. %>
+      <label class="check">
+        <input type="checkbox" name="pinned" value="1" <%= proxy.pinned === true ? 'checked' : '' %>>
+        выход зафиксирован
+      </label>
+      <p class="hint">
+        Отметка запрещает пул: у закреплённого прокси не может быть двух и более
+        серверов. Сохранение с двумя серверами отвергается текстом «у прокси
+        зафиксирован выход — снимите отметку, если нужен пул», молча список не
+        обрезается. Ядро этот ключ отбрасывает: в <code>config.json</code> он не
+        попадает. В режиме Tunnel отметка недоступна и при сохранении снимается.
+      </p>
       <p class="hint">
         Ничего не отмечено — прокси идёт в auto-select (все серверы, кроме
         исключённых). Отмеченные серверы образуют пул

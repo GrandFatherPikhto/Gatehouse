@@ -84,7 +84,8 @@ export function selection(value) {
  * the checked outbounds, `tunnel` takes the single tunnel. The SERVER is the
  * arbiter — it reads the combo and uses exactly one branch, so the form keeps
  * working with JavaScript off, when both branches are visible and the ignored one
- * travels along in the body.
+ * travels along in the body. `pinned` is part of the sing-box branch for the same
+ * reason: it forbids a pool, and a tunnel proxy has one exit by construction.
  *
  * The tunnel selector is two fields: `tunnel` carries `provider/file` (the value
  * of the `<select>`), `tunnel_interface` the interface name. An empty `tunnel`
@@ -143,7 +144,10 @@ export function parseProxyForm(body) {
     servers: kind === 'tunnel' ? [] : selection(body.servers),
     tunnel,
     note: String(body.note ?? '').trim(),
-    pinned: checkbox(body.pinned),
+    // `pinned` forbids a POOL, so it belongs to the sing-box branch only. A tunnel
+    // proxy has one exit by construction; the flag is cleared rather than carried,
+    // which is also what the form shows — the checkbox lives inside that branch.
+    pinned: kind === 'tunnel' ? false : checkbox(body.pinned),
   };
 }
 
