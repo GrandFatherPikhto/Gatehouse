@@ -175,8 +175,8 @@ export function clashApiBlock(clashApi, secret) {
  * Assembles the whole sing-box configuration.
  * Reference: `build_config`. Returns `[config, stats]`.
  *
- * @param {Record<string, unknown>} settings Effective settings (defaults merged
- *   with the active profile; `note` fields already dropped).
+ * @param {Record<string, unknown>} settings Effective settings (the flat body,
+ *   `note` fields already dropped).
  * @param {Array<Record<string, unknown>>} outbounds Parsed VLESS outbounds.
  * @param {string} listenIp
  * @param {string[]} [warnings] Collector for non-fatal problems.

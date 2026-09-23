@@ -117,16 +117,19 @@ scp denis@10.95.2.1:/etc/sing-box/config.json          dev/root/etc/sing-box/
 scp denis@10.95.2.1:/var/lib/gatehouse/sources/vpnd/links.txt  dev/root/sources/vpnd/
 ```
 
-**Then rewrite the two paths inside the copied `webui.json`.** On the router they
-are absolute, and `links_file` / `output_file` are resolved against the directory
-of the settings file — so an absolute `output_file` makes the sandbox aim at the
-host's real `/etc/sing-box/config.json`, and an absolute `links_file` points at a
-directory that does not exist on a workstation:
+**Then rewrite `output_file` inside the copied `webui.json`.** On the router it is
+absolute, and it is resolved against the directory of the settings file — so an
+absolute `output_file` makes the sandbox aim at the host's real
+`/etc/sing-box/config.json`:
 
 ```json
-"links_file":  "sources/vpnd/links.txt",
+"sources": ["vpnd"],
 "output_file": "etc/sing-box/config.json"
 ```
+
+`sources` holds provider FOLDER names resolved under `GATEHOUSE_SOURCES`
+(`dev/root/sources` by default), so it needs no rewrite as long as the folder sits
+there.
 
 Edit this **while the server is stopped**. It keeps the settings in memory and
 writes them back when you save, so a change made underneath a running instance
@@ -160,20 +163,18 @@ sandbox limitation but how the editor works.
 # build config.json next to webui.json
 node tools/generate.mjs --settings webui.json
 
-# override the output, the links file, the listen address or the active profile
+# override the output, the single links file or the listen address
 node tools/generate.mjs --settings webui.json \
     --output /etc/sing-box/config.json \
-    --links server-lists/vpnd.vless.reality.io.txt \
-    --listen-ip 10.95.2.1 \
-    --profile reality
+    --links tests/fixtures/sources/vpnd/links.txt \
+    --listen-ip 10.95.2.1
 ```
 
 | Flag | Meaning |
 | --- | --- |
 | `--settings PATH` | settings file, `webui.json` by default |
-| `--profile NAME` | profile to apply instead of `active` |
 | `--output PATH` | where to write `config.json` (overrides `output_file`) |
-| `--links PATH` | links file (overrides `links_file`) |
+| `--links PATH` | read one links file instead of the `sources` folders |
 | `--listen-ip IP` | listen address (overrides `listen_ip`) |
 | `--exclude-from-auto PREFIX...` | tag prefixes kept out of `auto-select` |
 | `--warnings-file PATH` | write the collected warnings as JSON |

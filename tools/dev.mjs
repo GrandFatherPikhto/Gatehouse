@@ -25,7 +25,8 @@ const EXAMPLE = path.join(ROOT, 'dev', 'root.example');
 
 const SETTINGS = path.join(SANDBOX, 'webui.json');
 const CONFIG = path.join(SANDBOX, 'etc', 'sing-box', 'config.json');
-const LINKS = path.join(SANDBOX, 'links.txt');
+// Provider folder of the sample project; the reader looks under <settingsDir>/sources.
+const LINKS = path.join(SANDBOX, 'sources', 'vpnd', 'links.txt');
 
 /** Path relative to the repository, for readable messages. */
 const rel = (file) => path.relative(ROOT, file) || '.';
@@ -35,10 +36,10 @@ if (missing.length > 0) {
   process.stderr.write(
     `Песочница не готова: нет ${missing.map(rel).join(', ')}\n` +
       'Скопируйте обезличенные образцы:\n' +
-      `  mkdir -p ${rel(path.dirname(CONFIG))}\n` +
+      `  mkdir -p ${rel(path.dirname(CONFIG))} ${rel(path.dirname(LINKS))}\n` +
       `  cp ${rel(path.join(EXAMPLE, 'webui.json'))} ${rel(SETTINGS)}\n` +
       `  cp ${rel(path.join(EXAMPLE, 'etc/sing-box/config.json'))} ${rel(CONFIG)}\n` +
-      `  cp ${rel(path.join(EXAMPLE, 'links.txt'))} ${rel(LINKS)}\n` +
+      `  cp ${rel(path.join(EXAMPLE, 'sources/vpnd/links.txt'))} ${rel(LINKS)}\n` +
       'После этого замените образцы боевыми копиями, если нужно.\n',
   );
   process.exit(1);
@@ -46,7 +47,7 @@ if (missing.length > 0) {
 
 if (!fs.existsSync(LINKS)) {
   process.stderr.write(
-    `Внимание: нет ${rel(LINKS)} — панели «Файл ссылок» и «Тест серверов» будут пустыми.\n`,
+    `Внимание: нет ${rel(LINKS)} — панели «Провайдеры» и «Тест серверов» будут пустыми.\n`,
   );
 }
 

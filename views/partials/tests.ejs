@@ -16,7 +16,7 @@
 <% if (panel.linksError) { %>
   <p class="error"><%= panel.linksError %></p>
 <% } else if (panel.tags.length === 0) { %>
-  <p class="hint">В файле ссылок активного профиля нет ни одного сервера.</p>
+  <p class="hint">В источниках нет ни одного сервера.</p>
 <% } else { %>
   <form id="tests-form" method="post" action="/tests/stream">
     <button type="button" id="tests-start">Проверить все серверы профиля (<%= panel.tags.length %>)</button>

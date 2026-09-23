@@ -117,16 +117,19 @@ scp denis@10.95.2.1:/etc/sing-box/config.json          dev/root/etc/sing-box/
 scp denis@10.95.2.1:/var/lib/gatehouse/sources/vpnd/links.txt  dev/root/sources/vpnd/
 ```
 
-**После этого в скопированном `webui.json` надо переписать два пути.** На роутере
-они абсолютные, а `links_file` и `output_file` разрешаются относительно каталога
-с файлом настроек — поэтому абсолютный `output_file` заставит песочницу целиться
-в настоящий `/etc/sing-box/config.json` машины, а абсолютный `links_file` будет
-указывать в каталог, которого на рабочей станции нет:
+**После этого в скопированном `webui.json` надо переписать `output_file`.** На
+роутере он абсолютный, а разрешается относительно каталога с файлом настроек —
+поэтому абсолютный `output_file` заставит песочницу целиться в настоящий
+`/etc/sing-box/config.json` машины:
 
 ```json
-"links_file":  "sources/vpnd/links.txt",
+"sources": ["vpnd"],
 "output_file": "etc/sing-box/config.json"
 ```
+
+`sources` содержит имена ПАПОК-провайдеров и разрешается от `GATEHOUSE_SOURCES`
+(по умолчанию `dev/root/sources`), поэтому переписывать его не нужно, пока папка
+лежит там.
 
 Править **при остановленном сервере**. Он держит настройки в памяти и записывает
 их обратно при сохранении, так что правка под работающим экземпляром пропадёт
@@ -161,20 +164,18 @@ cmp /tmp/live-config.json dev/root/etc/sing-box/config.json && echo identical
 # собрать config.json рядом с webui.json
 node tools/generate.mjs --settings webui.json
 
-# переопределить вывод, файл ссылок, адрес прослушивания или активный профиль
+# переопределить вывод, один файл ссылок или адрес прослушивания
 node tools/generate.mjs --settings webui.json \
     --output /etc/sing-box/config.json \
-    --links server-lists/vpnd.vless.reality.io.txt \
-    --listen-ip 10.95.2.1 \
-    --profile reality
+    --links tests/fixtures/sources/vpnd/links.txt \
+    --listen-ip 10.95.2.1
 ```
 
 | Флаг | Смысл |
 | --- | --- |
 | `--settings PATH` | файл настроек, по умолчанию `webui.json` |
-| `--profile NAME` | профиль вместо `active` |
 | `--output PATH` | куда писать `config.json` (переопределяет `output_file`) |
-| `--links PATH` | файл ссылок (переопределяет `links_file`) |
+| `--links PATH` | прочитать один файл ссылок вместо папок `sources` |
 | `--listen-ip IP` | адрес прослушивания (переопределяет `listen_ip`) |
 | `--exclude-from-auto PREFIX...` | префиксы тегов, выкидываемые из `auto-select` |
 | `--warnings-file PATH` | записать собранные предупреждения в JSON |
