@@ -6,7 +6,14 @@
 // observable without touching the real systemd, and keeps the test suite free of
 // `sudo` and of root.
 //
-// `FAKE_SYSTEMCTL_FAIL` makes it exit non-zero, for the "restart failed" path.
+// It also answers the two read-only verbs the tunnel panel needs, from the
+// environment, so all four combinations of the systemd axes can be reproduced:
+//   * `FAKE_SYSTEMCTL_ACTIVE`  — comma-separated list of active units;
+//   * `FAKE_SYSTEMCTL_ENABLED` — comma-separated list of enabled units.
+// An empty or absent list means "nothing is active/enabled".
+//
+// `FAKE_SYSTEMCTL_FAIL` makes any other verb exit non-zero, for the "restart
+// failed" path.
 
 import fs from 'node:fs';
 import process from 'node:process';
@@ -15,6 +22,20 @@ const argv = process.argv.slice(2);
 
 if (process.env.FAKE_SYSTEMCTL_ARGV_LOG) {
   fs.appendFileSync(process.env.FAKE_SYSTEMCTL_ARGV_LOG, `${JSON.stringify(argv)}\n`);
+}
+
+const list = (value) => String(value ?? '').split(',').map((item) => item.trim()).filter(Boolean);
+
+if (argv[0] === 'is-active') {
+  const unit = argv[1];
+  process.stdout.write(`${list(process.env.FAKE_SYSTEMCTL_ACTIVE).includes(unit) ? 'active' : 'inactive'}\n`);
+  process.exit(0);
+}
+
+if (argv[0] === 'is-enabled') {
+  const unit = argv[1];
+  process.stdout.write(`${list(process.env.FAKE_SYSTEMCTL_ENABLED).includes(unit) ? 'enabled' : 'disabled'}\n`);
+  process.exit(0);
 }
 
 process.stdout.write(`fake systemctl: ${argv.join(' ')}\n`);

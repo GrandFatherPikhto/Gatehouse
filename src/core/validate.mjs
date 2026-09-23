@@ -118,10 +118,68 @@ export function validateProxies(proxies) {
       throw new ConfigError(`${where} '${tag}': servers должен быть списком непустых строк`);
     }
 
-    result.push({tag, type: proxyType, port, servers: [...servers]});
+    const tunnel = normalizeTunnelDescriptor(proxy.tunnel, where, tag);
+    if (tunnel !== null && servers.length > 0) {
+      throw new ConfigError(
+        `${where} '${tag}': у туннельного прокси не может быть servers — ` +
+          'один туннель, один выход (см. §5.1 задания)',
+      );
+    }
+
+    // The `tunnel` key is added ONLY when present, so a proxy without it keeps the
+    // exact shape of the reference and the golden `config.json` stays byte-identical.
+    const entry = {tag, type: proxyType, port, servers: [...servers]};
+    if (tunnel !== null) entry.tunnel = tunnel;
+    result.push(entry);
   });
 
   return result;
+}
+
+/**
+ * Validates the optional `tunnel` descriptor of a proxy and returns it in a fixed
+ * shape, or `null` when the proxy is an ordinary one.
+ *
+ * A tunnel proxy owns no servers: its single exit is the interface itself, so
+ * `validateProxies` refuses the combination above. The descriptor is the only
+ * thing the core needs to emit the `direct`/`bind_interface` pair.
+ *
+ * @param {unknown} value
+ * @param {string} where
+ * @param {string} tag
+ * @returns {{provider: string, file: string, interface: string}|null}
+ */
+function normalizeTunnelDescriptor(value, where, tag) {
+  if (value === null || value === undefined) return null;
+  requireMapping(value, `${where} '${tag}': tunnel`);
+
+  const read = (key) => {
+    const field = value[key];
+    if (typeof field !== 'string' || field.trim().length === 0) {
+      throw new ConfigError(`${where} '${tag}': tunnel.${key} должен быть непустой строкой`);
+    }
+    return field.trim();
+  };
+
+  const iface = read('interface');
+  if (iface.length > 15) {
+    throw new ConfigError(
+      `${where} '${tag}': имя интерфейса '${iface}' длиннее 15 символов — ядро такое не примет`,
+    );
+  }
+
+  return {provider: read('provider'), file: read('file'), interface: iface};
+}
+
+/**
+ * True when one normalised proxy is a tunnel (owns a `direct` exit instead of a
+ * server pool). Exported so the assembly reads the same predicate everywhere.
+ *
+ * @param {Record<string, unknown>} proxy
+ * @returns {boolean}
+ */
+export function isTunnelProxy(proxy) {
+  return isMapping(proxy) && isMapping(proxy.tunnel);
 }
 
 /**

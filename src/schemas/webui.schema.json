@@ -102,6 +102,30 @@
             "description": "Free-form comment. Ignored by the core.",
             "type": "string"
           },
+          "tunnel": {
+            "description": "This proxy IS a tunnel: one inbound plus one `direct` outbound bound to the interface, with no server pool. Mutually exclusive with `servers` — one tunnel, one exit.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["provider", "file", "interface"],
+            "properties": {
+              "provider": {
+                "description": "Provider folder the source `.conf` was taken from. Grouping label of the System panel.",
+                "type": "string",
+                "minLength": 1
+              },
+              "file": {
+                "description": "Source file name inside the provider folder, with the `.conf` suffix.",
+                "type": "string",
+                "minLength": 1
+              },
+              "interface": {
+                "description": "Interface name: the stem of the applied `<interface>.conf`, the unit `awg-quick@<interface>` and the `bind_interface` of the generated outbound. Kernel limit is 15 characters.",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 15
+              }
+            }
+          },
           "pinned": {
             "description": "The exit of this proxy is fixed on purpose. Ignored by the core; enforced by the model: a pinned proxy may name at most one server.",
             "type": "boolean"

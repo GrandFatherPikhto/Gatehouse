@@ -18,6 +18,16 @@
      watch: ticked('watch', stored.watch === true),
      watch_url: pick('watch_url', stored.watch_url ?? ''),
    }; %>
+<%# The tunnel selector: one `<select>` carrying `provider/file`, plus the
+    interface name. An empty select means an ordinary proxy with a server pool.
+    A rejected form keeps the posted values, like every other field here. %>
+<% const storedTunnel = stored.tunnel && typeof stored.tunnel === 'object' ? stored.tunnel : null; %>
+<% const tunnelRef = posted
+     ? (posted.tunnel ?? '')
+     : (storedTunnel ? `${storedTunnel.provider}/${storedTunnel.file}` : ''); %>
+<% const tunnelInterface = posted
+     ? (posted.tunnel_interface ?? '')
+     : (storedTunnel ? storedTunnel.interface : ''); %>
 <% const current = posted && posted.current !== undefined ? posted.current : stored.tag; %>
 <% const servers = posted
      ? (posted.servers === undefined
@@ -81,11 +91,51 @@
   </fieldset>
 
   <fieldset>
+    <legend>Туннель или пул серверов</legend>
+    <p class="hint">
+      Один туннель — один прокси — один выход. Выберите туннель, и серверы ниже
+      будут проигнорированы: в <code>config.json</code> появится пара «инбаунд +
+      <code>direct</code>-аутбаунд» с <code>bind_interface</code>. Оставьте поле
+      пустым — прокси работает по правилам ниже (auto-select или пул).
+    </p>
+    <label for="tunnel">туннель</label>
+    <select id="tunnel" name="tunnel">
+      <option value="">— нет, обычный прокси (серверы ниже) —</option>
+      <% for (const item of panel.tunnels) { %>
+        <% const value = `${item.provider}/${item.file}`; %>
+        <option value="<%= value %>" <%= tunnelRef === value ? 'selected' : '' %>><%= value %></option>
+      <% } %>
+    </select>
+    <label for="tunnel_interface">имя интерфейса</label>
+    <input type="text" id="tunnel_interface" name="tunnel_interface"
+           value="<%= tunnelInterface %>" maxlength="15" list="tunnel-names">
+    <datalist id="tunnel-names">
+      <% for (const item of panel.tunnels) { %>
+        <option value="<%= item.name %>"></option>
+      <% } %>
+    </datalist>
+    <p class="hint">
+      Имя интерфейса — это имя файла <code><имя>.conf</code> в каталоге
+      amnezia и юнита <code>awg-quick@<имя></code>. Не длиннее 15 символов.
+      Не забудьте сохранить <code>webui.json</code> после правки.
+    </p>
+    <% if (storedTunnel) { %>
+      <p class="hint">
+        Сейчас прокси привязан к туннелю
+        <code><%= `${storedTunnel.provider}/${storedTunnel.file}` %></code>
+        (интерфейс <code><%= storedTunnel.interface %></code>). Подпись и состояние
+        юнита — в разделе «Система».
+      </p>
+    <% } %>
+  </fieldset>
+
+  <fieldset>
     <legend>Серверы</legend>
     <p class="hint">
       Ничего не отмечено — прокси идёт в auto-select (все серверы, кроме
       исключённых). Отмеченные серверы образуют пул
       <code>pool-<%= proxy.tag %></code>; снятая галочка убирает сервер из пула.
+      Эти поля не участвуют, если выбран туннель.
     </p>
     <% if (panel.linksError) { %>
       <p class="error"><%= panel.linksError %></p>

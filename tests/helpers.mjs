@@ -179,3 +179,46 @@ export function fakeSystemEnv(overrides = {}) {
     ...overrides,
   };
 }
+
+/** Path of the fake `systemctl`, which the tunnel sudoers rules must name. */
+export const FAKE_SYSTEMCTL = path.join(FAKE_BIN_DIR, 'systemctl');
+
+/**
+ * Environment additions for the tunnel tests: where the applied `.conf` goes, the
+ * sudoers file to read, and the two systemd axes of the fake `systemctl`.
+ *
+ * @param {string} dir Temporary project directory.
+ * @param {{active?: string[], enabled?: string[], sudoers?: string|null}} [options]
+ * @returns {Record<string, string>}
+ */
+export function tunnelSystemEnv(dir, options = {}) {
+  return {
+    GATEHOUSE_AMNEZIA_DIR: path.join(dir, 'amnezia'),
+    GATEHOUSE_SUDOERS: options.sudoers ?? path.join(dir, 'sudoers-gatehouse'),
+    FAKE_SYSTEMCTL_ACTIVE: (options.active ?? []).join(','),
+    FAKE_SYSTEMCTL_ENABLED: (options.enabled ?? []).join(','),
+  };
+}
+
+/**
+ * Writes a sudoers file with the three rules of every named tunnel, in the exact
+ * shape the panel offers for pasting.
+ *
+ * @param {string} file
+ * @param {string[]} tunnels
+ * @param {{user?: string, systemctl?: string}} [options] `systemctl` must match
+ *   `GATEHOUSE_SYSTEMCTL`, because `parseTunnelSudoers` looks for that path.
+ * @returns {string} Path of the written file.
+ */
+export function writeSudoers(file, tunnels, options = {}) {
+  const user = options.user ?? 'denis';
+  const systemctl = options.systemctl ?? FAKE_SYSTEMCTL;
+  const lines = [];
+  for (const name of tunnels) {
+    lines.push(`${user} ALL=(root) NOPASSWD: ${systemctl} enable --now awg-quick@${name}`);
+    lines.push(`${user} ALL=(root) NOPASSWD: ${systemctl} disable --now awg-quick@${name}`);
+    lines.push(`${user} ALL=(root) NOPASSWD: ${systemctl} restart awg-quick@${name}`);
+  }
+  fs.writeFileSync(file, `${lines.join('\n')}\n`, 'utf8');
+  return file;
+}

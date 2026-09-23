@@ -234,7 +234,11 @@ function providerKindLabel(kind) {
  * setting that used to be split between the active profile and `defaults`.
  *
  * @param {{document: unknown, allTags?: string[], title?: string, sourcesRoot?: string,
- *   providers?: Array<Record<string, unknown>>, outputFile?: string}} options
+ *   providers?: Array<Record<string, unknown>>, outputFile?: string,
+ *   tunnelStates?: Record<string, {active?: boolean, enabled?: boolean,
+ *   applied?: boolean}>}} options `tunnelStates` is the runtime state of the
+ *   tunnels, keyed by interface; a proxy on a tunnel that is not up gets a mark
+ *   that names the CONSEQUENCE, not the fact.
  * @returns {Record<string, unknown>} Root node.
  */
 export function treeSpec(options = {}) {
@@ -242,6 +246,7 @@ export function treeSpec(options = {}) {
   const allTags = asList(options.allTags).filter((tag) => typeof tag === 'string');
   const stale = staleMap(document, allTags);
   const providers = Array.isArray(options.providers) ? options.providers : [];
+  const tunnelStates = isMapping(options.tunnelStates) ? options.tunnelStates : {};
 
   const proxyNodes = [];
   for (const proxy of asList(document.proxies)) {
@@ -260,13 +265,26 @@ export function treeSpec(options = {}) {
     }
     if (proxy.pinned === true) marks.push('[🔒] выход зафиксирован');
     if (proxy.watch === true) marks.push('[👁] сторож');
+
+    // §5.4: a proxy on a stopped tunnel is a silently dead port. The mark names
+    // the consequence — "the port does not work" — not the fact ("the tunnel is
+    // stopped"), because the consequence is what the owner has to act on.
+    let tunnelMark = '';
+    if (isMapping(proxy.tunnel)) {
+      const state = tunnelStates[proxy.tunnel.interface];
+      if (isMapping(state) && (state.applied === false || state.active === false)) {
+        tunnelMark = '[!] порт не работает: туннель не поднят';
+        marks.push(tunnelMark);
+      }
+    }
+
     const mark = marks.join('  ');
     proxyNodes.push(
       node(`proxy:${tag}`, mark === '' ? tag : `${tag}  ${mark}`, 'proxy', {
-        stale: missing.length > 0,
+        stale: missing.length > 0 || tunnelMark !== '',
         detail: tag,
         mark,
-        full: missingFull,
+        full: missingFull || tunnelMark,
       }),
     );
   }

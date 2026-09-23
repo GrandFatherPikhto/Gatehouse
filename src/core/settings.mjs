@@ -214,7 +214,13 @@ export function generateConfigFile(settingsPath, options = {}) {
   // place every caller (CLI and web editor) goes through. `options.apiSecret` is
   // the injection point for a test; the environment is what a service uses.
   const apiSecret = options.apiSecret ?? process.env[API_SECRET_VAR] ?? '';
-  const [config, stats] = buildConfig(effective, outbounds, listenIp, warnings, {apiSecret});
+  // `runningTunnels` is the set of tunnel interfaces the caller found up in
+  // systemd. It only feeds the §5.4 warning about a proxy on a stopped tunnel;
+  // `undefined` means "not asked", which adds no warning.
+  const [config, stats] = buildConfig(effective, outbounds, listenIp, warnings, {
+    apiSecret,
+    runningTunnels: options.runningTunnels,
+  });
   writeJson(outputFile, config);
 
   return {outputFile, stats, warnings, config};

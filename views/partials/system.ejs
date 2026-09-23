@@ -1,8 +1,11 @@
-<%# Система: проверка, перезапуск и откат. Порядок жёсткий и виден на экране:
-    сгенерировать → проверить → и только потом предлагается перезапуск. У юнита
-    стоит Restart=always, поэтому неподнявшийся конфиг даёт вечный цикл
-    перезапусков и весь трафик в доме встаёт. Кнопка перезапуска не рисуется,
-    пока проверка не прошла. %>
+<%# Система: проверка, перезапуск и откат демона ПЛЮС жизненный цикл туннелей.
+    Порядок у демона жёсткий и виден на экране: сгенерировать → проверить → и
+    только потом предлагается перезапуск. У юнита стоит Restart=always, поэтому
+    неподнявшийся конфиг даёт вечный цикл перезапусков и весь трафик в доме
+    встаёт. Кнопка перезапуска не рисуется, пока проверка не прошла.
+    Туннели сгруппированы по провайдеру: состояние читается из systemd, галочка
+    одна и двигает обе оси сразу, а без правила sudoers кнопок нет — вместо них
+    готовые строки для вставки. %>
 <h2><%= panel.title %></h2>
 
 <p class="hint">
@@ -108,4 +111,87 @@
       <li><code><%= snapshot.file %></code></li>
     <% } %>
   </ul>
+<% } %>
+
+<h3>4. Туннели</h3>
+<% if (panel.tunnels.length === 0) { %>
+  <p class="hint">
+    Ни один прокси не привязан к туннелю. Возьмите конфиг на вкладке
+    «Провайдеры» и нажмите «Применить», затем создайте прокси с выбранным
+    туннелем — строка появится здесь.
+  </p>
+<% } else { %>
+  <p class="hint">
+    Состояние читается из systemd без привилегий: работает сейчас и поднимается
+    при загрузке — две разные оси. Галочка одна и двигает обе
+    (<code>enable --now</code> / <code>disable --now</code>); если оси всё же
+    разошлись, это написано словами, а не спрятано. Через туннель
+    <code>de</code> идёт связь с роутером — перезапуск оборвёт её.
+  </p>
+  <% for (const group of panel.tunnels) { %>
+    <h4><%= group.provider %></h4>
+    <table class="list">
+      <thead>
+        <tr><th>туннель</th><th>состояние</th><th>поднят</th><th>перезапуск</th><th>прокси</th><th>журнал</th></tr>
+      </thead>
+      <tbody>
+        <% for (const tunnel of group.tunnels) { %>
+          <tr class="<%= tunnel.applied && (tunnel.active !== tunnel.enabled) ? 'stale' : '' %>">
+            <td><code><%= tunnel.interface %></code><br><span class="hint"><%= tunnel.unit %></span></td>
+            <td>
+              <% if (!tunnel.applied) { %>
+                конфиг не применён
+              <% } else { %>
+                <%= tunnel.active ? 'работает' : 'остановлен' %>,
+                <%= tunnel.enabled ? 'в автозагрузке' : 'не в автозагрузке' %>
+                <% if (tunnel.divergence) { %>
+                  <br><span class="error"><%= tunnel.divergence %></span>
+                <% } %>
+              <% } %>
+            </td>
+            <td>
+              <% if (!tunnel.applied) { %>
+                —
+              <% } else if (tunnel.canToggle) { %>
+                <form class="inline" hx-post="/tunnel/toggle" hx-target="#panel" hx-swap="innerHTML" method="post" action="/tunnel/toggle">
+                  <input type="hidden" name="name" value="<%= tunnel.interface %>">
+                  <label class="check">
+                    <input type="checkbox" name="up" value="1"
+                           hx-post="/tunnel/toggle" hx-trigger="change"
+                           hx-target="#panel" hx-swap="innerHTML" hx-include="closest form"
+                           <%= tunnel.active && tunnel.enabled ? 'checked' : '' %>>
+                    поднят и в автозагрузке
+                  </label>
+                  <button type="submit"><%= tunnel.active && tunnel.enabled ? 'Опустить' : 'Поднять' %></button>
+                </form>
+              <% } else { %>
+                <span class="hint">нет права sudoers — добавьте строки:</span>
+                <pre class="output"><%= tunnel.missingLines.join('\n') %></pre>
+              <% } %>
+            </td>
+            <td>
+              <% if (tunnel.canRestart) { %>
+                <form class="inline" hx-post="/tunnel/restart" hx-target="#panel" hx-swap="innerHTML" method="post" action="/tunnel/restart">
+                  <input type="hidden" name="name" value="<%= tunnel.interface %>">
+                  <button type="submit" class="danger"
+                          hx-confirm="Перезапустить туннель '<%= tunnel.interface %>'?<%= tunnel.usedBy.length > 0 ? ` Прокси '${tunnel.usedBy.join(', ')}' работают через него и оборвутся.` : '' %><%= tunnel.interface === 'de' ? ' Через этот туннель идёт ваш доступ к роутеру — вы потеряете связь.' : '' %>">Перезапустить</button>
+                </form>
+              <% } else { %>
+                <span class="hint">нет правила sudoers — добавьте строку:</span>
+                <pre class="output"><%= tunnel.missingLines.filter((line) => line.includes('restart')).join('\n') %></pre>
+              <% } %>
+            </td>
+            <td>
+              <% if (tunnel.usedBy.length === 0) { %>
+                —
+              <% } else { %>
+                <% for (const tag of tunnel.usedBy) { %><code><%= tag %></code> <% } %>
+              <% } %>
+            </td>
+            <td><a href="<%= tunnel.journalUrl %>">Журнал</a></td>
+          </tr>
+        <% } %>
+      </tbody>
+    </table>
+  <% } %>
 <% } %>

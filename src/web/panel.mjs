@@ -6,7 +6,7 @@
 // here. That split is what keeps the view layer replaceable: swapping EJS for
 // React means reimplementing these builders and the templates, not the model.
 
-import {ConfigError, DEFAULT_EXCLUDE, PROXY_TYPES} from '../core/errors.mjs';
+import {ConfigError, DEFAULT_EXCLUDE, PROXY_TYPES, isMapping} from '../core/errors.mjs';
 import {listConfigSnapshots} from '../model/storage.mjs';
 import {DEFAULT_WATCH_URL} from '../system/index.mjs';
 
@@ -110,16 +110,25 @@ export function panelUrl(key) {
 }
 
 /**
- * Outbounds a route may name: the servers of the links file, the two built-ins
- * and the per-proxy pools.
+ * Outbounds a route may name: the servers of the links file, the two built-ins,
+ * the per-proxy pools and the `direct` outbound of every tunnel.
+ *
+ * A tunnel proxy has no pool — its outbound is the proxy tag itself — so it is
+ * listed as a bare tag and never as `pool-<tag>`.
  *
  * @param {import('../model/project.mjs').ProjectModel} model
  * @returns {string[]}
  */
 export function knownOutbounds(model) {
   const tags = model.sourcesInfo().tags;
-  const pools = model.proxyTags().map((tag) => `pool-${tag}`);
-  return [...BUILTIN_OUTBOUNDS, ...tags, ...pools];
+  const proxies = model.proxies().filter((proxy) => isMapping(proxy));
+  const pools = proxies
+    .filter((proxy) => !isMapping(proxy.tunnel))
+    .map((proxy) => `pool-${proxy.tag}`);
+  const tunnelTags = proxies
+    .filter((proxy) => isMapping(proxy.tunnel))
+    .map((proxy) => proxy.tag);
+  return [...BUILTIN_OUTBOUNDS, ...tags, ...pools, ...tunnelTags];
 }
 
 /**
@@ -218,6 +227,9 @@ export function buildPanel(model, key, extra = {}) {
         linksError: info.error,
         types: PROXY_TYPES,
         defaultWatchUrl: DEFAULT_WATCH_URL,
+        // Tunnels the form may bind this proxy to (§5.1). Empty when no provider
+        // folder holds a `*.conf`, and then the selector is not drawn at all.
+        tunnels: model.availableTunnels(),
       };
     }
 
@@ -239,6 +251,10 @@ export function buildPanel(model, key, extra = {}) {
         title: 'Система',
         configPath: model.resolvedOutputPath(),
         configExists: model.configExists(),
+        // Tunnels grouped by provider, each row carrying the runtime state read
+        // from systemd and the sudoers rights. The app assembles it, because only
+        // it may talk to the host; this builder only arranges what it was given.
+        tunnels: extra.tunnels ?? [],
         // Only the NAMES are exposed to the view: a snapshot is restored by the
         // route from the state directory, never by a path arriving from a form.
         snapshots: listConfigSnapshots(model.stateDir).map((file) => ({file})),

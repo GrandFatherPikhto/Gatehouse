@@ -51,6 +51,10 @@ Environment=GATEHOUSE_SINGBOX=/usr/local/bin/sing-box
 Environment=GATEHOUSE_SYSTEMCTL=/usr/bin/systemctl
 Environment=GATEHOUSE_JOURNALCTL=/usr/bin/journalctl
 Environment=GATEHOUSE_UNIT=sing-box
+Environment=GATEHOUSE_AMNEZIA_DIR=/etc/amnezia/amneziawg
+# С polkit правила sudoers не нужны; этот путь просто не существует, поэтому
+# туннели показываются без кнопок, пока в polkit-правило не добавлены их юниты.
+Environment=GATEHOUSE_SUDOERS=/etc/sudoers.d/gatehouse
 # Никакого sudo: рестарт идёт через D-Bus и правило polkit.
 Environment=GATEHOUSE_SUDO=none
 EnvironmentFile=/etc/gatehouse/env
@@ -65,11 +69,11 @@ RestartSec=5
 # принадлежит denis, но сервис всё равно не может переписать собственный код —
 # а rsync владельца, живущий в обычном пространстве, пишет туда свободно.
 # Каталоги из StateDirectory и ConfigurationDirectory systemd открывает на запись
-# сам; /etc/sing-box приходится разрешать явно — туда пишется config.json.
+# сам; /etc/sing-box и /etc/amnezia/amneziawg приходится разрешать явно.
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/etc/sing-box
+ReadWritePaths=/etc/sing-box /etc/amnezia/amneziawg
 # Здесь setuid не нужен — рестарт идёт по D-Bus, поэтому доступно и это.
 NoNewPrivileges=yes
 

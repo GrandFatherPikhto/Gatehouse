@@ -1,9 +1,11 @@
-<%# Preview of the tunnel normaliser (§7.3, §8.12 of the architecture).
-    Built around the diff, not around checkboxes: the mandatory fixes (Table = off,
-    dropping DNS =, the interface name) carry no checkbox — the only sane value is
-    known in advance and a checkbox would mean "break the router". Exactly one
-    checkbox is about FUTURE USE (handing the tunnel out through 3proxy too), and
-    there is no apply button: this screen only shows what would change. %>
+<%# Preview of the tunnel normaliser (§7.3, §8.12 of the architecture) and the
+    «Применить» button of part 1.
+    The mandatory fixes (Table = off, dropping DNS =, the interface name) carry no
+    checkbox — the only sane value is known in advance and a checkbox would mean
+    "break the router". The single checkbox is about FUTURE USE (handing the
+    tunnel out through 3proxy too).
+    «Применить» only WRITES the file into the amnezia directory; it does not bring
+    the tunnel up — that is a separate action on the «Система» panel. %>
 <h2><%= panel.title %></h2>
 
 <% if (!panel.preview) { %>
@@ -12,7 +14,7 @@
     <code>.conf</code>. Предпросмотр ничего не применяет и никуда не пишет.
   </p>
 <% } else { %>
-  <p>Файл: <code><%= panel.preview.path %></code></p>
+  <p>Файл-источник: <code><%= panel.preview.path %></code></p>
 
   <h3>Изменено <%= panel.preview.changes.length %> строк</h3>
   <ul class="changes">
@@ -45,4 +47,33 @@
 
   <h3>Результат</h3>
   <pre><%= panel.preview.text %></pre>
+
+  <h3>Применение</h3>
+  <% if (!panel.preview.target) { %>
+    <p class="error">
+      Не задан каталог amnezia (<code>GATEHOUSE_AMNEZIA_DIR</code>): писать конфиг
+      туннеля некуда.
+    </p>
+  <% } else { %>
+    <p class="hint">
+      Конфиг пишется в <code><%= panel.preview.target %></code>
+      правами <code>0600</code>.
+      <% if (panel.preview.applied) { %>
+        Файл там уже есть: при изменении прежняя версия будет сохранена рядом
+        снимком, а совпадающий текст будет отвергнут словами «изменений нет».
+      <% } else { %>
+        Файла там ещё нет.
+      <% } %>
+      Туннель при этом НЕ поднимается — это отдельное действие в разделе
+      «Система».
+    </p>
+    <form hx-post="/tunnel/apply" hx-target="#panel" hx-swap="innerHTML" method="post" action="/tunnel/apply">
+      <input type="hidden" name="provider" value="<%= panel.preview.provider %>">
+      <input type="hidden" name="file" value="<%= panel.preview.file %>">
+      <input type="hidden" name="name" value="<%= panel.preview.name %>">
+      <input type="hidden" name="policyRouting" value="<%= panel.preview.changes.some((change) => change.line.startsWith('PostUp')) ? '1' : '' %>">
+      <button type="submit" class="danger"
+              hx-confirm="Записать конфиг в <%= panel.preview.target %>? Туннель не поднимется.">Применить</button>
+    </form>
+  <% } %>
 <% } %>

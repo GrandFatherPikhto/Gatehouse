@@ -1,9 +1,13 @@
 # GateHouse: право перезапустить ровно один юнит, и ничего больше.
 #
 # Установка:
-#   sudo install -m 0440 -o root -g root deploy/sudoers.d-gatehouse \
+#   sudo install -m 0440 -o root -g denis deploy/sudoers.d-gatehouse \
 #        /etc/sudoers.d/gatehouse
 #   sudo visudo -c        # обязательно: сломанный файл в sudoers.d ломает sudo целиком
+#
+# Группа `denis` нужна на чтение: редактор читает этот файл, чтобы знать, каким
+# туннелям кнопки можно рисовать. Само чтение прав не повышает; запись в файл
+# приложение не делает никогда.
 #
 # Проверка (от имени denis):
 #   sudo -n systemctl restart sing-box && echo ok
@@ -16,3 +20,14 @@
 # systemctl в юните и в этом файле обязан совпадать.
 
 denis ALL=(root) NOPASSWD: /usr/bin/systemctl restart sing-box
+
+# --- Туннели (необязательно) ------------------------------------------------
+#
+# На каждый туннель — три строки, ПО ИМЕНИ, без wildcard. `awg-quick@*` одной
+# строкой не годится: она разрешила бы и те юниты, которых ещё нет, а имя юнита
+# приходит из имени файла, то есть из данных. Готовый блок для конкретного
+# туннеля показывает панель «Система»; ниже — образец для `de`.
+#
+# denis ALL=(root) NOPASSWD: /usr/bin/systemctl enable --now awg-quick@de
+# denis ALL=(root) NOPASSWD: /usr/bin/systemctl disable --now awg-quick@de
+# denis ALL=(root) NOPASSWD: /usr/bin/systemctl restart awg-quick@de

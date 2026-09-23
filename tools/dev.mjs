@@ -27,6 +27,12 @@ const SETTINGS = path.join(SANDBOX, 'webui.json');
 const CONFIG = path.join(SANDBOX, 'etc', 'sing-box', 'config.json');
 // Provider folder of the sample project; the reader looks under <settingsDir>/sources.
 const LINKS = path.join(SANDBOX, 'sources', 'vpnd', 'links.txt');
+// Where `awg-quick@<name>` reads `<name>.conf`. In the sandbox the editor writes
+// the normalised tunnel configs here, never into the router's /etc.
+const AMNEZIA = path.join(SANDBOX, 'etc', 'amnezia', 'amneziawg');
+// The sandbox has no sudoers rules of its own; the fake systemctl is not behind
+// sudo, so the probe file points at a path that is simply absent.
+const SUDOERS = path.join(SANDBOX, 'etc', 'sudoers.d', 'gatehouse');
 
 /** Path relative to the repository, for readable messages. */
 const rel = (file) => path.relative(ROOT, file) || '.';
@@ -60,6 +66,8 @@ Object.assign(process.env, {
   GATEHOUSE_CONFIG: CONFIG,
   GATEHOUSE_SETTINGS: SETTINGS,
   GATEHOUSE_STATE_DIR: path.join(SANDBOX, 'state'),
+  GATEHOUSE_AMNEZIA_DIR: AMNEZIA,
+  GATEHOUSE_SUDOERS: SUDOERS,
   GATEHOUSE_HOST: '127.0.0.1',
   GATEHOUSE_PORT: '9091',
   GATEHOUSE_TOKEN: '',

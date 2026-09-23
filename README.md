@@ -28,6 +28,14 @@ maintains that settings file. It is built in three stages:
   second-rung switch on — restarts the daemon. Implemented:
   [`src/watchdog/watchdog.mjs`](src/watchdog/watchdog.mjs:1) and
   [`src/watchdog/clash.mjs`](src/watchdog/clash.mjs:1).
+* **tunnel lifecycle — file, unit, exit**: a tunnel stops being a picture. The
+  normalisation preview gains «Применить», which writes the normalised
+  `<name>.conf` into the amnezia directory; the «Система» panel grows a row per
+  tunnel (state read from systemd, one checkbox for both axes, restart, journal);
+  and a tunnel becomes a first-class proxy — one tunnel, one proxy, one exit — by
+  binding a `direct` outbound to the interface. Implemented:
+  [`src/system/tunnel-file.mjs`](src/system/tunnel-file.mjs:1) and the tunnel
+  functions of [`src/system/index.mjs`](src/system/index.mjs:1).
 
 The core is a port, not a rewrite. The reference has three years of production
 use and 79 tests, so exact equality came first, not improvement. Anything that
@@ -209,6 +217,8 @@ from a request:
 | `GATEHOUSE_CURL` | `/usr/bin/curl` | binary the watchdog probes an inbound with |
 | `GATEHOUSE_SUDO` | `/usr/bin/sudo` | `sudo`; the value `none` calls `systemctl` directly (the polkit variant) |
 | `GATEHOUSE_UNIT` | `sing-box` | unit name |
+| `GATEHOUSE_AMNEZIA_DIR` | `/etc/amnezia/amneziawg` | directory `awg-quick@<name>` reads `<name>.conf` from; «Применить» writes it here |
+| `GATEHOUSE_SUDOERS` | `/etc/sudoers.d/gatehouse` | sudoers file the editor **reads** to learn which tunnels it may control. The editor never writes it |
 | `GATEHOUSE_CONFIG` | `/etc/sing-box/config.json` | default config of the commands; the UI passes the generated path |
 | `GATEHOUSE_TEST_URL` | `https://ipinfo.io` | target of the outbound test |
 | `GATEHOUSE_TEST_TIMEOUT` | `8000` | timeout of one outbound test, ms |
@@ -221,7 +231,8 @@ browser at a process that writes files is a path traversal waiting to happen.
 
 One tree node per screen: Общие, Провайдеры (source folders and their tunnels),
 Вывод, Прокси → tag, Маршруты → name, DNS, and under Система: Журнал,
-Тест серверов, Сторож. A tunnel config has its own normalisation preview screen.
+Тест серверов, Сторож. A tunnel config has its own normalisation preview screen
+with the «Применить» button and, further down, the tunnel rows grouped by provider.
 
 * **`webui.json` is flat; the profile level is gone.** The body used to be split
   between the active profile and `defaults`, but there was exactly one profile and
@@ -245,12 +256,16 @@ One tree node per screen: Общие, Провайдеры (source folders and t
   folder shows the servers it hands out, a tunnels folder shows its `.conf` files,
   each opening the normalisation preview. No action touches the files on disk:
   "remove" means "do not read it", never "delete the owner's folder".
-* **Tunnels never reach the generated config.** The normaliser
-  `src/core/normalize.mjs` is a pure function: it adds `Table = off`, drops `DNS =`,
-  keeps the interface name within 15 characters, and copies `AllowedIPs` plus the
-  obfuscation (`Jc/Jmin/Jmax`, `S1–S4`, `H1–H4`, `i1`) byte for byte. The screen is
-  a diff preview with exactly one checkbox (policy routing); the mandatory fixes
-  carry none and there is no apply button.
+* **A tunnel is applied from the preview, and only then does it become a proxy.**
+  The normaliser `src/core/normalize.mjs` is a pure function: it adds `Table = off`,
+  drops `DNS =`, keeps the interface name within 15 characters, and copies
+  `AllowedIPs` plus the obfuscation (`Jc/Jmin/Jmax`, `S1–S4`, `H1–H4`, `i1`) byte
+  for byte. The screen is a diff preview with exactly one checkbox (policy
+  routing) and a button «Применить», which writes `<amneziaDir>/<name>.conf` with
+  mode `0600` — overwriting only when the bytes really differ, and snapshotting the
+  previous version next to it (`<name>.conf.<ISO>`). It does **not** bring the
+  tunnel up: writing a file is reversible, starting a unit that carries the owner's
+  link to the router is not. See «Tunnels» below.
 * **DNS is a JSON text field.** sing-box has 16 kinds of DNS servers, the schema is
   fresh and still moving, and DNS is edited rarely; only "a valid JSON object" is
   checked. Structural forms were deliberately not built.
@@ -308,10 +323,11 @@ One tree node per screen: Общие, Провайдеры (source folders and t
   CLI uses, and says so when the editor had unsaved edits at that moment.
 * **The system layer is one module.** [`src/system/index.mjs`](src/system/index.mjs:1)
   exports `restartSingBox`, `checkConfig`, `tailJournal`, `testOutbound`,
-  `testOutbounds` and `geositeLookup`, and it is the only place
-  that runs a command. Always `execFile`/`spawn` with an argument array — tags look
-  like `🇨🇾 Cyprus - Limassol` and break a shell command line with no attacker
-  involved.
+  `testOutbounds`, `geositeLookup` and the tunnel verbs `tunnelState`,
+  `enableTunnel`, `disableTunnel`, `restartTunnel` plus the sudoers reader, and it
+  is the only place that runs a command. Always `execFile`/`spawn` with an argument
+  array — tags look like `🇨🇾 Cyprus - Limassol` and break a shell command line with
+  no attacker involved.
 
 ## System layer (stage 3)
 
@@ -354,6 +370,48 @@ environment, and the tests point them at the fake scripts of
   database, the owner's routing uses plain `domain_suffix`, and there is
   deliberately no panel for it: a missing database becomes «база geosite не
   установлена» instead of a bare `FATAL`.
+
+## Tunnels
+
+An AmneziaWG / hidemy.name tunnel is a `awg-quick@<name>` unit reading
+`<amneziaDir>/<name>.conf`. Setting one up is three separate, deliberate steps:
+**apply → bring up → make a proxy**. They are split because each is reversible on
+its own terms, and a single button doing all three would drop the owner's link to
+the router without asking.
+
+* **Apply (part 1).** The normalisation preview writes the config with mode `0600`
+  (it carries a private key) into `GATEHOUSE_AMNEZIA_DIR`. Identical bytes are a
+  no-op — «изменений нет», no file touched and no snapshot; differing bytes
+  snapshot the previous version next to it as `<name>.conf.<ISO>`. The unit is not
+  started.
+* **Bring up (part 2).** The «Система» panel shows one row per tunnel, grouped by
+  provider. State is read from systemd (`is-active`, `is-enabled`) without `sudo`,
+  never assumed: a tunnel someone started by hand is visible. One checkbox drives
+  both axes (`enable --now` / `disable --now`), and a divergence — up but not
+  enabled, or the reverse — is named in words, because that is what explains
+  "everything vanished after a reboot". Restart asks first and names the proxies
+  that will drop; `de` carries the owner's link to the router and the confirmation
+  says so. The journal is the same snapshot as sing-box, with `awg-quick@<name>`.
+* **Proxy (part 3).** One tunnel — one proxy — one exit. A proxy with a `tunnel`
+  descriptor gets an inbound `<tag>-in` and a `direct` outbound `<tag>` with
+  `bind_interface` (measured live: the probe answers with the tunnel's own exit,
+  `SO_BINDTODEVICE` bypasses the routing tables). No pools, no `urltest`, no
+  `selector`, no mixing with VLESS — predictability over cleverness, at the price
+  of no automatic failover. A proxy whose tunnel is not up gets a warning at
+  generation and a tree mark that names the consequence: «порт не работает:
+  туннель не поднят».
+* **Rights are shown, not granted.** The editor cannot and does not install
+  sudoers rules (that is the privilege escalation the current narrow rule exists
+  to prevent). It READS `GATEHOUSE_SUDOERS` and, for every tunnel lacking a rule,
+  draws the three lines to paste instead of a button. `awg-quick@*` would grant
+  units that do not exist yet — the name comes from the file name, i.e. from data —
+  so the rules are per name, without a wildcard. The install step makes the file
+  group-readable for the service (`0440 root:denis`); see
+  [`deploy/README.md`](deploy/README.md:1).
+
+The generator accepts an optional `tunnelStates`/`runningTunnels` argument that
+only feeds the §5.4 warning; when it is absent the core invents no warning. All of
+this is additive: without a tunnel proxy the output is byte-identical to before.
 
 ## Pinned exit, external API and the watchdog
 
@@ -482,13 +540,18 @@ Rules of the format:
   keeps a snapshot; the core refuses it with a message naming the editor, so
   generation never runs from a half-migrated document.
 * **`sources` is a list of provider folder names** under the sources root. A folder
-  may hold `links.txt`, `*.conf`, or both; tunnel configs are listed but never
-  turned into outbounds.
+  may hold `links.txt`, `*.conf`, or both; a tunnel config becomes an exit only
+  through a proxy carrying a `tunnel` descriptor (see below).
 * **`note` is a comment for humans** — in a profile and in a proxy. The core
   ignores it and it never reaches `config.json`.
 * **`pinned`, `watch` and `watch_url` on a proxy, and the `watchdog` section, are
   editor-only.** The core drops them, so `config.json` is unaffected; the model
   enforces the pinned rule and the watchdog reads the section.
+* **`tunnel` on a proxy is a real descriptor, not a comment.** It carries
+  `provider`, `file` and `interface`; such a proxy may not list `servers` (the
+  model and the core both refuse the combination — one tunnel, one exit) and the
+  generator emits an inbound plus a `direct` outbound with `bind_interface`. The
+  proxy tag names the outbound; the inbound is `<tag>-in`.
 * **`clash_api` is the one section that reaches `config.json`.** Off by default;
   when on it becomes `experimental.clash_api`. The secret is deliberately not a key
   of the file — it comes from the environment.
@@ -535,7 +598,8 @@ placeholders, so the golden file carries no secrets.
 | [`src/web/app.mjs`](src/web/app.mjs:1) | Express app: routes, form parsing, fragments |
 | [`src/web/server.mjs`](src/web/server.mjs:1) | `npm start`: environment, listen address |
 | [`src/web/panel.mjs`](src/web/panel.mjs:1) | view models handed to the templates |
-| [`src/system/index.mjs`](src/system/index.mjs:1) | system boundary: `checkConfig`, `restartSingBox`, `tailJournal`, `testOutbound`, `testOutbounds`, `testInbound`, `geositeLookup` |
+| [`src/system/index.mjs`](src/system/index.mjs:1) | system boundary: `checkConfig`, `restartSingBox`, `tailJournal`, `testOutbound`, `testOutbounds`, `testInbound`, `geositeLookup`, the tunnel verbs `tunnelState`/`enableTunnel`/`disableTunnel`/`restartTunnel` and the sudoers reader |
+| [`src/system/tunnel-file.mjs`](src/system/tunnel-file.mjs:1) | applying a normalised tunnel config: 0600 write, snapshot only on change, «изменений нет» |
 | [`src/watchdog/watchdog.mjs`](src/watchdog/watchdog.mjs:1) | liveness watchdog: fuses, the two-rung ladder, the 20-event history |
 | [`src/watchdog/clash.mjs`](src/watchdog/clash.mjs:1) | Clash-compatible HTTP API client: list and close connections of one inbound |
 | [`src/web/auth.mjs`](src/web/auth.mjs:1) | token transport, loopback check, the startup refusal |

@@ -56,6 +56,7 @@
 // command and turns "no database" into a sentence instead of a bare FATAL.
 
 import {execFile} from 'node:child_process';
+import fs from 'node:fs';
 
 /** Default path of the sing-box binary. */
 export const DEFAULT_SINGBOX_PATH = '/usr/local/bin/sing-box';
@@ -78,6 +79,18 @@ export const DEFAULT_JOURNALCTL_PATH = '/usr/bin/journalctl';
 export const DEFAULT_SUDO_PATH = '/usr/bin/sudo';
 /** Default name of the systemd unit of the daemon. */
 export const DEFAULT_UNIT = 'sing-box';
+/**
+ * Default directory the `awg-quick@<name>` template unit reads: it looks for
+ * `<name>.conf` exactly here. The editor writes the normalised tunnel config into
+ * this directory and the systemd unit picks it up by the file name.
+ */
+export const DEFAULT_AMNEZIA_DIR = '/etc/amnezia/amneziawg';
+/**
+ * Default path of the sudoers file the editor READS to learn which tunnel units
+ * it may control. It never writes this file — installing the rules is the
+ * owner's job, and reading them is not a privilege escalation.
+ */
+export const DEFAULT_SUDOERS_PATH = '/etc/sudoers.d/gatehouse';
 /** Default target of the outbound test. */
 export const DEFAULT_TEST_URL = 'https://ipinfo.io';
 /** Default path of the generated config the commands act on. */
@@ -158,6 +171,8 @@ export function systemConfig(env = process.env, overrides = {}) {
     journalctl: read('GATEHOUSE_JOURNALCTL', DEFAULT_JOURNALCTL_PATH),
     sudo: read('GATEHOUSE_SUDO', DEFAULT_SUDO_PATH),
     unit: read('GATEHOUSE_UNIT', DEFAULT_UNIT),
+    amneziaDir: read('GATEHOUSE_AMNEZIA_DIR', DEFAULT_AMNEZIA_DIR),
+    sudoers: read('GATEHOUSE_SUDOERS', DEFAULT_SUDOERS_PATH),
     testUrl: read('GATEHOUSE_TEST_URL', DEFAULT_TEST_URL),
     configPath: read('GATEHOUSE_CONFIG', DEFAULT_CONFIG_PATH),
     testTimeout: number(overrides.testTimeout ?? env.GATEHOUSE_TEST_TIMEOUT, DEFAULT_TEST_TIMEOUT),
@@ -559,6 +574,261 @@ export async function restartSingBox(options = {}) {
     timedOut: result.timedOut,
     command: [file, ...args],
   };
+}
+
+// ------------------------------------------------------------------
+// Tunnels (part 2 of the tunnel-lifecycle task)
+// ------------------------------------------------------------------
+//
+// A tunnel is a `awg-quick@<name>` template unit. Unlike `sing-box`, there is no
+// dedicated `check` step and no rollback: the `.conf` the unit reads is written
+// by part 1, and the unit either comes up or does not. Two independent systemd
+// axes are involved — "active now" and "enabled at boot" — and the panel shows
+// both, never assuming one from the other.
+
+/**
+ * Name of the systemd unit of a tunnel: `awg-quick@<name>`.
+ *
+ * @param {string} name Interface name (the `.conf` stem).
+ * @returns {string}
+ */
+export function tunnelUnitName(name) {
+  return `awg-quick@${String(name ?? '').trim()}`;
+}
+
+/**
+ * Builds the argv of one `systemctl` action on a unit, with or without sudo.
+ *
+ * Mirrors `restartSingBox`: `GATEHOUSE_SUDO=none` means "do not escalate" (the
+ * polkit variant), otherwise `sudo -n` is used and a missing sudoers rule fails
+ * loudly instead of hanging on a password.
+ *
+ * @param {string[]} action Verb and its flags, e.g. `['enable', '--now']`.
+ * @param {string} unit
+ * @param {Record<string, string|number>} config Result of `systemConfig`.
+ * @param {Record<string, unknown>} [options]
+ * @returns {{file: string, args: string[]}}
+ */
+function systemctlCommand(action, unit, config, options = {}) {
+  const sudoSetting = options.sudo ?? config.sudo;
+  const systemctl = options.systemctl ?? config.systemctl;
+  const useSudo = sudoSetting !== 'none' && sudoSetting !== '';
+  const file = useSudo ? sudoSetting : systemctl;
+  const args = useSudo
+    ? [...SUDO_NON_INTERACTIVE, systemctl, ...action, unit]
+    : [...action, unit];
+  return {file, args};
+}
+
+/**
+ * Runs one action on a tunnel unit.
+ *
+ * @param {string} name
+ * @param {string[]} action
+ * @param {{env?: Record<string, string|undefined>, timeout?: number,
+ *   signal?: AbortSignal, sudo?: string, systemctl?: string}} [options]
+ * @returns {Promise<{ok: boolean, code: number|null, stdout: string, stderr: string,
+ *   error: string|null, timedOut: boolean, unit: string, action: string[], command: string[]}>}
+ */
+async function tunnelAction(name, action, options = {}) {
+  const config = systemConfig(options.env, options);
+  const unit = tunnelUnitName(name);
+  const {file, args} = systemctlCommand(action, unit, config, options);
+
+  const result = await run(file, args, {
+    timeout: positive(options.timeout, config.testTimeout),
+    env: options.env,
+    signal: options.signal,
+  });
+
+  return {
+    ok: result.ok,
+    code: result.code,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    error: result.error,
+    timedOut: result.timedOut,
+    unit,
+    action,
+    command: [file, ...args],
+  };
+}
+
+/**
+ * Restarts one tunnel unit (`sudo -n systemctl restart awg-quick@<name>`).
+ *
+ * @param {string} name
+ * @param {Parameters<typeof tunnelAction>[2]} [options]
+ */
+export function restartTunnel(name, options = {}) {
+  return tunnelAction(name, ['restart'], options);
+}
+
+/**
+ * Brings a tunnel up now AND at boot: `enable --now`.
+ *
+ * One checkbox drives both axes on purpose. The four combinations of
+ * active/enabled include three "something went wrong" states, and the panel
+ * names a divergence in words instead of hiding it.
+ *
+ * @param {string} name
+ * @param {Parameters<typeof tunnelAction>[2]} [options]
+ */
+export function enableTunnel(name, options = {}) {
+  return tunnelAction(name, ['enable', '--now'], options);
+}
+
+/**
+ * Takes a tunnel down and out of the boot: `disable --now`.
+ *
+ * @param {string} name
+ * @param {Parameters<typeof tunnelAction>[2]} [options]
+ */
+export function disableTunnel(name, options = {}) {
+  return tunnelAction(name, ['disable', '--now'], options);
+}
+
+/**
+ * Reads both systemd axes of a tunnel unit: is it active now, is it enabled at
+ * boot. Neither call needs privileges, so no sudo is involved here.
+ *
+ * @param {string} name
+ * @param {{env?: Record<string, string|undefined>, timeout?: number,
+ *   signal?: AbortSignal, systemctl?: string}} [options]
+ * @returns {Promise<{unit: string, active: boolean, enabled: boolean,
+ *   activeRaw: string, enabledRaw: string, activeError: string|null,
+ *   enabledError: string|null}>}
+ */
+export async function tunnelState(name, options = {}) {
+  const config = systemConfig(options.env, options);
+  const unit = tunnelUnitName(name);
+  const systemctl = options.systemctl ?? config.systemctl;
+  const timeout = positive(options.timeout, config.testTimeout);
+
+  const one = async (verb) => {
+    const result = await run(systemctl, [verb, unit], {
+      timeout,
+      env: options.env,
+      signal: options.signal,
+    });
+    return {
+      ok: result.ok,
+      value: result.stdout.trim(),
+      error: result.error,
+    };
+  };
+
+  const [active, enabled] = await Promise.all([one('is-active'), one('is-enabled')]);
+
+  return {
+    unit,
+    // `is-active` prints `active` on success; anything else (inactive, failed,
+    // activating) is "not up" as far as the owner is concerned.
+    active: active.value === 'active',
+    enabled: enabled.value === 'enabled',
+    activeRaw: active.value,
+    enabledRaw: enabled.value,
+    activeError: active.error,
+    enabledError: enabled.error,
+  };
+}
+
+/**
+ * The three sudoers lines that let the editor control one tunnel.
+ *
+ * The rules are per NAME and without a wildcard: `awg-quick@*` would also grant
+ * units that do not exist yet, and the unit name comes from the file name, i.e.
+ * from data.
+ *
+ * @param {string} name
+ * @param {{systemctl?: string, user?: string}} [options] `user` defaults to the
+ *   account the process runs as.
+ * @returns {string[]} Three lines, in the order the panel lists them.
+ */
+export function tunnelSudoersLines(name, options = {}) {
+  const unit = tunnelUnitName(name);
+  const systemctl = options.systemctl ?? DEFAULT_SYSTEMCTL_PATH;
+  const user = options.user ?? process.env.USER ?? 'denis';
+  return [
+    `${user} ALL=(root) NOPASSWD: ${systemctl} enable --now ${unit}`,
+    `${user} ALL=(root) NOPASSWD: ${systemctl} disable --now ${unit}`,
+    `${user} ALL=(root) NOPASSWD: ${systemctl} restart ${unit}`,
+  ];
+}
+
+/**
+ * Parses a sudoers file into `{name -> {restart, enable, disable}}`.
+ *
+ * Only lines that mention the configured `systemctl` path and a `awg-quick@`
+ * unit are read; comments are ignored. The editor never writes this file — it
+ * only reads it to decide whether a button may be drawn.
+ *
+ * @param {string} text
+ * @param {{systemctl?: string}} [options]
+ * @returns {Record<string, {restart: boolean, enable: boolean, disable: boolean}>}
+ */
+export function parseTunnelSudoers(text, options = {}) {
+  const systemctl = options.systemctl ?? DEFAULT_SYSTEMCTL_PATH;
+  /** @type {Record<string, {restart: boolean, enable: boolean, disable: boolean}>} */
+  const map = {};
+
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.length === 0 || line.startsWith('#')) continue;
+    if (!line.includes('awg-quick@') || !line.includes(systemctl)) continue;
+
+    const match = /awg-quick@([A-Za-z0-9_.-]+)/.exec(line);
+    if (match === null) continue;
+    const name = match[1];
+    const entry = map[name] ?? (map[name] = {restart: false, enable: false, disable: false});
+
+    if (/\brestart\b/.test(line)) entry.restart = true;
+    else if (/\benable\b/.test(line) && /--now/.test(line)) entry.enable = true;
+    else if (/\bdisable\b/.test(line) && /--now/.test(line)) entry.disable = true;
+  }
+  return map;
+}
+
+/**
+ * Answers, per tunnel, which controls the editor may offer.
+ *
+ * A missing or unreadable sudoers file means "no rights at all": the safe answer
+ * is to show the rules to install, not to draw buttons the first click of which
+ * would fail. Each result carries `missingLines` — the exact lines to paste.
+ *
+ * @param {string} sudoersPath
+ * @param {string[]} names
+ * @param {{systemctl?: string, user?: string}} [options]
+ * @returns {Record<string, {restart: boolean, enable: boolean, disable: boolean,
+ *   canRestart: boolean, canToggle: boolean, missingLines: string[]}>}
+ */
+export function tunnelPermissions(sudoersPath, names, options = {}) {
+  let text = '';
+  try {
+    text = fs.readFileSync(sudoersPath, 'utf8');
+  } catch {
+    // No file, no rights. The rules have to be installed by the owner.
+    text = '';
+  }
+  const parsed = parseTunnelSudoers(text, options);
+  const [enableLine, disableLine, restartLine] = tunnelSudoersLines('__name__', options);
+
+  /** @type {Record<string, Record<string, unknown>>} */
+  const result = {};
+  for (const name of names) {
+    const entry = parsed[name] ?? {restart: false, enable: false, disable: false};
+    const missingLines = [];
+    if (!entry.enable) missingLines.push(enableLine.replace('__name__', name));
+    if (!entry.disable) missingLines.push(disableLine.replace('__name__', name));
+    if (!entry.restart) missingLines.push(restartLine.replace('__name__', name));
+    result[name] = {
+      ...entry,
+      canRestart: entry.restart,
+      canToggle: entry.enable && entry.disable,
+      missingLines,
+    };
+  }
+  return result;
 }
 
 /**

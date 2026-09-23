@@ -98,7 +98,7 @@ describe('the tunnel preview (NEW)', () => {
     }
   });
 
-  test('exactly one checkbox, no checkboxes on the mandatory fixes, no apply button', async () => {
+  test('one checkbox, none on the mandatory fixes, and the apply button', async () => {
     const editor = await startEditor();
     try {
       const response = await postTunnel(editor.base, {
@@ -108,9 +108,14 @@ describe('the tunnel preview (NEW)', () => {
       });
       const html = await response.text();
 
+      // Still exactly ONE checkbox — the one about FUTURE USE (policy routing).
+      // The apply form does not repeat it: it carries the already-computed value
+      // in a hidden field, so the two forms cannot disagree about the preview.
       assert.equal(html.split('type="checkbox"').length - 1, 1, 'one checkbox, for policy routing');
       assert.match(html, /отдаётся также через 3proxy по адресу источника/);
-      assert.doesNotMatch(html, />Применить</, 'the preview has no apply button');
+      assert.match(html, /hx-post="\/tunnel\/apply"/, 'the apply button posts to its own route');
+      assert.match(html, />Применить</);
+      assert.match(html, /Туннель при этом НЕ поднимается/);
     } finally {
       await editor.close();
     }

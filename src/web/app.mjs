@@ -24,11 +24,18 @@ import {
   PRIORITY_LEVELS,
   SystemError,
   checkConfig,
+  disableTunnel,
+  enableTunnel,
   restartSingBox,
+  restartTunnel,
   systemConfig,
   tailJournal,
   testOutbounds,
+  tunnelPermissions,
+  tunnelState,
+  tunnelUnitName,
 } from '../system/index.mjs';
+import {tunnelConfigApplied} from '../system/tunnel-file.mjs';
 import {Watchdog} from '../watchdog/watchdog.mjs';
 import {TOKEN_COOKIE, extractToken, tokenMatches} from './auth.mjs';
 import * as forms from './forms.mjs';
@@ -154,20 +161,25 @@ const SSE_HEADERS = Object.freeze({
  * @returns {import('express').Express}
  */
 export function createApp(options = {}) {
-  const model =
-    options.model ??
-    new ProjectModel({
-      path: options.settingsPath ?? null,
-      stateDir: options.stateDir,
-      snapshotKeep: options.snapshotKeep,
-    });
-
   const token = typeof options.token === 'string' ? options.token : '';
   // The environment of the process decides what the system layer runs; a request
   // never does. `systemConfig` reads the same variables the CLI does.
   const systemEnv = options.env ?? process.env;
   const system = systemConfig(systemEnv);
   const sandbox = isDevSandbox(systemEnv);
+
+  const model =
+    options.model ??
+    new ProjectModel({
+      path: options.settingsPath ?? null,
+      stateDir: options.stateDir,
+      snapshotKeep: options.snapshotKeep,
+      // Where «Применить» writes the normalised tunnel config.
+      amneziaDir: system.amneziaDir,
+    });
+  // `startServer` injects a model built before the environment was read; give it
+  // the amnezia directory too, without overriding a value a test set on purpose.
+  if (model.amneziaDir.length === 0) model.amneziaDir = system.amneziaDir;
 
   // Runtime state of the host layer. It lives on the app, not in a module global,
   // so two editors in one process (the tests start many) cannot see each other's
@@ -176,6 +188,9 @@ export function createApp(options = {}) {
     lastCheck: null,
     lastRestart: null,
     testsRunning: false,
+    // Runtime state of the tunnels, keyed by interface: `{applied, active,
+    // enabled, unit}`. Refreshed from the host before a request is rendered.
+    tunnels: {},
     // A document migrated by `model.open` is announced once, on the first render.
     migrationNoticeShown: false,
   };
@@ -222,6 +237,129 @@ export function createApp(options = {}) {
   }
   state.watchdog = watchdog;
 
+  // ------------------------------------------------------------------
+  // Tunnels: runtime state and rights (parts 1 and 2 of the task)
+  // ------------------------------------------------------------------
+
+  /**
+   * Reads the runtime state of every tunnel the document uses and caches it on
+   * `state.tunnels`, keyed by interface.
+   *
+   * Three questions are answered, and they are not the same question: is the
+   * `.conf` applied at all, is the unit active now, is it enabled at boot. Both
+   * systemd axes are read without `sudo`.
+   *
+   * @returns {Promise<Record<string, Record<string, unknown>>>}
+   */
+  async function refreshTunnelStates() {
+    const next = {};
+    for (const tunnel of model.tunnelProxies()) {
+      const unit = tunnelUnitName(tunnel.interface);
+      if (!tunnelConfigApplied(system.amneziaDir, tunnel.interface)) {
+        next[tunnel.interface] = {applied: false, active: false, enabled: false, unit};
+        continue;
+      }
+      const runtime = await tunnelState(tunnel.interface, {env: systemEnv});
+      next[tunnel.interface] = {
+        applied: true,
+        active: runtime.active,
+        enabled: runtime.enabled,
+        unit: runtime.unit,
+        activeRaw: runtime.activeRaw,
+        enabledRaw: runtime.enabledRaw,
+      };
+    }
+    state.tunnels = next;
+    return next;
+  }
+
+  /**
+   * Per interface, which tunnel controls the editor may offer. The answer comes
+   * from the sudoers file the process may READ; the editor never writes it.
+   *
+   * @returns {Record<string, Record<string, unknown>>}
+   */
+  function tunnelRights() {
+    const names = model.tunnelProxies().map((tunnel) => tunnel.interface);
+    return tunnelPermissions(system.sudoers, names, {systemctl: system.systemctl});
+  }
+
+  /**
+   * Names the divergence between the two systemd axes in words, or returns an
+   * empty string. Hiding it would leave "everything vanished after a reboot"
+   * unexplained, so it is always shown.
+   *
+   * @param {Record<string, unknown>} runtime
+   * @returns {string}
+   */
+  function tunnelDivergence(runtime) {
+    if (runtime.applied !== true) return 'конфиг не применён';
+    if (runtime.active === true && runtime.enabled !== true) {
+      return 'поднят, но не в автозагрузке: после перезагрузки пропадёт';
+    }
+    if (runtime.active !== true && runtime.enabled === true) {
+      return 'в автозагрузке, но сейчас не поднят';
+    }
+    return '';
+  }
+
+  /**
+   * The tunnel rows of the System panel, grouped by provider. The app assembles
+   * them because only it may talk to the host; the panel builder just arranges
+   * what it is handed.
+   *
+   * @returns {Array<Record<string, unknown>>}
+   */
+  function tunnelPanelRows() {
+    const rights = tunnelRights();
+    const usage = model.tunnelUsage();
+    return model.tunnelGroups().map((group) => ({
+      provider: group.provider,
+      tunnels: group.tunnels.map((tunnel) => {
+        const runtime = state.tunnels[tunnel.interface] ?? {
+          applied: false,
+          active: false,
+          enabled: false,
+        };
+        const permission = rights[tunnel.interface] ?? {
+          canRestart: false,
+          canToggle: false,
+          missingLines: [],
+        };
+        const unit = tunnelUnitName(tunnel.interface);
+        return {
+          ...tunnel,
+          unit,
+          applied: runtime.applied === true,
+          active: runtime.active === true,
+          enabled: runtime.enabled === true,
+          divergence: tunnelDivergence(runtime),
+          usedBy: usage.get(tunnel.interface) ?? [],
+          canRestart: permission.canRestart === true,
+          canToggle: permission.canToggle === true,
+          missingLines: permission.missingLines ?? [],
+          journalUrl: `/panel/journal?unit=${encodeURIComponent(unit)}&level=warning`,
+        };
+      }),
+    }));
+  }
+
+  /**
+   * Refuses a tunnel name the document does not describe, so a crafted body
+   * cannot aim the unit actions at an arbitrary unit.
+   *
+   * @param {unknown} name
+   * @returns {string}
+   */
+  function assertKnownTunnel(name) {
+    const clean = String(name ?? '').trim();
+    if (clean.length === 0) throw new ConfigError('не указано имя туннеля');
+    if (!model.tunnelProxies().some((tunnel) => tunnel.interface === clean)) {
+      throw new ConfigError(`туннель '${clean}' не описан ни одним прокси`);
+    }
+    return clean;
+  }
+
   const app = express();
   app.disable('x-powered-by');
   app.set('view engine', 'ejs');
@@ -265,6 +403,20 @@ export function createApp(options = {}) {
         );
     });
   }
+
+  // The tunnel rows of the System panel and the tree marks need runtime state,
+  // and Express handlers are synchronous once they render. Refresh the cache
+  // before every request; with no tunnel proxies this is a no-op. A failure is
+  // swallowed on purpose: a broken `systemctl` must not take the editor down —
+  // the panel then shows what it last knew.
+  app.use(async (req, res, next) => {
+    try {
+      await refreshTunnelStates();
+    } catch {
+      // keep the previous snapshot
+    }
+    next();
+  });
 
   /**
    * Builds a panel, falling back to a neighbouring one when the requested panel
@@ -335,6 +487,9 @@ export function createApp(options = {}) {
         journalLevel: DEFAULT_JOURNAL_LEVEL,
         journalLevels: PRIORITY_LEVELS,
       },
+      // Tunnel rows of the System panel. Assembled here, from the cached runtime
+      // state and the sudoers rights, so the panel builders stay pure.
+      tunnels: tunnelPanelRows(),
       watchdog: state.watchdog === null ? undefined : state.watchdog.snapshot(),
       auth: {tokenRequired: token.length > 0, apiSecretPresent: apiSecret.length > 0},
     };
@@ -343,7 +498,9 @@ export function createApp(options = {}) {
       model,
       key: resolved.key,
       panel: resolved.panel,
-      tree: model.treeSpec(),
+      // The tree marks a proxy on a stopped tunnel; the states come from the
+      // cache refreshed by the middleware above.
+      tree: model.treeSpec({tunnelStates: state.tunnels}),
       status: buildStatus(model),
       extra: resolved.extra,
       sandbox,
@@ -630,8 +787,40 @@ export function createApp(options = {}) {
         return {
           key: `tunnel:${provider}/${file}`,
           tunnel: preview,
-          notice: 'Предпросмотр: показано, что будет изменено. Ничего не применено и не записано.',
+          notice: 'Предпросмотр пересчитан. Кнопка «Применить» запишет этот текст; туннель она не поднимает.',
         };
+      },
+    ),
+  );
+
+  /**
+   * Writes the normalised tunnel config into the amnezia directory (§3).
+   *
+   * This is deliberately NOT the same action as bringing the tunnel up: writing
+   * a file is reversible, starting a unit that carries the owner's link to the
+   * router is not. The same bytes already on disk are a no-op — «изменений нет»
+   * — so a repeated click does not grow the snapshot series.
+   */
+  app.post(
+    '/tunnel/apply',
+    mutation(
+      (req) => `tunnel:${String(req.body.provider ?? '')}/${String(req.body.file ?? '')}`,
+      (req) => {
+        const provider = String(req.body.provider ?? '').trim();
+        const file = String(req.body.file ?? '').trim();
+        const name = String(req.body.name ?? '');
+        const policyRouting = forms.checkbox(req.body.policyRouting);
+        const applied = model.applyTunnel(provider, file, {name, policyRouting});
+        // Re-read so the panel shows the fresh `applied` flag and target path.
+        const preview = model.tunnelPreview(provider, file, {name, policyRouting});
+        const notice = applied.changed
+          ? `Конфиг записан: ${applied.path}` +
+            (applied.snapshot === null
+              ? ''
+              : ` (снимок прежней версии: ${path.basename(applied.snapshot)})`) +
+            '. Туннель при этом НЕ поднят — поднимите его в разделе «Система».'
+          : `Изменений нет: ${applied.path} уже содержит ровно этот конфиг. Ничего не записано.`;
+        return {key: `tunnel:${provider}/${file}`, tunnel: preview, notice};
       },
     ),
   );
@@ -676,7 +865,7 @@ export function createApp(options = {}) {
 
   app.post(
     '/generate',
-    mutation('output', () => {
+    mutation('output', async () => {
       // Snapshot BEFORE the generator overwrites the file: the whole point of the
       // rollback is to bring back byte-for-byte what the daemon was running, and
       // that copy has to be taken while it still exists.
@@ -684,7 +873,14 @@ export function createApp(options = {}) {
       const snapshot = model.configExists()
         ? snapshotConfig(configPath, model.stateDir, {keep: CONFIG_SNAPSHOT_KEEP})
         : null;
-      const generation = model.generate();
+      // §5.4: a proxy on a stopped tunnel is a silently dead port, so the warning
+      // needs to know which interfaces are really up. The state is read from the
+      // host here and handed to the pure generator.
+      await refreshTunnelStates();
+      const runningTunnels = Object.entries(state.tunnels)
+        .filter(([, runtime]) => runtime.active === true)
+        .map(([name]) => name);
+      const generation = model.generate({runningTunnels});
 
       // New bytes invalidate the old check: the previous check judged a different
       // file, so it must not authorise a restart of what is on disk now.
@@ -921,6 +1117,76 @@ export function createApp(options = {}) {
         notice: result.ok
           ? `Восстановлен ${from} и sing-box перезапущен.`
           : `Конфиг восстановлен из ${from}, но перезапуск не удался: ` +
+            `${result.stderr.trim() || result.error || 'без вывода'}`,
+      };
+    }),
+  );
+
+  // ------------------------------------------------------------------
+  // Tunnel lifecycle: up/down and restart (part 2)
+  // ------------------------------------------------------------------
+  //
+  // One checkbox drives both systemd axes — `enable --now` and `disable --now` —
+  // so the four combinations cannot be reached by accident. Each route reads the
+  // sudoers permission first: the panel does not draw a button without it, and a
+  // direct POST is refused with the exact lines to install.
+
+  app.post(
+    '/tunnel/toggle',
+    mutation('system', async (req) => {
+      const name = assertKnownTunnel(req.body.name);
+      const runtime = state.tunnels[name] ?? {applied: false};
+      if (runtime.applied !== true) {
+        throw new ConfigError(
+          `конфиг туннеля '${name}' не применён: сначала «Применить» в разделе «Провайдеры»`,
+        );
+      }
+      const rights = tunnelRights()[name];
+      if (rights?.canToggle !== true) {
+        throw new ConfigError(
+          `нет правил sudoers на управление туннелем '${name}'. Добавьте строки:\n` +
+            (rights?.missingLines ?? []).join('\n'),
+        );
+      }
+
+      const up = forms.checkbox(req.body.up);
+      const result = up
+        ? await enableTunnel(name, {env: systemEnv})
+        : await disableTunnel(name, {env: systemEnv});
+      await refreshTunnelStates();
+
+      return {
+        key: 'system',
+        notice: result.ok
+          ? `Туннель '${name}' ${
+              up ? 'поднят и включён в автозагрузку' : 'опущен и убран из автозагрузки'
+            }.`
+          : `Не удалось изменить состояние туннеля '${name}': ` +
+            `${result.stderr.trim() || result.error || 'без вывода'}`,
+      };
+    }),
+  );
+
+  app.post(
+    '/tunnel/restart',
+    mutation('system', async (req) => {
+      const name = assertKnownTunnel(req.body.name);
+      const rights = tunnelRights()[name];
+      if (rights?.canRestart !== true) {
+        throw new ConfigError(
+          `нет правила sudoers на перезапуск туннеля '${name}'. Добавьте строки:\n` +
+            (rights?.missingLines ?? []).join('\n'),
+        );
+      }
+
+      const result = await restartTunnel(name, {env: systemEnv});
+      await refreshTunnelStates();
+
+      return {
+        key: 'system',
+        notice: result.ok
+          ? `Туннель '${name}' перезапущен. Соединения через него оборвались — как и предупреждали.`
+          : `Перезапуск туннеля '${name}' не удался: ` +
             `${result.stderr.trim() || result.error || 'без вывода'}`,
       };
     }),

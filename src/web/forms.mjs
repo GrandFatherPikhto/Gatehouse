@@ -80,9 +80,15 @@ export function selection(value) {
 /**
  * Parses the proxy form.
  *
+ * The tunnel selector is two fields: `tunnel` carries `provider/file` (the value
+ * of the `<select>`), `tunnel_interface` the interface name. An empty `tunnel`
+ * means "an ordinary proxy", and the key is left out entirely, so an untouched
+ * form does not add an empty `tunnel` object to `webui.json`.
+ *
  * @param {Record<string, unknown>} body
- * @returns {{tag: string, type: string, port: number, servers: string[], note: string,
- *   pinned: boolean, watch: boolean, watch_url: string}}
+ * @returns {{tag: string, type: string, port: number, servers: string[],
+ *   tunnel: {provider: string, file: string, interface: string}|undefined,
+ *   note: string, pinned: boolean, watch: boolean, watch_url: string}}
  */
 export function parseProxyForm(body) {
   const type = String(body.type ?? '');
@@ -96,11 +102,26 @@ export function parseProxyForm(body) {
     throw new ConfigError('не указан тег (tag) или это не строка');
   }
 
+  const reference = String(body.tunnel ?? '').trim();
+  let tunnel;
+  if (reference.length > 0) {
+    const slash = reference.indexOf('/');
+    if (slash <= 0 || slash === reference.length - 1) {
+      throw new ConfigError(`туннель '${reference}' должен быть в виде provider/file`);
+    }
+    tunnel = {
+      provider: reference.slice(0, slash),
+      file: reference.slice(slash + 1),
+      interface: String(body.tunnel_interface ?? '').trim(),
+    };
+  }
+
   return {
     tag,
     type,
     port: port(body.port),
     servers: selection(body.servers),
+    tunnel,
     note: String(body.note ?? '').trim(),
     pinned: checkbox(body.pinned),
     watch: checkbox(body.watch),

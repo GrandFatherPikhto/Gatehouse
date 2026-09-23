@@ -34,7 +34,8 @@ import {
 } from '../core/settings.mjs';
 import {normalizeTunnel} from '../core/normalize.mjs';
 import {readSources, resolveSourcesRoot, sourceNames} from '../core/sources.mjs';
-import {asList, requireMapping, urltestBlock, validateProxies} from '../core/validate.mjs';
+import {applyTunnelConfig, tunnelConfigPath} from '../system/tunnel-file.mjs';
+import {asList, isTunnelProxy, requireMapping, urltestBlock, validateProxies} from '../core/validate.mjs';
 import {normalizeClashApi, normalizeProxy, normalizeWatchdog} from '../watchdog/watchdog.mjs';
 import {staleMap, treeSpec as buildTree} from './stale.mjs';
 import {
@@ -68,6 +69,14 @@ export const DOCUMENT_VERSION = 2;
  * to prevent, and the owner has to be told how to lift the mark.
  */
 export const PINNED_REFUSAL = 'у прокси зафиксирован выход — снимите отметку, если нужен пул';
+
+/**
+ * Refusal shown when a tunnel proxy would also carry a server list. §5.1 of the
+ * task: one tunnel — one proxy — one exit; mixing it with a pool would put the
+ * "which exit did it actually take" question right back.
+ */
+export const TUNNEL_WITH_SERVERS_REFUSAL =
+  'у туннельного прокси не может быть серверов: один туннель — один выход';
 
 /**
  * A name made of digits only is refused by the schema, and for a reason that
@@ -202,8 +211,12 @@ export function formatStats(outputFile, stats, warnings = []) {
     `Серверов: ${stats.servers}, инбаундов: ${stats.inbounds}, пулов: ${stats.pools}`,
   ];
   for (const proxy of stats.proxies ?? []) {
-    const servers = proxy.servers.length > 0 ? proxy.servers.join(', ') : 'auto-select';
-    lines.push(`  [${proxy.type.toUpperCase()}] ${proxy.tag} : port ${proxy.port} -> ${servers}`);
+    const target = isTunnelProxy(proxy)
+      ? `туннель ${proxy.tunnel.interface}`
+      : proxy.servers.length > 0
+        ? proxy.servers.join(', ')
+        : 'auto-select';
+    lines.push(`  [${proxy.type.toUpperCase()}] ${proxy.tag} : port ${proxy.port} -> ${target}`);
   }
   const excluded = stats.excluded ?? [];
   if (excluded.length > 0) {
@@ -246,6 +259,14 @@ export class ProjectModel {
   constructor(options = {}) {
     this.stateDir = options.stateDir ?? path.join(process.cwd(), DEFAULT_STATE_DIR);
     this.snapshotKeep = options.snapshotKeep ?? DEFAULT_SNAPSHOT_KEEP;
+    /**
+     * Directory `awg-quick@<name>` reads `<name>.conf` from
+     * (`GATEHOUSE_AMNEZIA_DIR`). Empty means "not configured" and an apply is
+     * refused with a sentence instead of writing somewhere unexpected.
+     *
+     * @type {string}
+     */
+    this.amneziaDir = typeof options.amneziaDir === 'string' ? options.amneziaDir : '';
     this.path = null;
     this.document = newDocument();
     /**
@@ -825,6 +846,7 @@ export class ProjectModel {
       type: candidate.type ?? DEFAULT_PROXY_TYPE,
       port: candidate.port ?? this.nextFreePort(),
       servers: candidate.servers,
+      tunnel: candidate.tunnel,
       note: candidate.note,
       pinned: candidate.pinned,
       watch: candidate.watch,
@@ -1092,7 +1114,121 @@ export class ProjectModel {
       policyRouting: options.policyRouting === true,
     });
 
-    return {provider, file, path: filePath, ...result};
+    const target = this.amneziaDir ? tunnelConfigPath(this.amneziaDir, result.name) : null;
+    return {
+      provider,
+      file,
+      path: filePath,
+      // Where «Применить» would write, and whether that file is already there.
+      target,
+      applied: target !== null && fs.existsSync(target),
+      ...result,
+    };
+  }
+
+  /**
+   * Applies the normalised config of one tunnel (part 1, §3): writes
+   * `<amneziaDir>/<name>.conf` with mode 0600, taking a snapshot next to it only
+   * when the bytes really change.
+   *
+   * The tunnel is NOT brought up here — that is the separate action of part 2.
+   * Returns what the panel needs to say: the target, whether anything changed and
+   * the name of the snapshot.
+   *
+   * @param {string} providerName
+   * @param {string} fileName
+   * @param {{name?: string, policyRouting?: boolean}} [options]
+   * @returns {{name: string, path: string, changed: boolean, snapshot: string|null,
+   *   removed: string[], preview: Record<string, unknown>}}
+   */
+  applyTunnel(providerName, fileName, options = {}) {
+    if (this.amneziaDir.length === 0) {
+      throw new ConfigError(
+        'не задан каталог amnezia: укажите GATEHOUSE_AMNEZIA_DIR, иначе писать конфиг туннеля некуда',
+      );
+    }
+    const preview = this.tunnelPreview(providerName, fileName, options);
+    let result;
+    try {
+      result = applyTunnelConfig(preview.text, {name: preview.name, amneziaDir: this.amneziaDir});
+    } catch (error) {
+      throw new ConfigError(`не удалось записать конфиг туннеля: ${error.message}`);
+    }
+    return {...result, name: preview.name, preview};
+  }
+
+  /**
+   * Tunnels the document knows about: proxies carrying a `tunnel` descriptor.
+   *
+   * @returns {Array<{tag: string, type: string, port: number, provider: string,
+   *   file: string, interface: string}>}
+   */
+  tunnelProxies() {
+    return this.proxies()
+      .filter((proxy) => isMapping(proxy) && isMapping(proxy.tunnel))
+      .map((proxy) => ({
+        tag: proxy.tag,
+        type: proxy.type,
+        port: proxy.port,
+        provider: proxy.tunnel.provider,
+        file: proxy.tunnel.file,
+        interface: proxy.tunnel.interface,
+      }));
+  }
+
+  /**
+   * `interface -> [proxy tags]` for the restart confirmation: it has to name the
+   * proxies that stop working, not just say "connections will drop".
+   *
+   * @returns {Map<string, string[]>}
+   */
+  tunnelUsage() {
+    const usage = new Map();
+    for (const tunnel of this.tunnelProxies()) {
+      const list = usage.get(tunnel.interface) ?? [];
+      list.push(tunnel.tag);
+      usage.set(tunnel.interface, list);
+    }
+    return usage;
+  }
+
+  /**
+   * The tunnels of the document grouped by provider, the order the System panel
+   * renders them in.
+   *
+   * @returns {Array<{provider: string, tunnels: Array<Record<string, unknown>>}>}
+   */
+  tunnelGroups() {
+    const groups = new Map();
+    for (const tunnel of this.tunnelProxies()) {
+      const list = groups.get(tunnel.provider) ?? [];
+      list.push(tunnel);
+      groups.set(tunnel.provider, list);
+    }
+    return [...groups.entries()].map(([provider, tunnels]) => ({provider, tunnels}));
+  }
+
+  /**
+   * Tunnel configs offered to the proxy form, one per `*.conf` of every provider
+   * folder that was read. `name` is the suggested interface name (the file stem,
+   * clipped to the kernel limit).
+   *
+   * @returns {Array<{provider: string, file: string, name: string}>}
+   */
+  availableTunnels() {
+    const info = this.sourcesInfo();
+    const list = [];
+    for (const provider of info.providers) {
+      if (provider.error) continue;
+      for (const entry of provider.entries ?? []) {
+        list.push({
+          provider: provider.name,
+          file: entry,
+          name: entry.replace(/\.conf$/, '').slice(0, 15),
+        });
+      }
+    }
+    return list;
   }
 
   /** Reference: `load_server_tags`, reduced to what most callers need. */
@@ -1117,7 +1253,7 @@ export class ProjectModel {
    *
    * @returns {Record<string, unknown>}
    */
-  treeSpec() {
+  treeSpec(options = {}) {
     const info = this.sourcesInfo();
     return buildTree({
       document: this.document,
@@ -1126,6 +1262,9 @@ export class ProjectModel {
       sourcesRoot: info.root,
       providers: info.providers,
       outputFile: this.outputFile,
+      // Runtime tunnel states, handed in by the web layer. Absent means "not
+      // asked", and then no proxy gets a tunnel mark.
+      tunnelStates: options.tunnelStates ?? {},
     });
   }
 
@@ -1137,7 +1276,10 @@ export class ProjectModel {
    * Generates `config.json` by calling the core on the SAVED file: unsaved edits
    * are not silently included, `wasDirty` tells the UI to say so.
    *
-   * @param {{output?: string, links?: string, listenIp?: string, excludeFromAuto?: unknown[]}} [options]
+   * @param {{output?: string, links?: string, listenIp?: string,
+   *   excludeFromAuto?: unknown[], runningTunnels?: string[]}} [options]
+   *   `runningTunnels` is the set of tunnel interfaces the caller found up in
+   *   systemd; it only feeds the §5.4 warning.
    * @returns {{outputFile: string, stats: Record<string, unknown>, warnings: string[],
    *   config: Record<string, unknown>, summary: string, wasDirty: boolean}}
    */
@@ -1198,7 +1340,8 @@ export class ProjectModel {
    * reach `config.json` — `validateProxies` of the core drops them).
    *
    * @param {{tag?: unknown, type?: unknown, port?: unknown, servers?: unknown,
-   *   note?: unknown, pinned?: unknown, watch?: unknown, watch_url?: unknown}} candidate
+   *   tunnel?: unknown, note?: unknown, pinned?: unknown, watch?: unknown,
+   *   watch_url?: unknown}} candidate
    * @returns {Record<string, unknown>}
    */
   #proxyEntry(candidate) {
@@ -1206,7 +1349,23 @@ export class ProjectModel {
     const servers = asList(candidate.servers).filter(
       (server) => typeof server === 'string' && server.length > 0,
     );
-    if (servers.length > 0) entry.servers = servers;
+
+    // A tunnel proxy owns no server list: its single exit is the interface. The
+    // refusal protects the same thing the pinned flag does — an exit that must not
+    // silently become a pool.
+    if (isMapping(candidate.tunnel)) {
+      const provider = String(candidate.tunnel.provider ?? '').trim();
+      const file = String(candidate.tunnel.file ?? '').trim();
+      const iface = String(candidate.tunnel.interface ?? '').trim();
+      if (provider.length === 0 || file.length === 0 || iface.length === 0) {
+        throw new ConfigError('туннель прокси задан неполно: нужны provider, file и interface');
+      }
+      if (servers.length > 0) throw new ConfigError(TUNNEL_WITH_SERVERS_REFUSAL);
+      entry.tunnel = {provider, file, interface: iface};
+    } else if (servers.length > 0) {
+      entry.servers = servers;
+    }
+
     if (typeof candidate.note === 'string' && candidate.note.length > 0) {
       entry.note = candidate.note;
     }

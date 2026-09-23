@@ -16,7 +16,8 @@
 #   sudo chown root:denis /etc/gatehouse/env
 #   sudo chmod 0640 /etc/gatehouse/env
 #   sudoedit /etc/gatehouse/env            # вписать токен
-#   sudo install -m 0440 deploy/sudoers.d-gatehouse /etc/sudoers.d/gatehouse
+#   sudo install -m 0440 -o root -g denis \
+#        deploy/sudoers.d-gatehouse /etc/sudoers.d/gatehouse
 #   sudo visudo -c                              # обязательно проверить синтаксис
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now gatehouse
@@ -62,6 +63,12 @@ Environment=GATEHOUSE_SINGBOX=/usr/local/bin/sing-box
 Environment=GATEHOUSE_SYSTEMCTL=/usr/bin/systemctl
 Environment=GATEHOUSE_JOURNALCTL=/usr/bin/journalctl
 Environment=GATEHOUSE_UNIT=sing-box
+# `awg-quick@<name>` reads `<name>.conf` from here; the editor writes normalised
+# tunnel configs into this directory (see ReadWritePaths below).
+Environment=GATEHOUSE_AMNEZIA_DIR=/etc/amnezia/amneziawg
+# The editor READS this file to learn which tunnel units it may control. Install
+# it group-readable for denis, or every tunnel will be shown without buttons.
+Environment=GATEHOUSE_SUDOERS=/etc/sudoers.d/gatehouse
 EnvironmentFile=/etc/gatehouse/env
 
 Restart=always
@@ -78,7 +85,9 @@ RestartSec=5
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/etc/sing-box
+# /etc/sing-box holds the generated config.json; /etc/amnezia/amneziawg holds the
+# normalised tunnel configs the editor writes. Both are opened for write explicitly.
+ReadWritePaths=/etc/sing-box /etc/amnezia/amneziawg
 # NoNewPrivileges=yes здесь включить НЕЛЬЗЯ: он блокирует setuid, то есть ломает
 # `sudo`, а с ним и перезапуск демона. Если хочется и его — берите вариант на
 # polkit: deploy/gatehouse.service.polkit.
