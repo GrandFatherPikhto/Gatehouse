@@ -282,6 +282,21 @@ function defaultInterfaceName(label) {
 }
 
 /**
+ * Prefix of a server tag: its first whitespace-delimited word, which for the
+ * provider files is the country flag (`🇷🇺`). This is what `exclude_from_auto`
+ * matches with `startsWith`, in the generator and in the servers picker alike.
+ *
+ * @param {string} tag
+ * @returns {string}
+ */
+export function tagPrefix(tag) {
+  const text = String(tag ?? '').trim();
+  if (text.length === 0) return '';
+  const separator = text.search(/\s/);
+  return separator < 0 ? text : text.slice(0, separator);
+}
+
+/**
  * The state of one open `webui.json`.
  */
 export class ProjectModel {
@@ -788,6 +803,39 @@ export class ProjectModel {
       },
       exclude_from_auto: asList(body.exclude_from_auto),
     };
+  }
+
+  /**
+   * The checkbox list of «исключить из автовыбора»: one row per flag prefix found
+   * among the loaded servers, plus every stored prefix that matches no server now.
+   *
+   * `selected` is the EFFECTIVE value: an absent `exclude_from_auto` means the
+   * core's default (`DEFAULT_EXCLUDE`), not an empty list, and showing it empty
+   * would claim the generator sends 🇷🇺 to auto-select when it does not. Rows in
+   * `unknown` are rendered checked for the same reason: a rule the owner wrote must
+   * not disappear because the matching server is temporarily out of the file.
+   *
+   * @returns {{selected: string[], options: Array<{prefix: string, count: number}>,
+   *   unknown: string[]}}
+   */
+  excludePrefixOptions() {
+    const counts = new Map();
+    for (const tag of this.sourcesInfo().tags) {
+      const prefix = tagPrefix(tag);
+      if (prefix.length === 0) continue;
+      counts.set(prefix, (counts.get(prefix) ?? 0) + 1);
+    }
+
+    const options = [...counts.entries()]
+      .map(([prefix, count]) => ({prefix, count}))
+      .sort((a, b) => a.prefix.localeCompare(b.prefix));
+
+    const selected = Object.hasOwn(this.document, 'exclude_from_auto')
+      ? asList(this.document.exclude_from_auto).map((item) => String(item))
+      : [...DEFAULT_EXCLUDE];
+    const known = new Set(counts.keys());
+
+    return {selected, options, unknown: selected.filter((prefix) => !known.has(prefix))};
   }
 
   /**

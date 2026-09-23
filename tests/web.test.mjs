@@ -265,7 +265,7 @@ describe('editing forms', () => {
         urltest_tolerance: '50',
         log_level: 'debug',
         log_timestamp: '1',
-        exclude_from_auto: '🇷🇺\n🇩🇪\n',
+        exclude_from_auto: ['🇷🇺', '🇩🇪'],
       });
 
       assert.equal(response.status, 200);

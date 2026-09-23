@@ -582,6 +582,12 @@ Rules of the format:
   falls back to `GATEHOUSE_AMNEZIA_DIR`, then `/etc/amnezia/amneziawg`. The write
   path, the delete path and the start-up fuse read this same value, so they can never
   disagree about which file is meant.
+* **`exclude_from_auto` is edited as a row of flags.** «Настройки Sing-Box» draws one
+  checkbox per flag found among the loaded servers (`🇷🇺`, `🇫🇮`, …) with the number of
+  servers it covers; a stored prefix that matches no server right now is drawn checked
+  as «нет в списке», so saving never drops a rule. An empty set stores an empty list —
+  "exclude nothing" — while a document that never carried the key keeps the core
+  default (`🇷🇺`), shown checked.
 * **`note` is a comment for humans** — in a profile and in a proxy. The core
   ignores it and it never reaches `config.json`.
 * **`pinned`, `watch` and `watch_url` on a proxy, and the `watchdog` section, are

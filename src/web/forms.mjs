@@ -197,6 +197,11 @@ export function parseRouteForm(body) {
 /**
  * Parses the general settings form.
  *
+ * `exclude_from_auto` is a row of checkboxes now, so it arrives as one value, an
+ * array of them, or not at all. Unticking every box means an EMPTY list — "nothing
+ * is excluded" — which is what the panel says in words; the core's default prefix
+ * then applies only to a document that never carried the key.
+ *
  * @param {Record<string, unknown>} body
  * @returns {{listen_ip: string, urltest: Record<string, unknown>,
  *   log: Record<string, unknown>, exclude_from_auto: string[]}}
@@ -213,6 +218,8 @@ export function parseGeneralForm(body) {
       level: String(body.log_level ?? '').trim(),
       timestamp: checkbox(body.log_timestamp),
     },
-    exclude_from_auto: lines(body.exclude_from_auto),
+    exclude_from_auto: selection(body.exclude_from_auto)
+      .map((prefix) => prefix.trim())
+      .filter((prefix) => prefix.length > 0),
   };
 }

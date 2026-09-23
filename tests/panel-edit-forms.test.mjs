@@ -97,7 +97,7 @@ const GENERAL_FIELDS = Object.freeze({
   urltest_tolerance: '42',
   log_level: 'debug',
   log_timestamp: '1',
-  exclude_from_auto: '🇷🇺\n🇩🇪',
+  exclude_from_auto: ['🇷🇺', '🇩🇪'],
 });
 
 /** The DNS text of the dns panel. */

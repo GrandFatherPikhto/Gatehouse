@@ -181,6 +181,9 @@ export function buildPanel(model, key, extra = {}) {
         ...base,
         title: 'Настройки Sing-Box',
         values: model.generalValues(),
+        // The checkbox list of «исключить из автовыбора»: the flags really present
+        // among the loaded servers plus the stored ones that match nothing now.
+        exclude: model.excludePrefixOptions(),
         json: model.dnsJson(),
         outputFile: model.outputFile,
         resolvedOutput: model.resolvedOutputPath(),

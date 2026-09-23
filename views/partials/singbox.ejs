@@ -29,9 +29,49 @@
   </fieldset>
 
   <fieldset>
-    <legend>exclude_from_auto</legend>
-    <p class="hint">Префиксы тегов, по одному в строке. Пустая строка ничего не добавляет.</p>
-    <textarea name="exclude_from_auto" rows="5" cols="40"><%= panel.values.exclude_from_auto.join('\n') %></textarea>
+    <legend>исключить из автовыбора</legend>
+    <p class="hint">
+      Серверы, тег которых начинается с отмеченного флага, не попадают в
+      <code>auto-select</code>. Ничего не отмечено — в автовыбор идут все серверы.
+      Рядом с флагом — сколько серверов он затрагивает. Сохранённый префикс, для
+      которого сейчас нет ни одного сервера, остаётся отмеченным строкой
+      «нет в списке»: сохранение его не теряет.
+    </p>
+    <% const excluded = new Set(panel.exclude.selected); %>
+    <% if (panel.exclude.options.length === 0 && panel.exclude.unknown.length === 0) { %>
+      <p class="hint">
+        Список пуст: серверы ещё не прочитаны. Проверьте файл ссылок в
+        «Провайдерах».
+      </p>
+    <% } else { %>
+      <%# The same markup as the servers picker, so the filter and «снять все» work
+          here too: the script is generic over `[data-servers-picker]`. %>
+      <div class="servers-picker" data-servers-picker>
+        <div class="servers-tools" data-servers-tools hidden>
+          <label for="exclude-filter">Фильтр</label>
+          <input type="search" id="exclude-filter" data-servers-filter
+                 placeholder="флаг" autocomplete="off">
+          <button type="button" class="secondary" data-servers-clear hidden>Снять все</button>
+        </div>
+        <div class="servers-list" data-servers-list>
+          <% for (const option of panel.exclude.options) { %>
+            <label class="check server" data-server data-tag="<%= option.prefix %>">
+              <input type="checkbox" name="exclude_from_auto" value="<%= option.prefix %>"
+                     <%= excluded.has(option.prefix) ? 'checked' : '' %>>
+              <span class="server-tag"><%= option.prefix %></span>
+              <span class="badge"><%= option.count %></span>
+            </label>
+          <% } %>
+          <% for (const prefix of panel.exclude.unknown) { %>
+            <label class="check server" data-server data-tag="<%= prefix %>">
+              <input type="checkbox" name="exclude_from_auto" value="<%= prefix %>" checked>
+              <span class="server-tag"><%= prefix %></span>
+              <span class="badge server-missing">нет в списке</span>
+            </label>
+          <% } %>
+        </div>
+      </div>
+    <% } %>
   </fieldset>
 
   <fieldset>

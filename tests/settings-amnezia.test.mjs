@@ -92,10 +92,17 @@ async function startEditor(options = {}) {
  * @returns {Promise<Response>}
  */
 async function post(base, route, fields = {}) {
+  // Arrays become REPEATED fields, exactly as a browser submits a row of
+  // checkboxes: `String(['a', 'b'])` would send one value "a,b" instead.
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(fields)) {
+    if (Array.isArray(value)) for (const item of value) params.append(key, String(item));
+    else params.append(key, String(value));
+  }
   return fetch(`${base}${route}`, {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded', 'HX-Request': 'true'},
-    body: new URLSearchParams(fields),
+    body: params,
   });
 }
 
@@ -209,6 +216,79 @@ describe('the amnezia output directory (NEW)', () => {
 
       assert.match(html, /Table = off/);
       assert.match(html, pattern(path.join(docDir, 'hmn-graz4.conf')));
+    } finally {
+      await editor.close();
+    }
+  });
+});
+
+describe('«исключить из автовыбора» as a checkbox list (NEW)', () => {
+  test('one row per flag of the loaded servers, the default prefix checked', async () => {
+    const editor = await startEditor();
+    try {
+      const options = editor.model.excludePrefixOptions();
+      assert.deepEqual(
+        options.options.map((option) => option.prefix).sort(),
+        ['🇫🇮', '🇳🇱', '🇷🇺'].sort(),
+        'one row per distinct flag of the loaded servers',
+      );
+      assert.ok(options.options.every((option) => option.count === 1));
+      assert.deepEqual(options.selected, ['🇷🇺'], 'the stored default is checked');
+      assert.deepEqual(options.unknown, []);
+
+      const html = await (await fetch(`${editor.base}/panel/singbox`)).text();
+      assert.match(html, /исключить из автовыбора/);
+      assert.match(html, /name="exclude_from_auto" value="🇫🇮"/);
+      assert.match(html, /name="exclude_from_auto" value="🇳🇱"/);
+      assert.match(html, /name="exclude_from_auto" value="🇷🇺"\s+checked/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('an absent key means the core default, and a stored unknown prefix stays checked', async () => {
+    // `undefined` drops the key from the written JSON, like an old webui.json that
+    // never carried `exclude_from_auto` at all.
+    const editor = await startEditor({document: {exclude_from_auto: undefined}});
+    try {
+      assert.deepEqual(editor.model.excludePrefixOptions().selected, ['🇷🇺']);
+    } finally {
+      await editor.close();
+    }
+
+    const second = await startEditor({document: {exclude_from_auto: ['🇦🇹']}});
+    try {
+      const options = second.model.excludePrefixOptions();
+      assert.deepEqual(options.selected, ['🇦🇹']);
+      assert.deepEqual(options.unknown, ['🇦🇹'], 'no server carries this flag right now');
+
+      const html = await (await fetch(`${second.base}/panel/singbox`)).text();
+      assert.match(html, /нет в списке/);
+      assert.match(html, /value="🇦🇹" checked/, 'the stored rule stays ticked');
+    } finally {
+      await second.close();
+    }
+  });
+
+  test('the boxes are saved as a list, and an empty list excludes nothing', async () => {
+    const editor = await startEditor();
+    try {
+      const general = {
+        listen_ip: '127.0.0.1',
+        urltest_url: 'https://gstatic.com',
+        urltest_interval: '3m',
+        urltest_tolerance: '50',
+        log_level: 'info',
+      };
+
+      await post(editor.base, '/singbox', {...general, exclude_from_auto: ['🇫🇮', '🇩🇪']});
+      assert.deepEqual(editor.model.body().exclude_from_auto, ['🇫🇮', '🇩🇪']);
+
+      // Unticking every box stores an EMPTY list — "exclude nothing" — not the
+      // core default, which only applies to a document without the key.
+      await post(editor.base, '/singbox', general);
+      assert.deepEqual(editor.model.body().exclude_from_auto, []);
+      assert.deepEqual(editor.model.excludePrefixOptions().selected, []);
     } finally {
       await editor.close();
     }
