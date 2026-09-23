@@ -292,7 +292,7 @@ export function treeSpec(options = {}) {
   const providerNodes = providers.map((provider) => {
     const mark = providerDiagnosis(provider);
     const label = `${String(provider.name)} (${providerKindLabel(provider.kind)}, ${provider.count})`;
-    return node(`providers:${String(provider.name)}`, mark === '' ? label : `${label}  ${mark}`, 'providers', {
+    return node(`provider:${String(provider.name)}`, mark === '' ? label : `${label}  ${mark}`, 'provider', {
       stale: mark !== '',
       detail: String(provider.name),
       mark,

@@ -1,0 +1,53 @@
+<%# One source folder: what it holds. A links folder shows the servers it hands
+    out; a tunnels folder shows its .conf files, each opening the normalisation
+    preview. The folder is only read — the tool never writes to sources/. %>
+<h2><%= panel.title %></h2>
+
+<p>
+  Папка: <code><%= panel.provider.path %></code><br>
+  Содержимое: <%= panel.provider.kind %> · записей: <%= panel.provider.count %> ·
+  изменён: <%= panel.provider.mtime ?? '—' %>
+</p>
+
+<% if (panel.provider.error) { %>
+  <p class="error"><%= panel.provider.error %></p>
+<% } %>
+
+<% if (panel.provider.tags.length > 0) { %>
+  <h3>Серверы (<%= panel.provider.tags.length %>)</h3>
+  <ul class="tags">
+    <% for (const tag of panel.provider.tags) { %>
+      <li><%= tag %></li>
+    <% } %>
+  </ul>
+<% } %>
+
+<% if (panel.provider.entries.length > 0) { %>
+  <h3>Конфиги туннелей (<%= panel.provider.entries.length %>)</h3>
+  <p class="hint">В config.json не попадают: их можно только посмотреть.</p>
+  <ul>
+    <% for (const entry of panel.provider.entries) { %>
+      <% const key = `tunnel:${panel.provider.name}/${entry}`; %>
+      <li>
+        <a href="/panel/<%= encodeURIComponent(key) %>"
+           hx-get="/panel/<%= encodeURIComponent(key) %>"
+           hx-target="#panel"
+           hx-swap="innerHTML"
+           hx-push-url="true"><%= entry %></a>
+      </li>
+    <% } %>
+  </ul>
+<% } %>
+
+<% if (
+     !panel.provider.error &&
+     panel.provider.tags.length === 0 &&
+     panel.provider.entries.length === 0
+   ) { %>
+  <p class="hint">Папка пуста: ни файла ссылок, ни конфигов туннелей.</p>
+<% } %>
+
+<p>
+  <a href="/panel/providers" hx-get="/panel/providers" hx-target="#panel"
+     hx-swap="innerHTML" hx-push-url="true">← ко всем источникам</a>
+</p>

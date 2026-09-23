@@ -289,6 +289,7 @@ export function createApp(options = {}) {
       if (PANEL_KINDS.includes(kind)) {
         if (kind === 'route') fallback = 'routes';
         if (kind === 'proxy') fallback = 'proxies';
+        if (kind === 'provider') fallback = 'providers';
       }
       return {
         key: fallback,
@@ -640,8 +641,9 @@ export function createApp(options = {}) {
   // ------------------------------------------------------------------
 
   // The panel edits the LIST, not a text field: a folder is added from the ones
-  // that really exist under the sources root, removed by a button on its own row,
-  // or the folders are re-read from disk. No action touches the files themselves.
+  // that really exist under the sources root, or removed by the button on its own
+  // row. The folders are re-read on every render, so there is no "refresh" action.
+  // No action touches the files themselves.
   app.post(
     '/providers',
     mutation('providers', (req) => {
@@ -658,8 +660,6 @@ export function createApp(options = {}) {
             key: 'providers',
             notice: `Источник '${name}' убран из списка — папка на диске не тронута, не забудьте сохранить`,
           };
-        case 'reload':
-          return {key: 'providers', notice: 'Источники перечитаны с диска'};
         default:
           throw new ConfigError(`неизвестное действие '${action}'`);
       }

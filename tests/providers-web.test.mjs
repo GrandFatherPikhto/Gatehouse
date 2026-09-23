@@ -71,7 +71,7 @@ describe('the providers panel edits the list (NEW)', () => {
       assert.match(html, /<option value="hidemyname">/, 'the unlisted folder is offered');
       assert.doesNotMatch(html, /<textarea/, 'no free-form text field');
       assert.match(html, /name="action" value="remove"/);
-      assert.match(html, />Перечитать<\/button>/);
+      assert.match(html, /provider%3Avpnd/, 'the provider name links to its contents');
     } finally {
       await editor.close();
     }
@@ -106,15 +106,34 @@ describe('the providers panel edits the list (NEW)', () => {
     }
   });
 
-  test('re-reading changes nothing and only reports', async () => {
+  test('a provider detail shows the servers that folder hands out', async () => {
     const editor = await startEditor();
     try {
-      const before = editor.model.toText();
-      const response = await postProviders(editor.base, {action: 'reload'});
+      const html = await (
+        await fetch(`${editor.base}/panel/${encodeURIComponent('provider:vpnd')}`)
+      ).text();
 
-      assert.match(await response.text(), /перечитаны/);
-      assert.equal(editor.model.toText(), before);
-      assert.equal(editor.model.dirty, false);
+      assert.match(html, /Источник: vpnd/);
+      assert.match(html, /Серверы \(3\)/);
+      assert.match(html, /🇫🇮 Finland - Helsinki 1/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('a tunnels folder detail lists its configs, each opening the preview', async () => {
+    const editor = await startEditor();
+    try {
+      await postProviders(editor.base, {action: 'add', name: 'hidemyname'});
+
+      const html = await (
+        await fetch(`${editor.base}/panel/${encodeURIComponent('provider:hidemyname')}`)
+      ).text();
+
+      assert.match(html, /Источник: hidemyname/);
+      assert.match(html, /Конфиги туннелей \(1\)/);
+      assert.match(html, /de\.conf/);
+      assert.match(html, /tunnel%3Ahidemyname%2Fde\.conf/);
     } finally {
       await editor.close();
     }

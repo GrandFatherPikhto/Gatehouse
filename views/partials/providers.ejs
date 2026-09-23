@@ -9,7 +9,8 @@
 <p class="hint">
   Корень источников: <code><%= panel.info.root %></code>
   (переопределяется переменной <code>GATEHOUSE_SOURCES</code>).
-  Новую папку создают на диске, затем нажимают «Перечитать».
+  Новую папку создают на диске; список и содержимое папок перечитываются при
+  каждом открытии вкладки.
 </p>
 
 <h3>Подключённые источники</h3>
@@ -26,7 +27,14 @@
     <tbody>
       <% for (const provider of panel.info.providers) { %>
         <tr class="<%= provider.error ? 'stale' : '' %>">
-          <td><code><%= provider.name %></code></td>
+          <td>
+            <% const key = `provider:${provider.name}`; %>
+            <a href="/panel/<%= encodeURIComponent(key) %>"
+               hx-get="/panel/<%= encodeURIComponent(key) %>"
+               hx-target="#panel"
+               hx-swap="innerHTML"
+               hx-push-url="true"><code><%= provider.name %></code></a>
+          </td>
           <td><%= provider.kind %></td>
           <td><%= provider.count %></td>
           <td><%= provider.mtime ?? '—' %></td>
@@ -82,13 +90,6 @@
     <button type="submit">Добавить</button>
   </form>
 <% } %>
-
-<p>
-  <form hx-post="/providers" hx-target="#panel" hx-swap="innerHTML" method="post" action="/providers" class="inline">
-    <input type="hidden" name="action" value="reload">
-    <button type="submit" class="secondary">Перечитать</button>
-  </form>
-</p>
 
 <% if (panel.info.outbounds.length > 0) { %>
   <h3>Выходы (<%= panel.info.outbounds.length %>)</h3>

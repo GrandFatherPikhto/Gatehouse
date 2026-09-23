@@ -136,6 +136,7 @@ function readProvider(name, root, warnings) {
         state: 'missing',
         error: `папка источника ${name} не найдена: ${dir}`,
         entries: [],
+        tags: [],
       },
       outbounds: [],
     };
@@ -155,6 +156,7 @@ function readProvider(name, root, warnings) {
         state: 'unreadable',
         error: `папка источника ${name} недоступна для чтения: ${dir}`,
         entries: [],
+        tags: [],
       },
       outbounds: [],
     };
@@ -227,6 +229,9 @@ function readProvider(name, root, warnings) {
       error,
       // Tunnels are shown by name and NEVER become outbounds.
       entries: tunnelNames,
+      // Tags THIS provider hands out, without the cross-provider label: the
+      // detail panel shows what the folder itself gives.
+      tags: outbounds.map((outbound) => outbound.tag),
     },
     outbounds,
   };

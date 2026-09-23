@@ -3,6 +3,7 @@
 <% switch (panel.kind) {
      case 'general': %><%- include('general', {panel}) %><% break;
      case 'providers': %><%- include('providers', {panel}) %><% break;
+     case 'provider': %><%- include('provider', {panel}) %><% break;
      case 'output': %><%- include('output', {panel}) %><% break;
      case 'proxies': %><%- include('proxies', {panel}) %><% break;
      case 'proxy': %><%- include('proxy', {panel}) %><% break;

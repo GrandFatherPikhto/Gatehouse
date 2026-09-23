@@ -240,9 +240,11 @@ One tree node per screen: Общие, Провайдеры (source folders and t
   `config.json` stays byte-identical. A collision inside one file is a warning: it
   is an error in the provider's own file and the owner has to know. On the
   «Провайдеры» panel the list is edited row by row: a folder is added by picking
-  one found under the root, removed by the button on its own row, and
-  «Перечитать» re-reads the root. No action touches the files on disk: "remove"
-  means "do not read it", never "delete the owner's folder".
+  one found under the root and removed by the button on its own row; the folders
+  are re-read on every render. Clicking a provider opens its contents: a links
+  folder shows the servers it hands out, a tunnels folder shows its `.conf` files,
+  each opening the normalisation preview. No action touches the files on disk:
+  "remove" means "do not read it", never "delete the owner's folder".
 * **Tunnels never reach the generated config.** The normaliser
   `src/core/normalize.mjs` is a pure function: it adds `Table = off`, drops `DNS =`,
   keeps the interface name within 15 characters, and copies `AllowedIPs` plus the

@@ -272,6 +272,7 @@ function formHiddenAction(form) {
 function keyFor(kind, model) {
   if (kind === 'proxy') return `proxy:${model.proxyTags()[0]}`;
   if (kind === 'route') return `route:${model.routeNames()[0]}`;
+  if (kind === 'provider') return `provider:${model.sourcesInfo().providers[0].name}`;
   return kind;
 }
 

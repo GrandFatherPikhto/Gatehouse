@@ -20,6 +20,7 @@ export const PANEL_KINDS = Object.freeze([
   'dns',
   'proxy',
   'route',
+  'provider',
   'tunnel',
   'system',
   'journal',
@@ -178,6 +179,13 @@ export function buildPanel(model, key, extra = {}) {
         // control offers them, so a folder name is picked, never typed.
         available: model.availableSources(),
       };
+
+    case 'provider': {
+      const info = model.sourcesInfo();
+      const provider = info.providers.find((item) => item.name === name) ?? null;
+      if (provider === null) throw new ConfigError(`источник '${name}' не подключён`);
+      return {...base, title: `Источник: ${name}`, provider};
+    }
 
     case 'output':
       return {
