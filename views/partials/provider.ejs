@@ -27,10 +27,10 @@
   <h3>Конфиги туннелей (<%= panel.provider.entries.length %>)</h3>
   <p class="hint">
     Галочка «включить» нормализует конфиг и кладёт
-    <code><имя файла>.conf</code> в каталог amnezia; снятие галочки
-    останавливает туннель и убирает файл. Имя файла — это
-    <code><имя файла>.conf</code> в каталоге amnezia и юнит
-    <code>awg-quick@<имя файла></code>, поэтому не длиннее 15 символов.
+    <code><имя файла>.conf</code> в каталог туннелей GateHouse
+    (<code>/etc/gatehouse/tunnels</code>); снятие галочки останавливает туннель и
+    убирает файл. Имя файла — это <code><имя файла>.conf</code> и юнит
+    <code>gatehouse-tunnel@<имя файла></code>, поэтому не длиннее 15 символов.
     В <code>config.json</code> конфиги туннелей сами по себе не попадают.
   </p>
   <table class="list">

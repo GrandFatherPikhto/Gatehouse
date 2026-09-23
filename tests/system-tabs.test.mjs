@@ -53,8 +53,8 @@ async function startEditor() {
     ...fakeSystemEnv(),
     ...tunnelSystemEnv(dir, {
       sudoers,
-      active: ['awg-quick@hmn-graz4'],
-      enabled: ['awg-quick@hmn-graz4'],
+      active: ['gatehouse-tunnel@hmn-graz4'],
+      enabled: ['gatehouse-tunnel@hmn-graz4'],
     }),
     GATEHOUSE_SETTINGS: settingsFile,
     GATEHOUSE_HOST: '127.0.0.1',
@@ -145,7 +145,7 @@ describe('the «Система» children (NEW)', () => {
       const html = await (await fetch(`${editor.base}/panel/system:amnezia`)).text();
 
       assert.match(html, /class="active"[^>]*>Amnezia</);
-      assert.match(html, /awg-quick@hmn-graz4/);
+      assert.match(html, /gatehouse-tunnel@hmn-graz4/);
       assert.match(html, /hx-post="\/tunnel\/toggle"/);
       assert.doesNotMatch(html, /hx-post="\/check"/);
       assert.doesNotMatch(html, /Журнал sing-box/);

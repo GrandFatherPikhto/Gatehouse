@@ -51,11 +51,12 @@ import {
 } from '../core/sources.mjs';
 import {
   applyTunnelConfig,
-  listTunnelConfigNames,
   removeTunnelConfig,
   tunnelConfigApplied,
   tunnelConfigPath,
+  tunnelDirState,
 } from '../system/tunnel-file.mjs';
+import {DEFAULT_AMNEZIA_DIR} from '../system/index.mjs';
 import {asList, isTunnelProxy, requireMapping, urltestBlock, validateProxies} from '../core/validate.mjs';
 import {staleMap, treeSpec as buildTree} from './stale.mjs';
 import {
@@ -76,8 +77,6 @@ export const DEFAULT_LOG_LEVEL = 'info';
 
 /* Defaults of the web editor itself. */
 export const DEFAULT_PROXY_PORT = 54321;
-/** Default directory of the applied tunnel configs; mirrors `DEFAULT_AMNEZIA_DIR` of the system layer. */
-export const DEFAULT_AMNEZIA_DIR = '/etc/amnezia/amneziawg';
 export const DEFAULT_PROXY_TYPE = 'socks';
 export const DEFAULT_PROXY_TAG = 'new-proxy';
 export const DEFAULT_ROUTE_NAME = 'route';
@@ -305,6 +304,24 @@ export function tagPrefix(tag) {
 }
 
 /**
+ * The sentence the Amnezia panel shows when the tunnel directory cannot be read,
+ * or `null` when it can. "No access" and "no directory" are different answers, and
+ * the panel says which one it is instead of drawing an empty list.
+ *
+ * @param {string} dir
+ * @param {ReturnType<typeof tunnelDirState>} state
+ * @returns {string|null}
+ */
+function amneziaDirAccessMessage(dir, state) {
+  if (state.state === 'denied') {
+    const who = state.owner !== null ? ` (владелец ${state.owner}, права ${state.mode})` : '';
+    return `нет доступа к каталогу ${dir}${who}: туннели не видны редактору`;
+  }
+  if (state.state === 'error') return `не удалось прочитать каталог ${dir}: ${state.error}`;
+  return null;
+}
+
+/**
  * The state of one open `webui.json`.
  */
 export class ProjectModel {
@@ -317,10 +334,9 @@ export class ProjectModel {
     this.stateDir = options.stateDir ?? path.join(process.cwd(), DEFAULT_STATE_DIR);
     this.snapshotKeep = options.snapshotKeep ?? DEFAULT_SNAPSHOT_KEEP;
     /**
-     * Fallback directory for the tunnel configs, used when the document carries
-     * no `amnezia_dir`. The web layer passes `GATEHOUSE_AMNEZIA_DIR` here; empty
-     * means "not configured" and a write is refused with a sentence instead of
-     * touching a path nobody chose.
+     * Directory of the tunnel configs, handed in by the web layer from
+     * `GATEHOUSE_AMNEZIA_DIR`. It is the only source beside the build constant
+     * `DEFAULT_AMNEZIA_DIR`; the document no longer carries an `amnezia_dir`.
      *
      * @type {string}
      */
@@ -734,66 +750,56 @@ export class ProjectModel {
   }
 
   /**
-   * Directory the applied tunnel configs go to, resolved: `amnezia_dir` of the
-   * document first (a relative path resolves against the settings directory, like
-   * `output_file`), then the fallback handed in by the web layer
-   * (`GATEHOUSE_AMNEZIA_DIR`), then `/etc/amnezia/amneziawg`.
+   * Directory of the applied tunnel configs, resolved. There is ONE source: the
+   * value the web layer handed in from `GATEHOUSE_AMNEZIA_DIR`, else the build
+   * constant. A relative path resolves against the settings directory, like
+   * `output_file`.
    *
    * ONE value for the whole editor on purpose: the write path, the delete path
    * and the start-up fuse of the system layer must look at the same directory, or
-   * the fuse would judge a file nothing ever wrote.
+   * the fuse would judge a file nothing ever wrote. The document no longer
+   * carries an `amnezia_dir` of its own — see `REMOVED_KEYS`.
    *
    * @returns {string}
    */
   get amneziaDir() {
-    const value = this.document.amnezia_dir;
-    if (typeof value === 'string' && value.length > 0) return resolvePath(this.settingsDir, value);
-    if (this.defaultAmneziaDir.length > 0) return resolvePath(this.settingsDir, this.defaultAmneziaDir);
+    if (this.defaultAmneziaDir.length > 0) {
+      return resolvePath(this.settingsDir, this.defaultAmneziaDir);
+    }
     return DEFAULT_AMNEZIA_DIR;
   }
 
   /**
-   * Fills the fallback when the document carries no `amnezia_dir`. Called by the
-   * web layer, which alone may read the environment.
+   * Fills the directory from `GATEHOUSE_AMNEZIA_DIR`. Called by the web layer,
+   * which alone may read the environment.
    *
    * @param {string} value
    */
   setDefaultAmneziaDir(value) {
-    if (typeof value === 'string' && value.length > 0 && this.defaultAmneziaDir.length === 0) {
-      this.defaultAmneziaDir = value;
-    }
+    if (typeof value === 'string' && value.length > 0) this.defaultAmneziaDir = value;
   }
 
   /**
-   * Writes `amnezia_dir` into the document. An empty value CLEARS the field, so
-   * the path falls back to the environment instead of silently becoming the
-   * process working directory.
+   * What the Amnezia panel shows about the directory. Its value is NOT editable:
+   * it is a constant of the build (or the process environment), so the text field
+   * is gone and only the resolved path, its source and its readability remain.
+   * `access` is the sentence to show instead of an empty list when the directory
+   * cannot be read.
    *
-   * @param {unknown} value
-   */
-  setAmneziaDir(value) {
-    const clean = String(value ?? '').trim();
-    if (clean.length === 0) delete this.document.amnezia_dir;
-    else this.document.amnezia_dir = clean;
-    this.markDirty();
-  }
-
-  /**
-   * What the Amnezia panel shows about the path: the raw field, the resolved
-   * directory and where the value came from.
-   *
-   * @returns {{value: string, resolved: string, source: string, fallback: string}}
+   * @returns {{value: string, resolved: string, source: string, fallback: string,
+   *   state: string, owner: string|null, mode: string|null, access: string|null}}
    */
   amneziaDirInfo() {
-    const value = this.document.amnezia_dir;
-    if (typeof value === 'string' && value.length > 0) {
-      return {value, resolved: this.amneziaDir, source: 'документ', fallback: DEFAULT_AMNEZIA_DIR};
-    }
+    const state = tunnelDirState(this.amneziaDir);
     return {
       value: '',
       resolved: this.amneziaDir,
       source: this.defaultAmneziaDir.length > 0 ? 'GATEHOUSE_AMNEZIA_DIR' : 'умолчание',
       fallback: DEFAULT_AMNEZIA_DIR,
+      state: state.state,
+      owner: state.owner,
+      mode: state.mode,
+      access: amneziaDirAccessMessage(this.amneziaDir, state),
     };
   }
 
@@ -1423,8 +1429,9 @@ export class ProjectModel {
   /**
    * Runs the tunnel normaliser over one `*.conf` of a provider, for the preview.
    *
-   * It READS a file and changes nothing: no write to `/etc/amnezia/amneziawg/`, no
-   * `awg-quick@`. Neither a WireGuard config nor an `.conf` file name carries the
+   * It READS a file and changes nothing: no write to the tunnel directory, no
+   * `gatehouse-tunnel@`. Neither a WireGuard config nor an `.conf` file name
+   * carries the
    * two names the editor works with, so both are inputs: `label` is the
    * human-readable name (suggested as `<provider>-<file stem>`), `name` is the
    * file name of the applied config (suggested from the label, clipped to the
@@ -1803,7 +1810,7 @@ export class ProjectModel {
     }
 
     if (this.amneziaDir.length > 0) {
-      for (const fileName of listTunnelConfigNames(this.amneziaDir)) {
+      for (const fileName of tunnelDirState(this.amneziaDir).names) {
         const iface = fileName.slice(0, -'.conf'.length);
         if (rows.has(iface)) continue;
         try {

@@ -1,24 +1,29 @@
-<%# «Настройки Amnezia»: where the tunnel configs are written, and a button that
-    re-normalises every ENABLED tunnel. The path is a document field; an empty one
-    falls back to GATEHOUSE_AMNEZIA_DIR. Regeneration only rewrites files — no unit
-    is started or stopped here, because a rewrite is reversible and a start is not. %>
+<%# «Настройки Amnezia»: the tunnel directory, shown READ-ONLY, and a button that
+    re-normalises every ENABLED tunnel. The path is no longer a document field: it
+    is a constant of the build (`DEFAULT_AMNEZIA_DIR`) or GATEHOUSE_AMNEZIA_DIR, so
+    it cannot be pointed somewhere the template unit does not read. Regeneration
+    only rewrites files — no unit is started or stopped here, because a rewrite is
+    reversible and a start is not. %>
 <h2><%= panel.title %></h2>
 
-<form id="panel-form" class="form" hx-post="/amnezia" hx-target="#panel" hx-swap="innerHTML" method="post" action="/amnezia">
-  <fieldset>
-    <legend>Куда писать конфиги туннелей</legend>
-    <label for="amnezia_dir">amnezia_dir</label>
-    <input type="text" id="amnezia_dir" name="amnezia_dir" value="<%= panel.dir.value %>" size="60">
-    <p class="hint">
-      Итоговый путь: <code><%= panel.dir.resolved %></code>
-      (источник: <%= panel.dir.source %>). Пустое поле означает
-      <code>GATEHOUSE_AMNEZIA_DIR</code>, а если и её нет —
-      <code><%= panel.dir.fallback %></code>. Относительный путь считается от
-      каталога <code>webui.json</code>, абсолютный берётся как есть.
-    </p>
-  </fieldset>
-  <button type="submit">Применить</button>
-</form>
+<fieldset>
+  <legend>Каталог конфигов туннелей</legend>
+  <p>
+    <code><%= panel.dir.resolved %></code>
+    (источник: <%= panel.dir.source %>).
+  </p>
+  <p class="hint">
+    Каталог задан сборкой (при необходимости — переменной
+    <code>GATEHOUSE_AMNEZIA_DIR</code>) и здесь только показывается. Шаблон юнита
+    <code>gatehouse-tunnel@</code> читает файлы ровно отсюда, поэтому редактор не
+    может направить запись в одно место, а запуск — в другое. Если переменная не
+    задана, берётся <code><%= panel.dir.fallback %></code>.
+  </p>
+</fieldset>
+
+<% if (panel.dir.access) { %>
+  <p class="error"><%= panel.dir.access %></p>
+<% } %>
 
 <h3>Включённые туннели (<%= panel.tunnels.length %>)</h3>
 <% if (panel.tunnels.length === 0) { %>

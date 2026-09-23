@@ -71,7 +71,11 @@ const EDIT_FORMS = Object.freeze({
   // One panel, three sections: the form of «Настройки Sing-Box» applies them in
   // this order, and a refusal anywhere rolls the whole panel back.
   singbox: ['/general', '/dns', '/output'],
-  amnezia: ['/amnezia'],
+  // «Настройки Amnezia» has no editable field any more: the tunnel directory is a
+  // constant of the build, shown read-only. The panel therefore has no edit form
+  // and its «Сохранить» keeps the standalone behaviour; regeneration has its own
+  // button.
+  amnezia: [],
   // «Система» has NO edit form any more: the watchdog settings were its only one,
   // and they left the project together with the watchdog. Its two tabs are
   // read-only, so `buildPanel` reports `editForm: false` for the whole panel.

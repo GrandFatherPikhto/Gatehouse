@@ -71,11 +71,31 @@ export const DEFAULT_SUDO_PATH = '/usr/bin/sudo';
 /** Default name of the systemd unit of the daemon. */
 export const DEFAULT_UNIT = 'sing-box';
 /**
- * Default directory the `awg-quick@<name>` template unit reads: it looks for
- * `<name>.conf` exactly here. The editor writes the normalised tunnel config into
- * this directory and the systemd unit picks it up by the file name.
+ * Default path of the `awg` binary. It is read (never `sudo`) to learn which
+ * interfaces already exist on the host, so a tunnel is not handed a name that a
+ * hand-made tunnel is already using.
  */
-export const DEFAULT_AMNEZIA_DIR = '/etc/amnezia/amneziawg';
+export const DEFAULT_AWG_PATH = '/usr/bin/awg';
+/**
+ * Prefix of the systemd template unit of a GateHouse tunnel. The instance is the
+ * `.conf` stem and the template reads `<stem>.conf` from `DEFAULT_AMNEZIA_DIR`.
+ *
+ * GateHouse deliberately uses its OWN template instead of the stock `awg-quick@`
+ * one: the hand-made tunnels under `/etc/amnezia/amneziawg` and their units stay
+ * the owner's business and keep working untouched, while every tunnel GateHouse
+ * writes lives in its own directory and is started only by this template. The
+ * path in the template and `GATEHOUSE_AMNEZIA_DIR` must agree; a test guards the
+ * drift.
+ */
+export const TUNNEL_UNIT_PREFIX = 'gatehouse-tunnel@';
+/**
+ * Default directory of the GateHouse tunnel configs. It is ONE directory for
+ * everything: the template unit reads `<name>.conf` here, the editor writes it
+ * here, and the start-up fuse judges the very same file. There is no document
+ * value and no environment fallback beside it — a per-document value could point
+ * the fuse at one file while the unit read another.
+ */
+export const DEFAULT_AMNEZIA_DIR = '/etc/gatehouse/tunnels';
 /**
  * Default path of the sudoers file the editor READS to learn which tunnel units
  * it may control. It never writes this file — installing the rules is the
@@ -157,6 +177,7 @@ export function systemConfig(env = process.env, overrides = {}) {
 
   return Object.freeze({
     singbox: read('GATEHOUSE_SINGBOX', DEFAULT_SINGBOX_PATH),
+    awg: read('GATEHOUSE_AWG', DEFAULT_AWG_PATH),
     systemctl: read('GATEHOUSE_SYSTEMCTL', DEFAULT_SYSTEMCTL_PATH),
     journalctl: read('GATEHOUSE_JOURNALCTL', DEFAULT_JOURNALCTL_PATH),
     sudo: read('GATEHOUSE_SUDO', DEFAULT_SUDO_PATH),
@@ -570,20 +591,21 @@ export async function restartSingBox(options = {}) {
 // Tunnels (part 2 of the tunnel-lifecycle task)
 // ------------------------------------------------------------------
 //
-// A tunnel is a `awg-quick@<name>` template unit. Unlike `sing-box`, there is no
+// A tunnel is a `gatehouse-tunnel@<name>` template unit. Unlike `sing-box`, there
+// is no
 // dedicated `check` step and no rollback: the `.conf` the unit reads is written
 // by part 1, and the unit either comes up or does not. Two independent systemd
 // axes are involved — "active now" and "enabled at boot" — and the panel shows
 // both, never assuming one from the other.
 
 /**
- * Name of the systemd unit of a tunnel: `awg-quick@<name>`.
+ * Name of the systemd unit of a tunnel: `gatehouse-tunnel@<name>`.
  *
  * @param {string} name Interface name (the `.conf` stem).
  * @returns {string}
  */
 export function tunnelUnitName(name) {
-  return `awg-quick@${String(name ?? '').trim()}`;
+  return `${TUNNEL_UNIT_PREFIX}${String(name ?? '').trim()}`;
 }
 
 /**
@@ -614,6 +636,56 @@ function systemctlCommand(action, unit, config, options = {}) {
 const STARTS_UNIT = new Set(['restart', 'enable']);
 
 /**
+ * Refuses to start a tunnel whose interface name is already taken by something
+ * outside GateHouse.
+ *
+ * `awg-quick up` would refuse the collision itself, but with a message about an
+ * interface that "already exists" — and the owner would be left guessing which of
+ * the hand-made tunnels is in the way. Reading `awg show interfaces` turns that
+ * into a sentence that names the cause.
+ *
+ * The check is skipped, never refused, when `awg` itself cannot be run: on a
+ * desktop sandbox the binary is simply absent, and "no way to ask" must not make
+ * the editor unusable. A failure of `systemctl is-active` is treated the same
+ * way — our own running unit also owns the interface, so an unknown answer must
+ * not produce a false refusal.
+ *
+ * @param {string} name
+ * @param {Record<string, string|number>} config
+ * @param {Record<string, unknown>} options
+ * @returns {Promise<string|null>} The refusal, or `null` when the name is free.
+ */
+async function interfaceCollision(name, config, options) {
+  const awg = typeof options.awg === 'string' && options.awg.length > 0 ? options.awg : config.awg;
+  const timeout = positive(options.timeout, config.testTimeout);
+
+  const listed = await run(awg, ['show', 'interfaces'], {
+    timeout,
+    env: options.env,
+    signal: options.signal,
+  });
+  // `code === null` with a failed run means the binary could not be started at
+  // all (ENOENT); anything else is a real answer we can read.
+  if (!listed.ok && listed.code === null) return null;
+
+  const interfaces = listed.stdout.split(/\s+/).filter((item) => item.length > 0);
+  if (!interfaces.includes(name)) return null;
+
+  const active = await run(config.systemctl, ['is-active', tunnelUnitName(name)], {
+    timeout,
+    env: options.env,
+    signal: options.signal,
+  });
+  if (!active.ok && active.code === null) return null;
+  if (active.stdout.trim() === 'active') return null;
+
+  return (
+    `имя '${name}' занято интерфейсом вне GateHouse (например, ручной туннель Amnezia): ` +
+    'выберите другое имя файла'
+  );
+}
+
+/**
  * Runs one action on a tunnel unit.
  *
  * Before a unit may be STARTED the config on disk is read again and refused
@@ -625,10 +697,13 @@ const STARTS_UNIT = new Set(['restart', 'enable']);
  * Stopping (`disable --now`) is deliberately not guarded: taking a dangerous
  * tunnel down must always remain possible.
  *
+ * The same start path also refuses a name an interface outside GateHouse already
+ * holds — see `interfaceCollision`.
+ *
  * @param {string} name
  * @param {string[]} action
  * @param {{env?: Record<string, string|undefined>, timeout?: number,
- *   signal?: AbortSignal, sudo?: string, systemctl?: string}} [options]
+ *   signal?: AbortSignal, sudo?: string, systemctl?: string, awg?: string}} [options]
  * @returns {Promise<{ok: boolean, code: number|null, stdout: string, stderr: string,
  *   error: string|null, timedOut: boolean, refused: boolean, unit: string,
  *   action: string[], command: string[]}>}
@@ -636,13 +711,10 @@ const STARTS_UNIT = new Set(['restart', 'enable']);
 async function tunnelAction(name, action, options = {}) {
   const config = systemConfig(options.env, options);
   const unit = tunnelUnitName(name);
-  // The directory comes from the caller when it knows better: the editor keeps
-  // `amnezia_dir` in `webui.json`, so its value must beat the environment, or the
-  // fuse would judge a file the write path never produced.
-  const amneziaDir =
-    typeof options.amneziaDir === 'string' && options.amneziaDir.trim().length > 0
-      ? options.amneziaDir.trim()
-      : config.amneziaDir;
+  // ONE directory for the write path, the fuse and the unit. It is a constant of
+  // the build (or the process environment), never a document value: see
+  // `DEFAULT_AMNEZIA_DIR`.
+  const amneziaDir = config.amneziaDir;
 
   if (STARTS_UNIT.has(action[0])) {
     const guard = tunnelStartupGuard(amneziaDir, name);
@@ -653,6 +725,22 @@ async function tunnelAction(name, action, options = {}) {
         stdout: '',
         stderr: '',
         error: guard.reason,
+        timedOut: false,
+        refused: true,
+        unit,
+        action,
+        command: [],
+      };
+    }
+
+    const collision = await interfaceCollision(name, config, options);
+    if (collision !== null) {
+      return {
+        ok: false,
+        code: null,
+        stdout: '',
+        stderr: '',
+        error: collision,
         timedOut: false,
         refused: true,
         unit,
@@ -685,13 +773,28 @@ async function tunnelAction(name, action, options = {}) {
 }
 
 /**
- * Restarts one tunnel unit (`sudo -n systemctl restart awg-quick@<name>`).
+ * Restarts one tunnel unit (`sudo -n systemctl restart gatehouse-tunnel@<name>`).
  *
  * @param {string} name
  * @param {Parameters<typeof tunnelAction>[2]} [options]
  */
 export function restartTunnel(name, options = {}) {
   return tunnelAction(name, ['restart'], options);
+}
+
+/**
+ * Answers whether an interface name is already taken outside GateHouse, or
+ * `null` when it is free (or when the question cannot be asked because `awg` is
+ * not runnable). The write path calls it before a config is written, so a name
+ * clash is refused with the same sentence as a start would give.
+ *
+ * @param {string} name
+ * @param {Parameters<typeof tunnelAction>[2]} [options]
+ * @returns {Promise<string|null>}
+ */
+export async function tunnelInterfaceCollision(name, options = {}) {
+  const config = systemConfig(options.env, options);
+  return interfaceCollision(String(name ?? '').trim(), config, options);
 }
 
 /**
@@ -766,7 +869,7 @@ export async function tunnelState(name, options = {}) {
 /**
  * The three sudoers lines that let the editor control one tunnel.
  *
- * The rules are per NAME and without a wildcard: `awg-quick@*` would also grant
+ * The rules are per NAME and without a wildcard: `gatehouse-tunnel@*` would grant
  * units that do not exist yet, and the unit name comes from the file name, i.e.
  * from data.
  *
@@ -789,9 +892,9 @@ export function tunnelSudoersLines(name, options = {}) {
 /**
  * Parses a sudoers file into `{name -> {restart, enable, disable}}`.
  *
- * Only lines that mention the configured `systemctl` path and a `awg-quick@`
- * unit are read; comments are ignored. The editor never writes this file — it
- * only reads it to decide whether a button may be drawn.
+ * Only lines that mention the configured `systemctl` path and a
+ * `gatehouse-tunnel@` unit are read; comments are ignored. The editor never
+ * writes this file — it only reads it to decide whether a button may be drawn.
  *
  * @param {string} text
  * @param {{systemctl?: string}} [options]
@@ -805,9 +908,9 @@ export function parseTunnelSudoers(text, options = {}) {
   for (const raw of String(text ?? '').split(/\r?\n/)) {
     const line = raw.trim();
     if (line.length === 0 || line.startsWith('#')) continue;
-    if (!line.includes('awg-quick@') || !line.includes(systemctl)) continue;
+    if (!line.includes(TUNNEL_UNIT_PREFIX) || !line.includes(systemctl)) continue;
 
-    const match = /awg-quick@([A-Za-z0-9_.-]+)/.exec(line);
+    const match = /gatehouse-tunnel@([A-Za-z0-9_.-]+)/.exec(line);
     if (match === null) continue;
     const name = match[1];
     const entry = map[name] ?? (map[name] = {restart: false, enable: false, disable: false});
@@ -822,24 +925,38 @@ export function parseTunnelSudoers(text, options = {}) {
 /**
  * Answers, per tunnel, which controls the editor may offer.
  *
- * A missing or unreadable sudoers file means "no rights at all": the safe answer
- * is to show the rules to install, not to draw buttons the first click of which
- * would fail. Each result carries `missingLines` — the exact lines to paste.
+ * A missing sudoers file means "no rights at all": the safe answer is to show the
+ * rules to install, not to draw buttons whose first click would fail. Each result
+ * carries `missingLines` — the exact lines to paste.
+ *
+ * An UNREADABLE file is a different case and is reported as such: `sudoersReadable`
+ * is false and `sudoersNotice` says the file exists but may not be read, instead of
+ * the misleading "add the rules" that a person would act on by piling up duplicate
+ * lines. The rights themselves are never changed here — installing the file with
+ * the right group is the owner's job.
  *
  * @param {string} sudoersPath
  * @param {string[]} names
  * @param {{systemctl?: string, user?: string}} [options]
  * @returns {Record<string, {restart: boolean, enable: boolean, disable: boolean,
- *   canRestart: boolean, canToggle: boolean, missingLines: string[]}>}
+ *   canRestart: boolean, canToggle: boolean, missingLines: string[],
+ *   sudoersReadable: boolean, sudoersNotice: string|null}>}
  */
 export function tunnelPermissions(sudoersPath, names, options = {}) {
   let text = '';
+  let readable = true;
   try {
     text = fs.readFileSync(sudoersPath, 'utf8');
-  } catch {
-    // No file, no rights. The rules have to be installed by the owner.
+  } catch (error) {
+    // No file, no rights. The rules have to be installed by the owner. An
+    // unreadable file is NOT the same thing and is named below.
     text = '';
+    if (error.code === 'EACCES' || error.code === 'EPERM') readable = false;
   }
+  const notice = readable
+    ? null
+    : `не могу прочитать ${sudoersPath}: права. Файл ставится с группой denis: ` +
+      'install -m 0440 -o root -g denis';
   const parsed = parseTunnelSudoers(text, options);
   const [enableLine, disableLine, restartLine] = tunnelSudoersLines('__name__', options);
 
@@ -856,6 +973,8 @@ export function tunnelPermissions(sudoersPath, names, options = {}) {
       canRestart: entry.restart,
       canToggle: entry.enable && entry.disable,
       missingLines,
+      sudoersReadable: readable,
+      sudoersNotice: notice,
     };
   }
   return result;

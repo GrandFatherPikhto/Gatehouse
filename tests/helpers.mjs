@@ -214,9 +214,9 @@ export function writeSudoers(file, tunnels, options = {}) {
   const systemctl = options.systemctl ?? FAKE_SYSTEMCTL;
   const lines = [];
   for (const name of tunnels) {
-    lines.push(`${user} ALL=(root) NOPASSWD: ${systemctl} enable --now awg-quick@${name}`);
-    lines.push(`${user} ALL=(root) NOPASSWD: ${systemctl} disable --now awg-quick@${name}`);
-    lines.push(`${user} ALL=(root) NOPASSWD: ${systemctl} restart awg-quick@${name}`);
+    lines.push(`${user} ALL=(root) NOPASSWD: ${systemctl} enable --now gatehouse-tunnel@${name}`);
+    lines.push(`${user} ALL=(root) NOPASSWD: ${systemctl} disable --now gatehouse-tunnel@${name}`);
+    lines.push(`${user} ALL=(root) NOPASSWD: ${systemctl} restart gatehouse-tunnel@${name}`);
   }
   fs.writeFileSync(file, `${lines.join('\n')}\n`, 'utf8');
   return file;

@@ -1,10 +1,10 @@
-// Writing of a normalised tunnel config into the amnezia directory.
+// Writing of a normalised tunnel config into the GateHouse tunnel directory.
 //
 // Part 1 of the tunnel-lifecycle task: the preview screen of the editor stops
 // being read-only and gains an «Применить» button. The button writes the result
 // of `normalizeTunnel` to `<amneziaDir>/<name>.conf` — the exact path the
-// `awg-quick@<name>` template unit reads. It does NOT bring the tunnel up: that
-// is a separate action of part 2, on purpose, because writing a file is
+// `gatehouse-tunnel@<name>` template unit reads. It does NOT bring the tunnel up:
+// that is a separate action of part 2, on purpose, because writing a file is
 // reversible and starting a unit that carries the owner's link to the router is
 // not.
 //
@@ -56,40 +56,110 @@ export function tunnelConfigApplied(amneziaDir, name) {
 }
 
 /**
- * Names of the applied tunnel configs in the amnezia directory, sorted.
+ * What the tunnel directory is, and what it holds.
+ *
+ * Four answers, one level up from `readTunnelConfig`: `ok`, `missing` (`ENOENT`),
+ * `denied` (`EACCES`/`EPERM`) and `error` with the text of anything else. A
+ * directory that cannot be listed is NOT an empty directory — reporting `[]` there
+ * is exactly the lie this task removes. `owner` and `mode` come from `stat` when
+ * it succeeds (it can, while `readdir` fails), so the panel can name who owns the
+ * directory the editor may not read.
+ *
+ * @param {string} amneziaDir
+ * @returns {{state: 'ok'|'missing'|'denied'|'error', names: string[],
+ *   owner: string|null, mode: string|null, error: string|null}}
+ */
+export function tunnelDirState(amneziaDir) {
+  let stat;
+  try {
+    stat = fs.statSync(amneziaDir);
+  } catch (error) {
+    const state = errorState(error);
+    return {state, names: [], owner: null, mode: null, error: error.message};
+  }
+
+  const owner = `${stat.uid}:${stat.gid}`;
+  const mode = `0${(stat.mode & 0o777).toString(8)}`;
+  let entries;
+  try {
+    entries = fs.readdirSync(amneziaDir);
+  } catch (error) {
+    return {state: errorState(error), names: [], owner, mode, error: error.message};
+  }
+
+  return {
+    state: 'ok',
+    names: entries.filter((entry) => entry.endsWith('.conf')).sort(),
+    owner,
+    mode,
+    error: null,
+  };
+}
+
+/**
+ * Maps a filesystem error to the three states shared by every read here: a
+ * missing path, a path the process may not touch, and everything else.
+ *
+ * @param {NodeJS.ErrnoException} error
+ * @returns {'missing'|'denied'|'error'}
+ */
+function errorState(error) {
+  if (error.code === 'ENOENT') return 'missing';
+  if (error.code === 'EACCES' || error.code === 'EPERM') return 'denied';
+  return 'error';
+}
+
+/**
+ * Names of the applied tunnel configs in the tunnel directory, sorted.
  *
  * Snapshots (`<name>.conf.<label>`) do not end with `.conf` and therefore never
- * appear here. A file whose stem ends with `.conf` (a `de.conf.conf` left from a
- * manual `systemctl restart awg-quick@de.conf`) is returned by this function and
- * dropped by the caller, which validates the stem as an interface name — that is
- * what keeps such leftovers out of the tunnel lists (§2.4 of the task).
+ * appear here. A file whose stem ends with `.conf` (a `<name>.conf.conf` left
+ * from a manual `systemctl restart gatehouse-tunnel@<name>.conf`) is returned by
+ * this function and dropped by the caller, which validates the stem as an
+ * interface name — that is what keeps such leftovers out of the tunnel lists
+ * (§2.4 of the task). Callers that have to tell "empty" from "unreadable" use
+ * `tunnelDirState` instead of this convenience wrapper.
  *
  * @param {string} amneziaDir
  * @returns {string[]} File names, not full paths.
  */
 export function listTunnelConfigNames(amneziaDir) {
-  let entries;
-  try {
-    entries = fs.readdirSync(amneziaDir);
-  } catch {
-    return [];
-  }
-  return entries.filter((entry) => entry.endsWith('.conf')).sort();
+  return tunnelDirState(amneziaDir).names;
 }
 
 /**
  * Reads the applied config of one tunnel.
  *
+ * Four answers because "the file is not there" and "I am not allowed to read it"
+ * send the owner in opposite directions: the first means "write it", the second
+ * means "fix the rights". `ENOENT` is `missing`; `EACCES`/`EPERM` is `denied`;
+ * anything else (`EISDIR`, `EIO`, …) is `error` with the text of the failure.
+ * Only `ok` carries text; `exists` stays true only for `ok`, so an unreadable
+ * file can no longer masquerade as an absent one.
+ *
  * @param {string} amneziaDir
  * @param {string} name
- * @returns {{path: string, exists: boolean, text: string|null}}
+ * @returns {{path: string, state: 'ok'|'missing'|'denied'|'error', exists: boolean,
+ *   text: string|null, error: string|null}}
  */
 export function readTunnelConfig(amneziaDir, name) {
   const filePath = tunnelConfigPath(amneziaDir, name);
   try {
-    return {path: filePath, exists: true, text: fs.readFileSync(filePath, 'utf8')};
-  } catch {
-    return {path: filePath, exists: false, text: null};
+    return {
+      path: filePath,
+      state: 'ok',
+      exists: true,
+      text: fs.readFileSync(filePath, 'utf8'),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      path: filePath,
+      state: errorState(error),
+      exists: false,
+      text: null,
+      error: error.message,
+    };
   }
 }
 
@@ -170,6 +240,25 @@ export function unsafeTunnelMessage(filePath, refusal) {
  */
 export function tunnelStartupGuard(amneziaDir, name) {
   const file = readTunnelConfig(amneziaDir, name);
+  if (file.state === 'denied') {
+    return {
+      safe: false,
+      path: file.path,
+      exists: true,
+      reason:
+        `Запуск отменён: нет прав на чтение ${file.path}. ` +
+        'Редактор работает от denis и проверить файл перед запуском не может — ' +
+        'а без проверки не запускает.',
+    };
+  }
+  if (file.state === 'error') {
+    return {
+      safe: false,
+      path: file.path,
+      exists: false,
+      reason: `Запуск отменён: не удалось прочитать ${file.path}: ${file.error}`,
+    };
+  }
   if (!file.exists) {
     return {
       safe: false,
@@ -336,6 +425,13 @@ export function applyTunnelConfig(text, options) {
     removed = pruneTunnelSnapshots(amneziaDir, name, keep);
   }
 
-  writePrivate(target, text);
+  try {
+    writePrivate(target, text);
+  } catch (error) {
+    if (error.code === 'EACCES' || error.code === 'EPERM') {
+      throw new Error(`нет прав на запись в ${amneziaDir}`);
+    }
+    throw error;
+  }
   return {path: target, changed: true, snapshot, removed};
 }

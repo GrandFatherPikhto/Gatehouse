@@ -42,8 +42,8 @@ export const TUNNEL_LABEL_MAX = 255;
 
 /**
  * Characters an interface name — and therefore the `.conf` file name and the
- * `awg-quick@<name>` instance — may carry. `/`, whitespace and non-ASCII are out
- * because the name becomes a path component and a systemd instance name.
+ * `gatehouse-tunnel@<name>` instance — may carry. `/`, whitespace and non-ASCII
+ * are out because the name becomes a path component and a systemd instance name.
  */
 const INTERFACE_NAME_PATTERN = /^[A-Za-z0-9_.-]+$/;
 
@@ -201,8 +201,8 @@ function interfaceSpan(lines, headerAt) {
  * Chooses a unique interface name within the kernel limit.
  *
  * The desired name is an input: it cannot be derived from the file (a WireGuard
- * config carries no interface name; `awg-quick@<name>` takes it from the file
- * name). An empty input falls back to `awg0`; a name that is taken grows a
+ * config carries no interface name; `gatehouse-tunnel@<name>` takes it from the
+ * file name). An empty input falls back to `awg0`; a name that is taken grows a
  * `-2`, `-3` suffix as long as the limit allows.
  *
  * @param {string} desired
@@ -252,9 +252,10 @@ export function validateTunnelLabel(label) {
 /**
  * Validates the file name of a tunnel and returns it trimmed.
  *
- * This one is the stem of `<name>.conf` in the amnezia directory, the systemd
- * instance `awg-quick@<name>` and the kernel interface name, so the 15-character
- * kernel limit is a hard rule and not advice: a longer name makes the unit fail.
+ * This one is the stem of `<name>.conf` in the tunnel directory, the systemd
+ * instance `gatehouse-tunnel@<name>` and the kernel interface name, so the
+ * 15-character kernel limit is a hard rule and not advice: a longer name makes the
+ * unit fail.
  *
  * @param {unknown} name
  * @returns {string}

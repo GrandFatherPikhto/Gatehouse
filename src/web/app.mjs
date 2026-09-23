@@ -30,6 +30,7 @@ import {
   systemConfig,
   tailJournal,
   testOutbounds,
+  tunnelInterfaceCollision,
   tunnelPermissions,
   tunnelState,
   tunnelUnitName,
@@ -98,7 +99,6 @@ const ROUTE_FIELDS = Object.freeze({
   '/route': ['name', 'outbound'],
   '/dns': ['dns'],
   '/output': ['output_file'],
-  '/amnezia': ['amnezia_dir'],
   '/general': [
     'listen_ip',
     'urltest_url',
@@ -172,11 +172,12 @@ export function createApp(options = {}) {
       path: options.settingsPath ?? null,
       stateDir: options.stateDir,
       snapshotKeep: options.snapshotKeep,
-      // Fallback directory for the tunnel configs; the document may override it.
+      // Directory of the tunnel configs: `GATEHOUSE_AMNEZIA_DIR`, else the build
+      // constant. There is no document value to override it any more.
       amneziaDir: system.amneziaDir,
     });
   // `startServer` injects a model built before the environment was read; give it
-  // the fallback amnezia directory too, without overriding a document value.
+  // the tunnel directory as well.
   model.setDefaultAmneziaDir(system.amneziaDir);
 
   // Runtime state of the host layer. It lives on the app, not in a module global,
@@ -284,6 +285,8 @@ export function createApp(options = {}) {
           canRestart: false,
           canToggle: false,
           missingLines: [],
+          sudoersReadable: true,
+          sudoersNotice: null,
         };
         const unit = tunnelUnitName(tunnel.interface);
         return {
@@ -298,6 +301,8 @@ export function createApp(options = {}) {
           canRestart: permission.canRestart === true,
           canToggle: permission.canToggle === true,
           missingLines: permission.missingLines ?? [],
+          sudoersReadable: permission.sudoersReadable !== false,
+          sudoersNotice: permission.sudoersNotice ?? null,
           journalUrl: `/panel/${encodeURIComponent('system:singbox')}?unit=${encodeURIComponent(unit)}&level=warning`,
         };
       }),
@@ -677,9 +682,6 @@ export function createApp(options = {}) {
         model.applyGeneral(forms.parseGeneralForm(body));
         return {applied: true, key: 'general'};
       }
-      case '/amnezia':
-        model.setAmneziaDir(body.amnezia_dir);
-        return {applied: true, key: 'amnezia'};
       default:
         throw new ConfigError(`маршрут '${route}' не является формой правки`);
     }
@@ -765,14 +767,8 @@ export function createApp(options = {}) {
     }),
   );
 
-  // «Настройки Amnezia»: the output directory of the tunnel configs.
-  app.post(
-    '/amnezia',
-    mutation('amnezia', (req) => {
-      applyEditForm('amnezia', req);
-      return {key: 'amnezia', notice: 'Путь применён — не забудьте сохранить'};
-    }),
-  );
+  // «Настройки Amnezia» has nothing to apply: the tunnel directory is a constant
+  // of the build, shown read-only. Regeneration below has its own button.
 
   /**
    * Re-normalises and rewrites every marked tunnel.
@@ -853,7 +849,7 @@ export function createApp(options = {}) {
                   (rights?.missingLines ?? []).join('\n'),
               );
             }
-            const stopped = await disableTunnel(iface, {env: systemEnv, amneziaDir: model.amneziaDir});
+            const stopped = await disableTunnel(iface, {env: systemEnv});
             if (!stopped.ok) {
               throw new ConfigError(
                 `не удалось остановить туннель '${iface}': ` +
@@ -869,6 +865,15 @@ export function createApp(options = {}) {
               `Туннель '${removed.name}' выключен: конфиг убран из каталога amnezia. ` +
               'Не забудьте сохранить.',
           };
+        }
+
+        // The write path refuses a name an interface outside GateHouse already
+        // holds, with the same sentence a start would give: the fuse and the
+        // template unit must never disagree about which file is behind a name.
+        const wanted = String(req.body.interface ?? '').trim();
+        if (wanted.length > 0) {
+          const collision = await tunnelInterfaceCollision(wanted, {env: systemEnv});
+          if (collision !== null) throw new ConfigError(collision);
         }
 
         const previous = model.getTunnel(provider, file);
@@ -887,7 +892,7 @@ export function createApp(options = {}) {
           if (runtime.active !== true) {
             removeTunnelConfig(model.amneziaDir, oldIface);
           } else if (tunnelRights()[oldIface]?.canToggle === true) {
-            await disableTunnel(oldIface, {env: systemEnv, amneziaDir: model.amneziaDir});
+            await disableTunnel(oldIface, {env: systemEnv});
             removeTunnelConfig(model.amneziaDir, oldIface);
           }
         }
@@ -1277,8 +1282,8 @@ export function createApp(options = {}) {
 
       const up = forms.checkbox(req.body.up);
       const result = up
-        ? await enableTunnel(name, {env: systemEnv, amneziaDir: model.amneziaDir})
-        : await disableTunnel(name, {env: systemEnv, amneziaDir: model.amneziaDir});
+        ? await enableTunnel(name, {env: systemEnv})
+        : await disableTunnel(name, {env: systemEnv});
       await refreshTunnelStates();
 
       return {
@@ -1305,7 +1310,7 @@ export function createApp(options = {}) {
         );
       }
 
-      const result = await restartTunnel(name, {env: systemEnv, amneziaDir: model.amneziaDir});
+      const result = await restartTunnel(name, {env: systemEnv});
       await refreshTunnelStates();
 
       return {

@@ -1,0 +1,38 @@
+# GateHouse tunnel instance: a single AmneziaWG tunnel owned by the editor.
+#
+# It reads exactly `/etc/gatehouse/tunnels/<name>.conf`, where `<name>` is the
+# systemd instance name (`%i`), and brings it up with `awg-quick up <full path>`.
+#
+# Install:
+#   sudo install -d -m 0700 -o denis -g denis /etc/gatehouse/tunnels
+#   sudo cp deploy/gatehouse-tunnel@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#
+# The directory in ExecStart/ExecStop MUST equal GATEHOUSE_AMNEZIA_DIR in
+# deploy/gatehouse.service (/etc/gatehouse/tunnels); a test reads both files and
+# compares them with DEFAULT_AMNEZIA_DIR, so the write path, the start-up fuse and
+# the unit can never disagree.
+#
+# `%i` is the instance name EXACTLY as written. `%I` would expand `-` back to `/`
+# and turn `hmn-graz` into `hmn/graz`, so it is deliberately not used.
+#
+# Deliberately absent, compared with the stock `awg-quick@.service`:
+#   * PartOf=awg-quick.target — a manual operation on the hand-made amnezia
+#     tunnels must not touch GateHouse tunnels, nor the other way round;
+#   * ExecReload — the editor never reloads a tunnel.
+
+[Unit]
+Description=GateHouse tunnel %i (AmneziaWG)
+After=network-online.target nss-lookup.target
+Wants=network-online.target nss-lookup.target
+Documentation=file:///opt/gatehouse/deploy/README.md
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/awg-quick up /etc/gatehouse/tunnels/%i.conf
+ExecStop=/usr/bin/awg-quick down /etc/gatehouse/tunnels/%i.conf
+Environment=WG_ENDPOINT_RESOLUTION_RETRIES=infinity
+
+[Install]
+WantedBy=multi-user.target

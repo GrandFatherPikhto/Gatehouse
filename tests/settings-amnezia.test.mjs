@@ -33,8 +33,9 @@ function pattern(text) {
 /**
  * Starts the editor over a project with one (or two) tunnel sources.
  *
- * `GATEHOUSE_AMNEZIA_DIR` deliberately points at a directory the document does NOT
- * use, so a test can tell which of the two the editor really writes to.
+ * `GATEHOUSE_AMNEZIA_DIR` is the ONLY source of the tunnel directory now that the
+ * document no longer carries `amnezia_dir`, so the tests use it as the expected
+ * path and feed the removed key to prove it is dropped.
  *
  * @param {{document?: Record<string, unknown>, sudoers?: string[], secondConf?: boolean}} [options]
  * @returns {Promise<Record<string, unknown>>}
@@ -165,57 +166,49 @@ describe('the «Настройки» group of the tree (NEW)', () => {
 });
 
 describe('the amnezia output directory (NEW)', () => {
-  test('the panel shows the resolved path and its source, and the document wins', async () => {
-    const editor = await startEditor();
+  test('the panel shows the resolved path read-only, and a document value is dropped', async () => {
+    const editor = await startEditor({document: {amnezia_dir: '/tmp/elsewhere'}});
     try {
       const html = await (await fetch(`${editor.base}/panel/amnezia`)).text();
-      assert.match(html, /name="amnezia_dir"/);
+      assert.doesNotMatch(html, /name="amnezia_dir"/, 'the path is not editable');
       assert.match(html, /источник: GATEHOUSE_AMNEZIA_DIR/);
-      assert.match(html, pattern(editor.envDir), 'the fallback directory is shown resolved');
+      assert.match(html, pattern(editor.envDir), 'the environment directory is shown resolved');
 
-      const saved = await post(editor.base, '/amnezia', {amnezia_dir: 'etc/amnezia'});
-      assert.match(await saved.text(), /Путь применён/);
-      assert.equal(editor.model.body().amnezia_dir, 'etc/amnezia');
-      assert.equal(
-        editor.model.amneziaDir,
-        path.join(editor.dir, 'etc', 'amnezia'),
-        'a relative path resolves against the settings directory',
-      );
-
-      // An empty field CLEARS the key instead of storing an empty string.
-      await post(editor.base, '/amnezia', {amnezia_dir: ''});
+      // The removed key never reaches the document, and the notice names it.
       assert.equal(editor.model.body().amnezia_dir, undefined);
-      assert.equal(editor.model.amneziaDir, editor.envDir, 'the environment takes over again');
+      assert.equal(editor.model.amneziaDir, editor.envDir, 'the environment is the only source');
+      assert.match(editor.model.removedNotice, /amnezia_dir/);
     } finally {
       await editor.close();
     }
   });
 
-  test('the write and the start-up fuse read the DOCUMENT directory', async () => {
+  test('the write and the start-up fuse read the SAME directory, and the document cannot redirect them', async () => {
     const editor = await startEditor({
       document: {amnezia_dir: 'tunnels'},
       sudoers: ['hmn-graz4'],
     });
     try {
-      const docDir = path.join(editor.dir, 'tunnels');
-
       await post(editor.base, '/tunnels', GRAZ_MARK);
-      assert.ok(fs.existsSync(path.join(docDir, 'hmn-graz4.conf')), 'written where the document says');
-      assert.equal(
+      assert.ok(
         fs.existsSync(path.join(editor.envDir, 'hmn-graz4.conf')),
+        'written to the environment directory',
+      );
+      assert.equal(
+        fs.existsSync(path.join(editor.dir, 'tunnels')),
         false,
-        'the environment directory is ignored while the document names one',
+        'the removed document value points nowhere',
       );
 
-      // Someone drops a raw provider config over the applied file: the fuse must
-      // read the document directory and refuse, naming the exact path.
-      fs.writeFileSync(path.join(docDir, 'hmn-graz4.conf'), '[Interface]\nPrivateKey = x\n');
+      // Someone drops a raw provider config over the applied file: the fuse reads
+      // the SAME directory and refuses, naming the exact path.
+      fs.writeFileSync(path.join(editor.envDir, 'hmn-graz4.conf'), '[Interface]\nPrivateKey = x\n');
       const html = await (
         await post(editor.base, '/tunnel/toggle', {name: 'hmn-graz4', up: '1'})
       ).text();
 
       assert.match(html, /Table = off/);
-      assert.match(html, pattern(path.join(docDir, 'hmn-graz4.conf')));
+      assert.match(html, pattern(path.join(editor.envDir, 'hmn-graz4.conf')));
     } finally {
       await editor.close();
     }

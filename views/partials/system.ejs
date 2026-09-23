@@ -62,6 +62,8 @@
                     </label>
                     <button type="submit"><%= tunnel.active && tunnel.enabled ? 'Опустить' : 'Поднять' %></button>
                   </form>
+                <% } else if (!tunnel.sudoersReadable) { %>
+                  <p class="error"><%= tunnel.sudoersNotice %></p>
                 <% } else { %>
                   <span class="hint">нет права sudoers — добавьте строки:</span>
                   <pre class="output"><%= tunnel.missingLines.join('\n') %></pre>
@@ -74,6 +76,8 @@
                     <button type="submit" class="danger"
                             hx-confirm="Перезапустить туннель '<%= tunnel.interface %>'?<%= tunnel.usedBy.length > 0 ? ` Прокси '${tunnel.usedBy.join(', ')}' работают через него и оборвутся.` : '' %><%= tunnel.interface === 'de' ? ' Через этот туннель идёт ваш доступ к роутеру — вы потеряете связь.' : '' %>">Перезапустить</button>
                   </form>
+                <% } else if (!tunnel.sudoersReadable) { %>
+                  <p class="error"><%= tunnel.sudoersNotice %></p>
                 <% } else { %>
                   <span class="hint">нет правила sudoers — добавьте строку:</span>
                   <pre class="output"><%= tunnel.missingLines.filter((line) => line.includes('restart')).join('\n') %></pre>

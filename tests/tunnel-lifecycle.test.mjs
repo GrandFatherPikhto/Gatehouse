@@ -79,9 +79,9 @@ describe('applying a tunnel config (part 1)', () => {
 describe('reading the two systemd axes (part 2)', () => {
   test('all four combinations come from systemctl, not from an assumption', async () => {
     const cases = [
-      {active: ['awg-quick@de'], enabled: ['awg-quick@de'], expect: [true, true]},
-      {active: ['awg-quick@de'], enabled: [], expect: [true, false]},
-      {active: [], enabled: ['awg-quick@de'], expect: [false, true]},
+      {active: ['gatehouse-tunnel@de'], enabled: ['gatehouse-tunnel@de'], expect: [true, true]},
+      {active: ['gatehouse-tunnel@de'], enabled: [], expect: [true, false]},
+      {active: [], enabled: ['gatehouse-tunnel@de'], expect: [false, true]},
       {active: [], enabled: [], expect: [false, false]},
     ];
     for (const item of cases) {
@@ -91,7 +91,7 @@ describe('reading the two systemd axes (part 2)', () => {
       });
       const state = await tunnelState('de', {env});
       assert.deepEqual([state.active, state.enabled], item.expect);
-      assert.equal(state.unit, 'awg-quick@de');
+      assert.equal(state.unit, 'gatehouse-tunnel@de');
     }
   });
 });
@@ -101,9 +101,9 @@ describe('sudoers rights (part 2)', () => {
     const parsed = parseTunnelSudoers(
       [
         '# comment',
-        `denis ALL=(root) NOPASSWD: ${FAKE_SYSTEMCTL} restart awg-quick@de`,
-        `denis ALL=(root) NOPASSWD: ${FAKE_SYSTEMCTL} enable --now awg-quick@de`,
-        `denis ALL=(root) NOPASSWD: ${FAKE_SYSTEMCTL} restart awg-quick@ch`,
+        `denis ALL=(root) NOPASSWD: ${FAKE_SYSTEMCTL} restart gatehouse-tunnel@de`,
+        `denis ALL=(root) NOPASSWD: ${FAKE_SYSTEMCTL} enable --now gatehouse-tunnel@de`,
+        `denis ALL=(root) NOPASSWD: ${FAKE_SYSTEMCTL} restart gatehouse-tunnel@ch`,
       ].join('\n'),
       {systemctl: FAKE_SYSTEMCTL},
     );
@@ -118,7 +118,7 @@ describe('sudoers rights (part 2)', () => {
     assert.equal(rights.de.canRestart, false);
     assert.equal(rights.de.canToggle, false);
     assert.equal(rights.de.missingLines.length, 3);
-    assert.match(rights.de.missingLines[0], /enable --now awg-quick@de/);
+    assert.match(rights.de.missingLines[0], /enable --now gatehouse-tunnel@de/);
   });
 });
 
@@ -297,8 +297,8 @@ describe('the tunnel panel and its buttons (part 2)', () => {
   test('un-ticking a running tunnel stops it first, then removes the file', async () => {
     const editor = await startEditor({
       withProxy: false,
-      active: ['awg-quick@hmn-graz4'],
-      enabled: ['awg-quick@hmn-graz4'],
+      active: ['gatehouse-tunnel@hmn-graz4'],
+      enabled: ['gatehouse-tunnel@hmn-graz4'],
     });
     try {
       await post(editor.base, '/tunnels', {
@@ -328,7 +328,7 @@ describe('the tunnel panel and its buttons (part 2)', () => {
     try {
       const panel = await (await fetch(`${editor.base}/panel/system:amnezia`)).text();
 
-      assert.match(panel, /awg-quick@de/);
+      assert.match(panel, /gatehouse-tunnel@de/);
       assert.match(panel, /hx-post="\/tunnel\/toggle"/);
     } finally {
       await editor.close();
@@ -431,8 +431,8 @@ describe('the tunnel panel and its buttons (part 2)', () => {
 
       const panel = await (await fetch(`${editor.base}/panel/system:amnezia`)).text();
 
-      assert.match(panel, /awg-quick@de</, 'the real config is listed');
-      assert.doesNotMatch(panel, /awg-quick@de\.conf/, 'a `de.conf.conf` leftover is not a tunnel');
+      assert.match(panel, /gatehouse-tunnel@de</, 'the real config is listed');
+      assert.doesNotMatch(panel, /gatehouse-tunnel@de\.conf/, 'a `de.conf.conf` leftover is not a tunnel');
       assert.doesNotMatch(panel, /de\.conf\.2020/, 'snapshots are not tunnels');
     } finally {
       await editor.close();
@@ -442,16 +442,16 @@ describe('the tunnel panel and its buttons (part 2)', () => {
   test('the state is read from systemd and a divergence is named', async () => {
     const editor = await startEditor({
       applied: 'hmn-graz4',
-      active: ['awg-quick@hmn-graz4'],
+      active: ['gatehouse-tunnel@hmn-graz4'],
       enabled: [],
     });
     try {
       const panel = await (await fetch(`${editor.base}/panel/system:amnezia`)).text();
-      assert.match(panel, /awg-quick@hmn-graz4/);
+      assert.match(panel, /gatehouse-tunnel@hmn-graz4/);
       assert.match(panel, /поднят, но не в автозагрузке: после перезагрузки пропадёт/);
       assert.match(panel, /hx-post="\/tunnel\/restart"/);
       assert.match(panel, /hx-post="\/tunnel\/toggle"/);
-      assert.match(panel, /unit=awg-quick%40hmn-graz4/, 'the journal link targets the unit');
+      assert.match(panel, /unit=gatehouse-tunnel%40hmn-graz4/, 'the journal link targets the unit');
     } finally {
       await editor.close();
     }
@@ -463,7 +463,7 @@ describe('the tunnel panel and its buttons (part 2)', () => {
       const panel = await (await fetch(`${editor.base}/panel/system:amnezia`)).text();
       assert.doesNotMatch(panel, /hx-post="\/tunnel\/restart"/);
       assert.doesNotMatch(panel, /hx-post="\/tunnel\/toggle"/);
-      assert.match(panel, /enable --now awg-quick@hmn-graz4/);
+      assert.match(panel, /enable --now gatehouse-tunnel@hmn-graz4/);
 
       const refused = await (await post(editor.base, '/tunnel/restart', {name: 'hmn-graz4'})).text();
       assert.match(refused, /нет правила sudoers/);
@@ -524,8 +524,8 @@ describe('warnings and marks (parts 3 and §5.4)', () => {
   test('a running tunnel produces no warning', async () => {
     const editor = await startEditor({
       applied: 'hmn-graz4',
-      active: ['awg-quick@hmn-graz4'],
-      enabled: ['awg-quick@hmn-graz4'],
+      active: ['gatehouse-tunnel@hmn-graz4'],
+      enabled: ['gatehouse-tunnel@hmn-graz4'],
     });
     try {
       const response = await post(editor.base, '/generate', {});

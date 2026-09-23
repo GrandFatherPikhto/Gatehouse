@@ -41,12 +41,21 @@ const validateAgainstSchema = ajv.compile(SCHEMA);
 export const LEGACY_KEYS = Object.freeze(['profiles', 'defaults', 'active', 'links_file']);
 
 /**
- * Top-level keys that belonged to the Watchdog, which left the project (part B of
- * techdocs/plan_2026_09_23_gatehouse_fuse_and_no_watchdog.md). The live
- * `webui.json` still carries them and the schema is strict, so they are dropped
- * before validation instead of breaking the load.
+ * Top-level keys that left the project and are dropped BEFORE the schema sees
+ * them, because the schema is strict and the owner's live `webui.json` still
+ * carries them.
+ *
+ *   * `watchdog` and `clash_api` belonged to the Watchdog (part B of
+ *     techdocs/plan_2026_09_23_gatehouse_fuse_and_no_watchdog.md);
+ *   * `amnezia_dir` was a per-document tunnel directory. It is gone because the
+ *     tunnel directory became a single constant of the build: the template unit
+ *     reads a fixed path, so a document value could aim the start-up fuse at one
+ *     file and the unit at another.
+ *
+ * The file itself is not rewritten here: the keys disappear on the next ordinary
+ * save.
  */
-export const REMOVED_KEYS = Object.freeze(['watchdog', 'clash_api']);
+export const REMOVED_KEYS = Object.freeze(['watchdog', 'clash_api', 'amnezia_dir']);
 
 /** Keys of a proxy that the Watchdog wrote, dropped with the rest. */
 export const REMOVED_PROXY_KEYS = Object.freeze(['watch', 'watch_url']);

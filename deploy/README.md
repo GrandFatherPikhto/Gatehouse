@@ -100,8 +100,10 @@ sudo chown root:root /etc/sing-box/config.json
 Вариант с sudo (по умолчанию):
 
 ```bash
-sudo install -d -m 0750 -o denis -g denis /etc/amnezia/amneziawg
+sudo install -d -m 0750 -o denis -g denis /etc/gatehouse
+sudo install -d -m 0700 -o denis -g denis /etc/gatehouse/tunnels
 sudo cp deploy/gatehouse.service /etc/systemd/system/
+sudo cp deploy/gatehouse-tunnel@.service /etc/systemd/system/
 sudo install -m 0440 -o root -g denis deploy/sudoers.d-gatehouse /etc/sudoers.d/gatehouse
 sudo visudo -c                            # ОБЯЗАТЕЛЬНО: сломанный файл ломает sudo целиком
 sudo systemctl daemon-reload
@@ -109,13 +111,14 @@ sudo systemctl enable --now gatehouse
 systemctl status gatehouse --no-pager
 ```
 
-`/etc/amnezia/amneziawg` — каталог, откуда `awg-quick@<имя>` читает
+`/etc/gatehouse/tunnels` — каталог, откуда `gatehouse-tunnel@<имя>` читает
 `<имя>.conf`; редактор пишет туда нормализованные конфиги туннелей, поэтому в
-юните он открыт на запись (`ReadWritePaths=/etc/amnezia/amneziawg`).
-Права установки `/etc/sudoers.d/gatehouse` даны группе `denis` (`0440
-root:denis`): редактор читает этот файл, чтобы понимать, каким туннелям можно
-рисовать кнопки. Само чтение прав не повышает, запись в файл редактор не делает
-никогда.
+юните он открыт на запись (`ReadWritePaths=/etc/gatehouse`). Ручные туннели в
+`/etc/amnezia/amneziawg` под штатным юнитом amnezia GateHouse не видит и не
+трогает — это намеренно. Права установки `/etc/sudoers.d/gatehouse` даны группе
+`denis` (`0440 root:denis`): редактор читает этот файл, чтобы понимать, каким
+туннелям можно рисовать кнопки. Само чтение прав не повышает, запись в файл
+редактор не делает никогда.
 
 Вариант с polkit:
 
