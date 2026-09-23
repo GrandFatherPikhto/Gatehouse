@@ -45,7 +45,6 @@ const EDIT_FORMS = Object.freeze({
   route: ['/route'],
   dns: ['/dns'],
   output: ['/output'],
-  providers: ['/providers'],
   watchdog: ['/watchdog'],
   general: ['/general'],
 });
@@ -171,7 +170,14 @@ export function buildPanel(model, key, extra = {}) {
       return {...base, title: 'Общие', values: model.generalValues()};
 
     case 'providers':
-      return {...base, title: 'Провайдеры', info: model.sourcesInfo()};
+      return {
+        ...base,
+        title: 'Провайдеры',
+        info: model.sourcesInfo(),
+        // Folders that exist under the root but are not listed yet: the "add"
+        // control offers them, so a folder name is picked, never typed.
+        available: model.availableSources(),
+      };
 
     case 'output':
       return {

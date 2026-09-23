@@ -1,29 +1,27 @@
 <%# Providers: the folders under the sources root. The folder name IS the provider
     name; a folder may hold links.txt (turned into outbounds), tunnel configs
-    (*.conf, listed but NEVER turned into outbounds), or both. A provider label
-    appears in a tag only when two providers hand out the same name. %>
+    (*.conf, listed but NEVER turned into outbounds), or both.
+    The list is edited as a LIST — a folder is added from the ones that exist, or
+    removed by the button on its row; the folder on disk is never touched.
+    One provider is exactly one row. %>
 <h2><%= panel.title %></h2>
 
-<form id="panel-form" class="form" hx-post="/providers" hx-target="#panel" hx-swap="innerHTML" method="post" action="/providers">
-  <fieldset>
-    <legend>Источники</legend>
-    <label for="sources">sources</label>
-    <textarea id="sources" name="sources" rows="5" cols="40"><%= panel.info.sources.join('\n') %></textarea>
-    <p class="hint">
-      По одному имени папки в строке. Корень: <code><%= panel.info.root %></code>
-      (переопределяется переменной <code>GATEHOUSE_SOURCES</code>).
-    </p>
-  </fieldset>
-  <button type="submit">Применить</button>
-</form>
+<p class="hint">
+  Корень источников: <code><%= panel.info.root %></code>
+  (переопределяется переменной <code>GATEHOUSE_SOURCES</code>).
+  Новую папку создают на диске, затем нажимают «Перечитать».
+</p>
 
-<h3>Прочитано</h3>
+<h3>Подключённые источники</h3>
 <% if (panel.info.providers.length === 0) { %>
-  <p class="hint">Источники не заданы: добавьте имя папки выше.</p>
+  <p class="hint">Источники не заданы: добавьте папку ниже.</p>
 <% } else { %>
   <table class="list">
     <thead>
-      <tr><th>провайдер</th><th>содержимое</th><th>записей</th><th>изменён</th><th>состояние</th></tr>
+      <tr>
+        <th>провайдер</th><th>содержимое</th><th>записей</th><th>изменён</th>
+        <th>туннели (в конфиг не попадают)</th><th>состояние</th><th></th>
+      </tr>
     </thead>
     <tbody>
       <% for (const provider of panel.info.providers) { %>
@@ -33,17 +31,9 @@
           <td><%= provider.count %></td>
           <td><%= provider.mtime ?? '—' %></td>
           <td>
-            <% if (provider.error) { %>
-              <span class="error"><%= provider.error %></span>
+            <% if (provider.entries.length === 0) { %>
+              —
             <% } else { %>
-              ок
-            <% } %>
-          </td>
-        </tr>
-        <% if (provider.entries.length > 0) { %>
-          <tr>
-            <td colspan="5" class="muted">
-              туннели (в конфиг не попадают):
               <% for (const entry of provider.entries) { %>
                 <% const key = `tunnel:${provider.name}/${entry}`; %>
                 <a href="/panel/<%= encodeURIComponent(key) %>"
@@ -52,13 +42,53 @@
                    hx-swap="innerHTML"
                    hx-push-url="true"><%= entry %></a><% if (entry !== provider.entries[provider.entries.length - 1]) { %>, <% } %>
               <% } %>
-            </td>
-          </tr>
-        <% } %>
+            <% } %>
+          </td>
+          <td>
+            <% if (provider.error) { %>
+              <span class="error"><%= provider.error %></span>
+            <% } else { %>
+              ок
+            <% } %>
+          </td>
+          <td>
+            <form hx-post="/providers" hx-target="#panel" hx-swap="innerHTML" method="post" action="/providers" class="inline">
+              <input type="hidden" name="action" value="remove">
+              <input type="hidden" name="name" value="<%= provider.name %>">
+              <button type="submit" class="secondary">Убрать</button>
+            </form>
+          </td>
+        </tr>
       <% } %>
     </tbody>
   </table>
 <% } %>
+
+<h3>Добавить источник</h3>
+<% if (panel.available.length === 0) { %>
+  <p class="hint">
+    Под корнем нет папок, которых ещё нет в списке. Создайте папку на диске и
+    нажмите «Перечитать».
+  </p>
+<% } else { %>
+  <form hx-post="/providers" hx-target="#panel" hx-swap="innerHTML" method="post" action="/providers" class="inline">
+    <input type="hidden" name="action" value="add">
+    <label for="source-name">папка</label>
+    <select id="source-name" name="name">
+      <% for (const name of panel.available) { %>
+        <option value="<%= name %>"><%= name %></option>
+      <% } %>
+    </select>
+    <button type="submit">Добавить</button>
+  </form>
+<% } %>
+
+<p>
+  <form hx-post="/providers" hx-target="#panel" hx-swap="innerHTML" method="post" action="/providers" class="inline">
+    <input type="hidden" name="action" value="reload">
+    <button type="submit" class="secondary">Перечитать</button>
+  </form>
+</p>
 
 <% if (panel.info.outbounds.length > 0) { %>
   <h3>Выходы (<%= panel.info.outbounds.length %>)</h3>

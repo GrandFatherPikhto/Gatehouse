@@ -216,6 +216,13 @@ const EDITABLE_ACTION_FORMS = Object.freeze({
   // field and the single policy-routing checkbox, and posting it recomputes the
   // preview. There is no apply, so it is an action form too.
   tunnel: [{route: '/tunnel', hidden: null}],
+  // The providers panel edits the LIST through action forms, not through one edit
+  // form: "add" carries the folder picker, "remove" sits on each row. There is
+  // nothing to "apply", so neither is `id="panel-form"`.
+  providers: [
+    {route: '/providers', hidden: 'add'},
+    {route: '/providers', hidden: 'remove'},
+  ],
 });
 
 /**

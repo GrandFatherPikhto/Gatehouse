@@ -92,7 +92,6 @@ const ROUTE_FIELDS = Object.freeze({
   '/proxy': ['tag', 'type', 'port'],
   '/route': ['name', 'outbound'],
   '/dns': ['dns'],
-  '/providers': ['sources'],
   '/output': ['output_file'],
   '/watchdog': ['interval_seconds'],
   '/general': [
@@ -513,9 +512,6 @@ export function createApp(options = {}) {
       case '/dns':
         model.applyDns(String(body.dns ?? ''));
         return {applied: true, key: 'dns'};
-      case '/providers':
-        model.setSources(forms.lines(body.sources));
-        return {applied: true, key: 'providers'};
       case '/output':
         model.setOutputFile(String(body.output_file ?? '').trim());
         return {applied: true, key: 'output'};
@@ -643,11 +639,30 @@ export function createApp(options = {}) {
   // Sources and output
   // ------------------------------------------------------------------
 
+  // The panel edits the LIST, not a text field: a folder is added from the ones
+  // that really exist under the sources root, removed by a button on its own row,
+  // or the folders are re-read from disk. No action touches the files themselves.
   app.post(
     '/providers',
     mutation('providers', (req) => {
-      applyEditForm('providers', req);
-      return {key: 'providers', notice: 'Список источников применён — не забудьте сохранить'};
+      const action = String(req.body.action ?? '').trim();
+      const name = String(req.body.name ?? '').trim();
+
+      switch (action) {
+        case 'add':
+          model.addSource(name);
+          return {key: 'providers', notice: `Источник '${name}' добавлен — не забудьте сохранить`};
+        case 'remove':
+          model.removeSource(name);
+          return {
+            key: 'providers',
+            notice: `Источник '${name}' убран из списка — папка на диске не тронута, не забудьте сохранить`,
+          };
+        case 'reload':
+          return {key: 'providers', notice: 'Источники перечитаны с диска'};
+        default:
+          throw new ConfigError(`неизвестное действие '${action}'`);
+      }
     }),
   );
 

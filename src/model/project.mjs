@@ -499,17 +499,63 @@ export class ProjectModel {
   }
 
   /**
-   * Replaces the provider list.
+   * Adds one provider folder to `sources`.
    *
-   * @param {unknown} value
+   * The folder is NOT created on disk: `sources` is a configuration list, and the
+   * tool does not write to the owner's data directories. A name that is already
+   * listed is refused instead of duplicated, and an empty name is refused at all —
+   * the panel offers the folders that really exist under the root, so a typo
+   * cannot get in through the UI.
+   *
+   * @param {string} name
+   * @returns {string[]} The new list.
    */
-  setSources(value) {
-    const names = sourceNames(value);
-    if (names.length === 0) {
-      throw new ConfigError('sources должен быть непустым списком имён папок');
-    }
-    this.document.sources = names;
+  addSource(name) {
+    const clean = String(name ?? '').trim();
+    if (clean.length === 0) throw new ConfigError('имя источника не может быть пустым');
+    const names = this.sources();
+    if (names.includes(clean)) throw new ConfigError(`источник '${clean}' уже указан в sources`);
+    this.document.sources = [...names, clean];
     this.markDirty();
+    return this.document.sources;
+  }
+
+  /**
+   * Drops one provider folder from `sources`. The folder itself is left on disk:
+   * removing an entry means "do not read it", never "delete the owner's files".
+   * The list may become empty, which is a normal state the tree reports.
+   *
+   * @param {string} name
+   * @returns {string[]} The new list.
+   */
+  removeSource(name) {
+    const clean = String(name ?? '').trim();
+    const names = this.sources();
+    if (!names.includes(clean)) throw new ConfigError(`источник '${clean}' не указан в sources`);
+    this.document.sources = names.filter((item) => item !== clean);
+    this.markDirty();
+    return this.document.sources;
+  }
+
+  /**
+   * Folders that exist under the sources root but are not listed in `sources`.
+   * This is what the "add" picker offers, so the owner never types a folder name.
+   *
+   * @returns {string[]} Sorted folder names.
+   */
+  availableSources() {
+    const root = this.resolvedSourcesRoot();
+    let entries;
+    try {
+      entries = fs.readdirSync(root, {withFileTypes: true});
+    } catch {
+      return [];
+    }
+    const listed = new Set(this.sources());
+    return entries
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !listed.has(entry.name))
+      .map((entry) => entry.name)
+      .sort();
   }
 
   /**
