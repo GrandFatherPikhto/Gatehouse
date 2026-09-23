@@ -23,6 +23,22 @@ import {ConfigError} from './errors.mjs';
 /** Kernel limit on an interface name, in characters. */
 export const INTERFACE_NAME_MAX = 15;
 
+/**
+ * Limit of the human-readable tunnel name. It is a label in `webui.json`, not an
+ * interface: only the file name is capped by the kernel.
+ */
+export const TUNNEL_LABEL_MAX = 255;
+
+/**
+ * Characters an interface name — and therefore the `.conf` file name and the
+ * `awg-quick@<name>` instance — may carry. `/`, whitespace and non-ASCII are out
+ * because the name becomes a path component and a systemd instance name.
+ */
+const INTERFACE_NAME_PATTERN = /^[A-Za-z0-9_.-]+$/;
+
+/** Control characters, refused in a human-readable name. */
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+
 /** Routing table used by the optional policy-routing rules. */
 export const POLICY_ROUTING_TABLE = 200;
 
@@ -117,6 +133,107 @@ export function chooseInterfaceName(desired, taken = new Set()) {
     if (!taken.has(candidate)) return candidate;
   }
   throw new ConfigError(`не удалось подобрать свободное имя интерфейса для '${base}'`);
+}
+
+/**
+ * Validates the human-readable name of a tunnel and returns it trimmed.
+ *
+ * The name is a label for the owner: it identifies the tunnel in lists and in the
+ * proxy form. It never reaches the kernel, so the only hard limits are the schema
+ * length and the absence of a path separator or a control character.
+ *
+ * @param {unknown} label
+ * @returns {string}
+ */
+export function validateTunnelLabel(label) {
+  const clean = typeof label === 'string' ? label.trim() : '';
+  if (clean.length === 0) throw new ConfigError('имя туннеля не может быть пустым');
+  if (clean.length > TUNNEL_LABEL_MAX) {
+    throw new ConfigError(`имя туннеля длиннее ${TUNNEL_LABEL_MAX} символов`);
+  }
+  if (clean.includes('/')) throw new ConfigError("имя туннеля не может содержать '/'");
+  if (CONTROL_CHARACTERS.test(clean)) {
+    throw new ConfigError('имя туннеля не может содержать управляющие символы');
+  }
+  return clean;
+}
+
+/**
+ * Validates the file name of a tunnel and returns it trimmed.
+ *
+ * This one is the stem of `<name>.conf` in the amnezia directory, the systemd
+ * instance `awg-quick@<name>` and the kernel interface name, so the 15-character
+ * kernel limit is a hard rule and not advice: a longer name makes the unit fail.
+ *
+ * @param {unknown} name
+ * @returns {string}
+ */
+export function validateInterfaceName(name) {
+  const clean = typeof name === 'string' ? name.trim() : '';
+  if (clean.length === 0) throw new ConfigError('имя файла туннеля не может быть пустым');
+  if (clean.length > INTERFACE_NAME_MAX) {
+    throw new ConfigError(
+      `имя файла '${clean}' длиннее ${INTERFACE_NAME_MAX} символов — ядро такое не примет`,
+    );
+  }
+  if (!INTERFACE_NAME_PATTERN.test(clean)) {
+    throw new ConfigError(
+      `имя файла '${clean}' содержит недопустимые символы: разрешены латиница, цифры, '_', '.' и '-'`,
+    );
+  }
+  if (clean === '.' || clean === '..') throw new ConfigError(`имя файла '${clean}' недопустимо`);
+  if (clean.startsWith('-') || clean.startsWith('.')) {
+    throw new ConfigError(`имя файла '${clean}' не может начинаться с '-' или '.'`);
+  }
+  if (clean.endsWith('.conf')) {
+    throw new ConfigError(
+      `имя файла '${clean}' не должно оканчиваться на '.conf': расширение добавляет редактор`,
+    );
+  }
+  return clean;
+}
+
+/**
+ * Suggests the human-readable name of a tunnel: `<provider>-<file stem>`.
+ *
+ * Sanitised rather than refused: this is a default the owner may edit, so a slash
+ * or a stray control character in a provider folder name becomes `-` instead of
+ * stopping the form.
+ *
+ * @param {string} provider
+ * @param {string} file
+ * @returns {string}
+ */
+export function suggestTunnelName(provider, file) {
+  const stem = String(file ?? '').replace(/\.conf$/i, '');
+  const raw = `${String(provider ?? '').trim()}-${stem}`.trim();
+  const clean = raw.replace(/[\u0000-\u001f\u007f/]/g, '-').trim();
+  return (clean.length > 0 ? clean : 'tunnel').slice(0, TUNNEL_LABEL_MAX);
+}
+
+/**
+ * True when the `[Interface]` section carries `Table = off`.
+ *
+ * `wg-quick` compares the value with `off` case-sensitively, so that exact line
+ * is what the start-up fuse looks for. Anything else — a missing key, a different
+ * value, the key in another section — means the config would install a default
+ * route and take the whole router with it.
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function hasTableOff(text) {
+  let inInterface = false;
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith('[')) {
+      inInterface = line.toLowerCase() === '[interface]';
+      continue;
+    }
+    if (!inInterface) continue;
+    if (/^Table\s*=\s*off$/.test(line)) return true;
+  }
+  return false;
 }
 
 /**

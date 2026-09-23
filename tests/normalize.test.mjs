@@ -20,7 +20,11 @@ import {
   POLICY_ROUTING_TABLE,
   PRESERVED_KEYS,
   chooseInterfaceName,
+  hasTableOff,
   normalizeTunnel,
+  suggestTunnelName,
+  validateInterfaceName,
+  validateTunnelLabel,
 } from '../src/core/normalize.mjs';
 import {FIXTURES_DIR} from './helpers.mjs';
 
@@ -173,5 +177,39 @@ describe('interface name rules (NEW)', () => {
       () => chooseInterfaceName('a'.repeat(INTERFACE_NAME_MAX + 1), new Set()),
       (error) => error instanceof ConfigError && /15 символов/.test(error.message),
     );
+  });
+});
+
+describe('the two tunnel names (NEW)', () => {
+  test('the human-readable name is suggested from provider and file stem', () => {
+    assert.equal(suggestTunnelName('hidemyname', 'AustriaGrazS4.conf'), 'hidemyname-AustriaGrazS4');
+    assert.equal(suggestTunnelName('amnezia', 'de.conf'), 'amnezia-de');
+  });
+
+  test('the file name obeys the kernel limit and the character set', () => {
+    assert.equal(validateInterfaceName(' hmn-graz4 '), 'hmn-graz4');
+    assert.throws(() => validateInterfaceName(''), /не может быть пустым/);
+    assert.throws(() => validateInterfaceName('a'.repeat(INTERFACE_NAME_MAX + 1)), /15 символов/);
+    assert.throws(() => validateInterfaceName('bad/name'), /недопустимые символы/);
+    assert.throws(() => validateInterfaceName('de.conf'), /\.conf/);
+    assert.throws(() => validateInterfaceName('-de'), /начинаться/);
+    assert.throws(() => validateInterfaceName('..'), /недопустимо/);
+  });
+
+  test('the human-readable name is validated separately and may be long', () => {
+    const long = 'x'.repeat(255);
+    assert.equal(validateTunnelLabel(long), long);
+    assert.throws(() => validateTunnelLabel('y'.repeat(256)), /255/);
+    assert.throws(() => validateTunnelLabel('a/b'), /\//);
+    assert.throws(() => validateTunnelLabel(''), /пустым/);
+  });
+
+  test('Table = off is looked for inside [Interface] and is case-sensitive', () => {
+    assert.equal(hasTableOff('[Interface]\nTable = off\n[Peer]\n'), true);
+    assert.equal(hasTableOff('[Interface]\nPrivateKey = x\n'), false);
+    assert.equal(hasTableOff('[Interface]\nTable = on\n'), false);
+    assert.equal(hasTableOff('[Interface]\nTable = OFF\n'), false, 'the value is case-sensitive');
+    assert.equal(hasTableOff('[Peer]\nTable = off\n'), false, 'the wrong section is not enough');
+    assert.equal(hasTableOff('Table = off\n'), false, 'a bare line is not a section');
   });
 });

@@ -98,7 +98,7 @@ describe('the tunnel preview (NEW)', () => {
     }
   });
 
-  test('one checkbox, none on the mandatory fixes, and the apply button', async () => {
+  test('one checkbox, none on the mandatory fixes, and no apply button', async () => {
     const editor = await startEditor();
     try {
       const response = await postTunnel(editor.base, {
@@ -109,13 +109,15 @@ describe('the tunnel preview (NEW)', () => {
       const html = await response.text();
 
       // Still exactly ONE checkbox — the one about FUTURE USE (policy routing).
-      // The apply form does not repeat it: it carries the already-computed value
-      // in a hidden field, so the two forms cannot disagree about the preview.
+      // The mark and the two names live in the Providers panel now, and the
+      // preview never writes the file itself.
       assert.equal(html.split('type="checkbox"').length - 1, 1, 'one checkbox, for policy routing');
       assert.match(html, /отдаётся также через 3proxy по адресу источника/);
-      assert.match(html, /hx-post="\/tunnel\/apply"/, 'the apply button posts to its own route');
-      assert.match(html, />Применить</);
-      assert.match(html, /Туннель при этом НЕ поднимается/);
+      assert.doesNotMatch(html, /hx-post="\/tunnel\/apply"/, 'there is no apply on this screen');
+      assert.doesNotMatch(html, />Применить</);
+      assert.match(html, /hx-post="\/tunnel\/policy"/, 'the policy switch has its own route');
+      assert.match(html, /Имя туннеля: <code>hidemyname-AustriaGrazS4<\/code>/);
+      assert.match(html, /туннель не отмечен/, 'an unmarked tunnel says the file is not created');
     } finally {
       await editor.close();
     }

@@ -193,7 +193,13 @@ export function buildPanel(model, key, extra = {}) {
       const info = model.sourcesInfo();
       const provider = info.providers.find((item) => item.name === name) ?? null;
       if (provider === null) throw new ConfigError(`источник '${name}' не подключён`);
-      return {...base, title: `Источник: ${name}`, provider};
+      return {
+        ...base,
+        title: `Источник: ${name}`,
+        provider,
+        // One row per `.conf`: the «нужен» mark and the two editable names.
+        tunnelRows: model.providerTunnelRows(name),
+      };
     }
 
     case 'output':

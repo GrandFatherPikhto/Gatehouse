@@ -116,9 +116,8 @@
 <h3>4. Туннели</h3>
 <% if (panel.tunnels.length === 0) { %>
   <p class="hint">
-    Ни один прокси не привязан к туннелю. Возьмите конфиг на вкладке
-    «Провайдеры» и нажмите «Применить», затем создайте прокси с выбранным
-    туннелем — строка появится здесь.
+    Ни один туннель не отмечен. Откройте папку-источник на вкладке «Провайдеры»
+    и поставьте галочку «нужен» у её <code>.conf</code> — строка появится здесь.
   </p>
 <% } else { %>
   <p class="hint">
@@ -137,7 +136,10 @@
       <tbody>
         <% for (const tunnel of group.tunnels) { %>
           <tr class="<%= tunnel.applied && (tunnel.active !== tunnel.enabled) ? 'stale' : '' %>">
-            <td><code><%= tunnel.interface %></code><br><span class="hint"><%= tunnel.unit %></span></td>
+            <td>
+              <% if (tunnel.label) { %><strong><%= tunnel.label %></strong><br><% } %>
+              <code><%= tunnel.interface %></code><br><span class="hint"><%= tunnel.unit %></span>
+            </td>
             <td>
               <% if (!tunnel.applied) { %>
                 конфиг не применён

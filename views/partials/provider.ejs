@@ -24,19 +24,54 @@
 
 <% if (panel.provider.entries.length > 0) { %>
   <h3>Конфиги туннелей (<%= panel.provider.entries.length %>)</h3>
-  <p class="hint">В config.json не попадают: их можно только посмотреть.</p>
-  <ul>
-    <% for (const entry of panel.provider.entries) { %>
-      <% const key = `tunnel:${panel.provider.name}/${entry}`; %>
-      <li>
-        <a href="/panel/<%= encodeURIComponent(key) %>"
-           hx-get="/panel/<%= encodeURIComponent(key) %>"
-           hx-target="#panel"
-           hx-swap="innerHTML"
-           hx-push-url="true"><%= entry %></a>
-      </li>
-    <% } %>
-  </ul>
+  <p class="hint">
+    Галочка «нужен» нормализует конфиг и кладёт <code><имя файла>.conf</code>
+    в каталог amnezia; снятие галочки останавливает туннель и убирает файл.
+    Имя файла — это <code><имя файла>.conf</code> в каталоге amnezia и юнит
+    <code>awg-quick@<имя файла></code>, поэтому не длиннее 15 символов.
+    В <code>config.json</code> конфиги туннелей сами по себе не попадают.
+  </p>
+  <table class="list">
+    <thead>
+      <tr><th>файл</th><th>отметка и имена</th></tr>
+    </thead>
+    <tbody>
+      <% for (const row of panel.tunnelRows) { %>
+        <% const key = `tunnel:${panel.provider.name}/${row.file}`; %>
+        <tr class="<%= row.marked && !row.applied ? 'stale' : '' %>">
+          <td>
+            <a href="/panel/<%= encodeURIComponent(key) %>"
+               hx-get="/panel/<%= encodeURIComponent(key) %>"
+               hx-target="#panel"
+               hx-swap="innerHTML"
+               hx-push-url="true"><%= row.file %></a>
+          </td>
+          <td>
+            <form class="inline" hx-post="/tunnels" hx-target="#panel" hx-swap="innerHTML" method="post" action="/tunnels">
+              <input type="hidden" name="provider" value="<%= panel.provider.name %>">
+              <input type="hidden" name="file" value="<%= row.file %>">
+              <label class="check">
+                <input type="checkbox" name="needed" value="1" <%= row.marked ? 'checked' : '' %>
+                       hx-post="/tunnels" hx-trigger="change"
+                       hx-target="#panel" hx-swap="innerHTML" hx-include="closest form">
+                нужен
+              </label>
+              <label>имя туннеля
+                <input type="text" name="name" value="<%= row.name %>" maxlength="255" size="30">
+              </label>
+              <label>имя файла
+                <input type="text" name="interface" value="<%= row.interface %>" maxlength="15" size="14">
+              </label>
+              <button type="submit"><%= row.marked ? 'Сохранить' : 'Отметить' %></button>
+              <% if (row.marked) { %>
+                <br><span class="hint"><%= row.applied ? 'файл на месте' : 'файла пока нет' %></span>
+              <% } %>
+            </form>
+          </td>
+        </tr>
+      <% } %>
+    </tbody>
+  </table>
 <% } %>
 
 <% if (

@@ -25,9 +25,6 @@
 <% const tunnelRef = posted
      ? (posted.tunnel ?? '')
      : (storedTunnel ? `${storedTunnel.provider}/${storedTunnel.file}` : ''); %>
-<% const tunnelInterface = posted
-     ? (posted.tunnel_interface ?? '')
-     : (storedTunnel ? storedTunnel.interface : ''); %>
 <% const current = posted && posted.current !== undefined ? posted.current : stored.tag; %>
 <% const servers = posted
      ? (posted.servers === undefined
@@ -103,20 +100,16 @@
       <option value="">— нет, обычный прокси (серверы ниже) —</option>
       <% for (const item of panel.tunnels) { %>
         <% const value = `${item.provider}/${item.file}`; %>
-        <option value="<%= value %>" <%= tunnelRef === value ? 'selected' : '' %>><%= value %></option>
+        <option value="<%= value %>" <%= tunnelRef === value ? 'selected' : '' %>><%= item.name %> (<%= item.interface %>)</option>
+      <% } %>
+      <% if (storedTunnel && !panel.tunnels.some((item) => `${item.provider}/${item.file}` === tunnelRef)) { %>
+        <option value="<%= tunnelRef %>" selected><%= tunnelRef %> (не отмечен)</option>
       <% } %>
     </select>
-    <label for="tunnel_interface">имя интерфейса</label>
-    <input type="text" id="tunnel_interface" name="tunnel_interface"
-           value="<%= tunnelInterface %>" maxlength="15" list="tunnel-names">
-    <datalist id="tunnel-names">
-      <% for (const item of panel.tunnels) { %>
-        <option value="<%= item.name %>"></option>
-      <% } %>
-    </datalist>
     <p class="hint">
-      Имя интерфейса — это имя файла <code><имя>.conf</code> в каталоге
-      amnezia и юнита <code>awg-quick@<имя></code>. Не длиннее 15 символов.
+      В списке — только отмеченные туннели из «Провайдеров». Имя файла и юнит
+      берутся из отметки: <code><имя файла>.conf</code> в каталоге amnezia и
+      <code>awg-quick@<имя файла></code>. Серверы ниже игнорируются.
       Не забудьте сохранить <code>webui.json</code> после правки.
     </p>
     <% if (storedTunnel) { %>

@@ -58,6 +58,8 @@
 import {execFile} from 'node:child_process';
 import fs from 'node:fs';
 
+import {tunnelStartupGuard} from './tunnel-file.mjs';
+
 /** Default path of the sing-box binary. */
 export const DEFAULT_SINGBOX_PATH = '/usr/local/bin/sing-box';
 /** Default path of `curl`, used by the watchdog to reach an inbound. */
@@ -620,19 +622,51 @@ function systemctlCommand(action, unit, config, options = {}) {
   return {file, args};
 }
 
+/** Actions that leave the unit RUNNING: the only ones the start-up fuse guards. */
+const STARTS_UNIT = new Set(['restart', 'enable']);
+
 /**
  * Runs one action on a tunnel unit.
+ *
+ * Before a unit may be STARTED the config on disk is read again and refused
+ * without `Table = off`: such a file makes `wg-quick` install a default route and
+ * takes the whole router into the tunnel, the owner's own link included. The
+ * check lives here, in the only function that runs `systemctl` on a tunnel, so no
+ * route, flag, setting or request can go around it; a refusal returns with an
+ * EMPTY `command` array, which is how a test proves `systemctl` was never called.
+ * Stopping (`disable --now`) is deliberately not guarded: taking a dangerous
+ * tunnel down must always remain possible.
  *
  * @param {string} name
  * @param {string[]} action
  * @param {{env?: Record<string, string|undefined>, timeout?: number,
  *   signal?: AbortSignal, sudo?: string, systemctl?: string}} [options]
  * @returns {Promise<{ok: boolean, code: number|null, stdout: string, stderr: string,
- *   error: string|null, timedOut: boolean, unit: string, action: string[], command: string[]}>}
+ *   error: string|null, timedOut: boolean, refused: boolean, unit: string,
+ *   action: string[], command: string[]}>}
  */
 async function tunnelAction(name, action, options = {}) {
   const config = systemConfig(options.env, options);
   const unit = tunnelUnitName(name);
+
+  if (STARTS_UNIT.has(action[0])) {
+    const guard = tunnelStartupGuard(config.amneziaDir, name);
+    if (!guard.safe) {
+      return {
+        ok: false,
+        code: null,
+        stdout: '',
+        stderr: '',
+        error: guard.reason,
+        timedOut: false,
+        refused: true,
+        unit,
+        action,
+        command: [],
+      };
+    }
+  }
+
   const {file, args} = systemctlCommand(action, unit, config, options);
 
   const result = await run(file, args, {
@@ -648,6 +682,7 @@ async function tunnelAction(name, action, options = {}) {
     stderr: result.stderr,
     error: result.error,
     timedOut: result.timedOut,
+    refused: false,
     unit,
     action,
     command: [file, ...args],

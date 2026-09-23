@@ -13,7 +13,14 @@ import {describe, test} from 'node:test';
 
 import {buildConfig} from '../src/core/build.mjs';
 import {validateProxies} from '../src/core/validate.mjs';
-import {tunnelState, tunnelPermissions, parseTunnelSudoers} from '../src/system/index.mjs';
+import {
+  disableTunnel,
+  enableTunnel,
+  parseTunnelSudoers,
+  restartTunnel,
+  tunnelPermissions,
+  tunnelState,
+} from '../src/system/index.mjs';
 import {applyTunnelConfig, listTunnelSnapshots, tunnelConfigPath} from '../src/system/tunnel-file.mjs';
 import {startServer} from '../src/web/server.mjs';
 import {
@@ -175,7 +182,7 @@ describe('a tunnel as a proxy (part 3)', () => {
  * tunnel proxy.
  *
  * @param {{applied?: string|null, rules?: string[], sudoers?: boolean, active?: string[],
- *   enabled?: string[]}} [options]
+ *   enabled?: string[], withProxy?: boolean}} [options]
  * @returns {Promise<Record<string, unknown>>}
  */
 async function startEditor(options = {}) {
@@ -187,13 +194,18 @@ async function startEditor(options = {}) {
 
   const settingsFile = writeSettings(dir, {
     sources: ['vpnd', 'hidemyname'],
-    proxies: [TUNNEL_PROXY, {tag: 'main-socks', type: 'socks', port: 54321}],
+    proxies:
+      options.withProxy === false
+        ? [{tag: 'main-socks', type: 'socks', port: 54321}]
+        : [TUNNEL_PROXY, {tag: 'main-socks', type: 'socks', port: 54321}],
   });
   const stateDir = path.join(dir, 'state');
   const amneziaDir = path.join(dir, 'amnezia');
   if (typeof options.applied === 'string') {
     fs.mkdirSync(amneziaDir, {recursive: true});
-    fs.writeFileSync(path.join(amneziaDir, `${options.applied}.conf`), 'Table = off\n');
+    // A real config has an `[Interface]` section: the start-up fuse looks for
+    // `Table = off` inside it, so a bare line is deliberately not enough.
+    fs.writeFileSync(path.join(amneziaDir, `${options.applied}.conf`), '[Interface]\nTable = off\n');
   }
 
   const sudoers = options.sudoers === false
@@ -240,20 +252,188 @@ async function post(base, route, fields = {}) {
 }
 
 describe('the tunnel panel and its buttons (part 2)', () => {
-  test('the config is applied over HTTP, then a repeat says "no changes"', async () => {
+  test('the «нужен» mark writes the normalised config, never the source', async () => {
     const editor = await startEditor();
     try {
-      const fields = {provider: 'hidemyname', file: 'AustriaGrazS4.conf', name: 'hmn-graz4'};
+      const fields = {
+        provider: 'hidemyname',
+        file: 'AustriaGrazS4.conf',
+        name: 'hidemyname-AustriaGrazS4',
+        interface: 'hmn-graz4',
+        needed: '1',
+      };
 
-      const first = await (await post(editor.base, '/tunnel/apply', fields)).text();
-      assert.match(first, /Конфиг записан/);
-      assert.match(first, /Туннель при этом НЕ поднят/);
+      const first = await (await post(editor.base, '/tunnels', fields)).text();
+      assert.match(first, /отмечен:/);
+      assert.match(first, /Туннель не поднят/);
+
       const target = path.join(editor.amneziaDir, 'hmn-graz4.conf');
       assert.equal(fs.statSync(target).mode & 0o777, 0o600);
+      assert.equal(
+        fs.readFileSync(target, 'utf8'),
+        fs.readFileSync(path.join(FIXTURES_DIR, 'tunnel', 'normalized.conf'), 'utf8'),
+        'the file holds the normaliser output byte for byte',
+      );
+      assert.notEqual(
+        fs.readFileSync(target, 'utf8'),
+        fs.readFileSync(PROVIDER_CONF, 'utf8'),
+        'the source config never reaches the amnezia directory',
+      );
+      assert.deepEqual(editor.model.getTunnel('hidemyname', 'AustriaGrazS4.conf'), {
+        provider: 'hidemyname',
+        file: 'AustriaGrazS4.conf',
+        name: 'hidemyname-AustriaGrazS4',
+        interface: 'hmn-graz4',
+      });
 
-      const second = await (await post(editor.base, '/tunnel/apply', fields)).text();
-      assert.match(second, /Изменений нет/);
+      // Identical bytes are a no-op: no snapshot series grows on a repeat.
+      await post(editor.base, '/tunnels', fields);
       assert.equal(listTunnelSnapshots(editor.amneziaDir, 'hmn-graz4').length, 0);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('un-ticking a running tunnel stops it first, then removes the file', async () => {
+    const editor = await startEditor({
+      withProxy: false,
+      active: ['awg-quick@hmn-graz4'],
+      enabled: ['awg-quick@hmn-graz4'],
+    });
+    try {
+      await post(editor.base, '/tunnels', {
+        provider: 'hidemyname',
+        file: 'AustriaGrazS4.conf',
+        name: 'hidemyname-AustriaGrazS4',
+        interface: 'hmn-graz4',
+        needed: '1',
+      });
+      const target = path.join(editor.amneziaDir, 'hmn-graz4.conf');
+      assert.ok(fs.existsSync(target));
+
+      const html = await (
+        await post(editor.base, '/tunnels', {provider: 'hidemyname', file: 'AustriaGrazS4.conf'})
+      ).text();
+
+      assert.match(html, /снят/);
+      assert.equal(fs.existsSync(target), false, 'the applied config is gone');
+      assert.equal(editor.model.getTunnel('hidemyname', 'AustriaGrazS4.conf'), null);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('a tunnel without a proxy is listed in «Система» and manageable', async () => {
+    const editor = await startEditor({withProxy: false, applied: 'de', rules: ['de']});
+    try {
+      const panel = await (await fetch(`${editor.base}/panel/system`)).text();
+
+      assert.match(panel, /awg-quick@de/);
+      assert.match(panel, /hx-post="\/tunnel\/toggle"/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('both names are validated before anything is written', async () => {
+    const editor = await startEditor({withProxy: false});
+    try {
+      const base = {provider: 'hidemyname', file: 'AustriaGrazS4.conf', needed: '1'};
+
+      const longFile = await (
+        await post(editor.base, '/tunnels', {...base, name: 'ok-name', interface: 'a'.repeat(16)})
+      ).text();
+      assert.match(longFile, /15 символов/);
+
+      const withExtension = await (
+        await post(editor.base, '/tunnels', {...base, name: 'ok-name', interface: 'de.conf'})
+      ).text();
+      assert.match(withExtension, /оканчиваться на/);
+
+      // An empty label falls back to the suggestion rather than refusing, so the
+      // refusal tested here is a control character: it has no place in a name.
+      const controlName = await (
+        await post(editor.base, '/tunnels', {...base, name: 'bad\u0001name', interface: 'de'})
+      ).text();
+      assert.match(controlName, /управляющие символы/);
+
+      assert.equal(
+        editor.model.getTunnel('hidemyname', 'AustriaGrazS4.conf'),
+        null,
+        'a refused mark stores nothing',
+      );
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('a foreign file with the chosen name is refused, never overwritten', async () => {
+    const editor = await startEditor({withProxy: false});
+    try {
+      fs.mkdirSync(editor.amneziaDir, {recursive: true});
+      const foreign = path.join(editor.amneziaDir, 'de.conf');
+      fs.writeFileSync(foreign, '[Interface]\nPrivateKey = foreign\n');
+
+      const html = await (
+        await post(editor.base, '/tunnels', {
+          provider: 'hidemyname',
+          file: 'AustriaGrazS4.conf',
+          name: 'hidemyname-AustriaGrazS4',
+          interface: 'de',
+          needed: '1',
+        })
+      ).text();
+
+      assert.match(html, /не принадлежит этому туннелю/);
+      assert.match(fs.readFileSync(foreign, 'utf8'), /PrivateKey = foreign/, 'the file is untouched');
+      assert.equal(editor.model.getTunnel('hidemyname', 'AustriaGrazS4.conf'), null);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('renaming the file name retargets the proxy and drops the old artifact', async () => {
+    const editor = await startEditor();
+    try {
+      const fields = {
+        provider: 'hidemyname',
+        file: 'AustriaGrazS4.conf',
+        name: 'hidemyname-AustriaGrazS4',
+        needed: '1',
+      };
+      await post(editor.base, '/tunnels', {...fields, interface: 'hmn-graz4'});
+      assert.ok(fs.existsSync(path.join(editor.amneziaDir, 'hmn-graz4.conf')));
+
+      await post(editor.base, '/tunnels', {...fields, interface: 'hmn-graz5'});
+
+      assert.equal(editor.model.getProxy('hmn-graz4').tunnel.interface, 'hmn-graz5');
+      assert.ok(fs.existsSync(path.join(editor.amneziaDir, 'hmn-graz5.conf')));
+      assert.equal(
+        fs.existsSync(path.join(editor.amneziaDir, 'hmn-graz4.conf')),
+        false,
+        'the old file is not left behind',
+      );
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('leftovers and snapshots are not taken for tunnels (§2.4)', async () => {
+    const editor = await startEditor({withProxy: false});
+    try {
+      fs.mkdirSync(editor.amneziaDir, {recursive: true});
+      fs.writeFileSync(path.join(editor.amneziaDir, 'de.conf'), '[Interface]\nTable = off\n');
+      fs.writeFileSync(path.join(editor.amneziaDir, 'de.conf.conf'), '[Interface]\nTable = off\n');
+      fs.writeFileSync(
+        path.join(editor.amneziaDir, 'de.conf.2020-01-01T00:00:00.000Z'),
+        'old bytes\n',
+      );
+
+      const panel = await (await fetch(`${editor.base}/panel/system`)).text();
+
+      assert.match(panel, /awg-quick@de</, 'the real config is listed');
+      assert.doesNotMatch(panel, /awg-quick@de\.conf/, 'a `de.conf.conf` leftover is not a tunnel');
+      assert.doesNotMatch(panel, /de\.conf\.2020/, 'snapshots are not tunnels');
     } finally {
       await editor.close();
     }
@@ -301,7 +481,7 @@ describe('the tunnel panel and its buttons (part 2)', () => {
 
       const refused = await (await post(editor.base, '/tunnel/toggle', {name: 'hmn-graz4', up: '1'})).text();
       // The quotes are HTML-escaped in the rendered notice.
-      assert.match(refused, /не применён: сначала «Применить» в разделе «Провайдеры»/);
+      assert.match(refused, /не применён: отметьте его галочкой «нужен»/);
     } finally {
       await editor.close();
     }
@@ -354,5 +534,71 @@ describe('warnings and marks (parts 3 and §5.4)', () => {
     } finally {
       await editor.close();
     }
+  });
+});
+
+describe('the start-up fuse (NEW)', () => {
+  test('a config without Table = off refuses to start and never calls systemctl', async () => {
+    const dir = makeTempDir();
+    const amneziaDir = path.join(dir, 'amnezia');
+    fs.mkdirSync(amneziaDir, {recursive: true});
+    fs.writeFileSync(path.join(amneziaDir, 'de.conf'), '[Interface]\nPrivateKey = x\n');
+
+    const log = path.join(dir, 'argv.log');
+    const env = fakeSystemEnv({
+      GATEHOUSE_AMNEZIA_DIR: amneziaDir,
+      FAKE_SYSTEMCTL_ARGV_LOG: log,
+    });
+
+    const started = await enableTunnel('de', {env});
+    assert.equal(started.ok, false);
+    assert.equal(started.refused, true);
+    assert.deepEqual(started.command, [], 'systemctl is not even assembled');
+    assert.match(started.error, /Table = off/);
+    assert.match(started.error, /de\.conf/, 'the refusal names the exact path');
+
+    const restarted = await restartTunnel('de', {env});
+    assert.equal(restarted.refused, true);
+    assert.equal(fs.existsSync(log), false, 'no systemctl process was ever spawned');
+  });
+
+  test('a missing config refuses too', async () => {
+    const dir = makeTempDir();
+    const env = fakeSystemEnv({GATEHOUSE_AMNEZIA_DIR: path.join(dir, 'amnezia')});
+
+    const result = await enableTunnel('de', {env});
+    assert.equal(result.refused, true);
+    assert.match(result.error, /не найден/);
+  });
+
+  test('a normalised config starts, and the file is read at start time', async () => {
+    const dir = makeTempDir();
+    const amneziaDir = path.join(dir, 'amnezia');
+    applyTunnelConfig('[Interface]\nTable = off\n', {name: 'de', amneziaDir});
+
+    const env = fakeSystemEnv({GATEHOUSE_AMNEZIA_DIR: amneziaDir});
+    const ok = await enableTunnel('de', {env});
+    assert.equal(ok.ok, true);
+    assert.ok(ok.command.includes('enable'));
+    assert.ok(ok.command.includes('--now'));
+
+    // Between writing and starting the file may be replaced; the check is on the
+    // bytes on disk NOW, not on what was applied earlier.
+    fs.writeFileSync(path.join(amneziaDir, 'de.conf'), '[Interface]\nPrivateKey = x\n');
+    const swapped = await restartTunnel('de', {env});
+    assert.equal(swapped.refused, true);
+    assert.match(swapped.error, /Table = off/);
+  });
+
+  test('stopping is never blocked by the fuse', async () => {
+    const dir = makeTempDir();
+    const amneziaDir = path.join(dir, 'amnezia');
+    fs.mkdirSync(amneziaDir, {recursive: true});
+    fs.writeFileSync(path.join(amneziaDir, 'de.conf'), '[Interface]\nPrivateKey = x\n');
+
+    const env = fakeSystemEnv({GATEHOUSE_AMNEZIA_DIR: amneziaDir});
+    const stopped = await disableTunnel('de', {env});
+    assert.equal(stopped.ok, true);
+    assert.equal(stopped.refused, false);
   });
 });

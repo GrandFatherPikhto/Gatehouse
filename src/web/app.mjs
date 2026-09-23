@@ -35,7 +35,7 @@ import {
   tunnelState,
   tunnelUnitName,
 } from '../system/index.mjs';
-import {tunnelConfigApplied} from '../system/tunnel-file.mjs';
+import {removeTunnelConfig} from '../system/tunnel-file.mjs';
 import {Watchdog} from '../watchdog/watchdog.mjs';
 import {TOKEN_COOKIE, extractToken, tokenMatches} from './auth.mjs';
 import * as forms from './forms.mjs';
@@ -242,25 +242,28 @@ export function createApp(options = {}) {
   // ------------------------------------------------------------------
 
   /**
-   * Reads the runtime state of every tunnel the document uses and caches it on
+   * Reads the runtime state of every tunnel of the inventory and caches it on
    * `state.tunnels`, keyed by interface.
    *
-   * Three questions are answered, and they are not the same question: is the
-   * `.conf` applied at all, is the unit active now, is it enabled at boot. Both
-   * systemd axes are read without `sudo`.
+   * The inventory comes from the document's `tunnels` list plus the `.conf` files
+   * of the amnezia directory (§3.2), so a tunnel is manageable before any proxy
+   * exists. Three questions are answered, and they are not the same question: is
+   * the `.conf` applied at all, is the unit active now, is it enabled at boot.
+   * Both systemd axes are read without `sudo`.
    *
    * @returns {Promise<Record<string, Record<string, unknown>>>}
    */
   async function refreshTunnelStates() {
     const next = {};
-    for (const tunnel of model.tunnelProxies()) {
-      const unit = tunnelUnitName(tunnel.interface);
-      if (!tunnelConfigApplied(system.amneziaDir, tunnel.interface)) {
-        next[tunnel.interface] = {applied: false, active: false, enabled: false, unit};
+    for (const tunnel of model.tunnelInventory()) {
+      const iface = String(tunnel.interface);
+      const unit = tunnelUnitName(iface);
+      if (tunnel.applied !== true) {
+        next[iface] = {applied: false, active: false, enabled: false, unit};
         continue;
       }
-      const runtime = await tunnelState(tunnel.interface, {env: systemEnv});
-      next[tunnel.interface] = {
+      const runtime = await tunnelState(iface, {env: systemEnv});
+      next[iface] = {
         applied: true,
         active: runtime.active,
         enabled: runtime.enabled,
@@ -280,7 +283,7 @@ export function createApp(options = {}) {
    * @returns {Record<string, Record<string, unknown>>}
    */
   function tunnelRights() {
-    const names = model.tunnelProxies().map((tunnel) => tunnel.interface);
+    const names = model.tunnelInventory().map((tunnel) => String(tunnel.interface));
     return tunnelPermissions(system.sudoers, names, {systemctl: system.systemctl});
   }
 
@@ -330,6 +333,7 @@ export function createApp(options = {}) {
         return {
           ...tunnel,
           unit,
+          label: typeof tunnel.name === 'string' ? tunnel.name : '',
           applied: runtime.applied === true,
           active: runtime.active === true,
           enabled: runtime.enabled === true,
@@ -354,8 +358,10 @@ export function createApp(options = {}) {
   function assertKnownTunnel(name) {
     const clean = String(name ?? '').trim();
     if (clean.length === 0) throw new ConfigError('не указано имя туннеля');
-    if (!model.tunnelProxies().some((tunnel) => tunnel.interface === clean)) {
-      throw new ConfigError(`туннель '${clean}' не описан ни одним прокси`);
+    if (!model.tunnelInventory().some((tunnel) => String(tunnel.interface) === clean)) {
+      throw new ConfigError(
+        `туннель '${clean}' не подготовлен: его нет ни в списке tunnels, ни в каталоге amnezia`,
+      );
     }
     return clean;
   }
@@ -580,8 +586,21 @@ export function createApp(options = {}) {
    */
   async function panelExtra(key, req) {
     const kind = typeof key === 'string' && key.includes(':') ? key.slice(0, key.indexOf(':')) : key;
-    if (kind !== 'journal') return {};
-    return {journal: await journalSnapshot(req)};
+    if (kind === 'journal') return {journal: await journalSnapshot(req)};
+    if (kind === 'tunnel') {
+      // The preview reads a file, so it is built here, in the route, and handed
+      // to the panel builder, which stays pure. A key without `provider/file`
+      // (or an unreadable file) leaves the panel with no preview at all.
+      const reference = key.slice(key.indexOf(':') + 1);
+      const slash = reference.indexOf('/');
+      if (slash <= 0) return {};
+      try {
+        return {tunnel: model.tunnelPreview(reference.slice(0, slash), reference.slice(slash + 1))};
+      } catch {
+        return {};
+      }
+    }
+    return {};
   }
 
   /**
@@ -782,44 +801,140 @@ export function createApp(options = {}) {
         const file = String(req.body.file ?? '').trim();
         const preview = model.tunnelPreview(provider, file, {
           name: String(req.body.name ?? ''),
+          label: String(req.body.label ?? ''),
           policyRouting: forms.checkbox(req.body.policyRouting),
         });
         return {
           key: `tunnel:${provider}/${file}`,
           tunnel: preview,
-          notice: 'Предпросмотр пересчитан. Кнопка «Применить» запишет этот текст; туннель она не поднимает.',
+          notice: 'Предпросмотр пересчитан: файл не тронут.',
         };
       },
     ),
   );
 
   /**
-   * Writes the normalised tunnel config into the amnezia directory (§3).
+   * The «нужен» mark of the Providers panel (§3.1).
    *
-   * This is deliberately NOT the same action as bringing the tunnel up: writing
-   * a file is reversible, starting a unit that carries the owner's link to the
-   * router is not. The same bytes already on disk are a no-op — «изменений нет»
-   * — so a repeated click does not grow the snapshot series.
+   * Ticking does two things at once: normalises the config and writes
+   * `<interface>.conf` into the amnezia directory, then records the two names in
+   * the document. Unticking stops the unit FIRST and only then removes the file,
+   * so a running tunnel is never left without its config. Nothing is ever copied
+   * as is: only the output of the normaliser reaches the amnezia directory.
    */
   app.post(
-    '/tunnel/apply',
+    '/tunnels',
+    mutation(
+      (req) => panelKey('provider', String(req.body.provider ?? '').trim()),
+      async (req) => {
+        const provider = String(req.body.provider ?? '').trim();
+        const file = String(req.body.file ?? '').trim();
+        const key = panelKey('provider', provider);
+
+        if (!forms.checkbox(req.body.needed)) {
+          const entry = model.getTunnel(provider, file);
+          if (entry === null) throw new ConfigError(`туннель '${provider}/${file}' не отмечен`);
+          const iface = String(entry.interface);
+          const runtime = state.tunnels[iface] ?? {active: false};
+          if (runtime.active === true) {
+            const rights = tunnelRights()[iface];
+            if (rights?.canToggle !== true) {
+              throw new ConfigError(
+                `туннель '${iface}' сейчас поднят: остановите его или добавьте правила sudoers:\n` +
+                  (rights?.missingLines ?? []).join('\n'),
+              );
+            }
+            const stopped = await disableTunnel(iface, {env: systemEnv});
+            if (!stopped.ok) {
+              throw new ConfigError(
+                `не удалось остановить туннель '${iface}': ` +
+                  `${stopped.stderr.trim() || stopped.error || 'без вывода'}`,
+              );
+            }
+          }
+          const {entry: removed} = model.unprepareTunnel(provider, file);
+          await refreshTunnelStates();
+          return {
+            key,
+            notice:
+              `Туннель '${removed.name}' снят: отмеченный конфиг убран из каталога amnezia. ` +
+              'Не забудьте сохранить.',
+          };
+        }
+
+        const previous = model.getTunnel(provider, file);
+        const {entry, applied} = model.prepareTunnel(provider, file, {
+          name: req.body.interface,
+          label: req.body.name,
+        });
+
+        // A renamed file name leaves the old artifact behind: its unit is stopped
+        // (when the rights allow) and the file removed, so nothing orphaned stays
+        // in the amnezia directory. Without the rights the old file is left in
+        // place — visible as «вне источников» rather than silently deleted.
+        if (previous !== null && String(previous.interface) !== String(entry.interface)) {
+          const oldIface = String(previous.interface);
+          const runtime = state.tunnels[oldIface] ?? {active: false};
+          if (runtime.active !== true) {
+            removeTunnelConfig(system.amneziaDir, oldIface);
+          } else if (tunnelRights()[oldIface]?.canToggle === true) {
+            await disableTunnel(oldIface, {env: systemEnv});
+            removeTunnelConfig(system.amneziaDir, oldIface);
+          }
+        }
+        await refreshTunnelStates();
+        const snapshot =
+          applied.changed && applied.snapshot !== null
+            ? ` (снимок прежней версии: ${path.basename(applied.snapshot)})`
+            : applied.changed
+              ? ''
+              : ' (изменений не было)';
+        return {
+          key,
+          notice:
+            `Туннель '${entry.name}' отмечен: ${applied.path}${snapshot}. ` +
+            'Туннель не поднят — поднимите его в разделе «Система». Не забудьте сохранить.',
+        };
+      },
+    ),
+  );
+
+  /**
+   * The policy-routing switch of the preview screen.
+   *
+   * For a marked tunnel the flag belongs to the document and the applied file has
+   * to follow it, so the file is rewritten right away; for an unmarked one the
+   * preview is only recomputed, which is what that screen is for.
+   */
+  app.post(
+    '/tunnel/policy',
     mutation(
       (req) => `tunnel:${String(req.body.provider ?? '')}/${String(req.body.file ?? '')}`,
       (req) => {
         const provider = String(req.body.provider ?? '').trim();
         const file = String(req.body.file ?? '').trim();
-        const name = String(req.body.name ?? '');
         const policyRouting = forms.checkbox(req.body.policyRouting);
-        const applied = model.applyTunnel(provider, file, {name, policyRouting});
-        // Re-read so the panel shows the fresh `applied` flag and target path.
-        const preview = model.tunnelPreview(provider, file, {name, policyRouting});
-        const notice = applied.changed
-          ? `Конфиг записан: ${applied.path}` +
-            (applied.snapshot === null
-              ? ''
-              : ` (снимок прежней версии: ${path.basename(applied.snapshot)})`) +
-            '. Туннель при этом НЕ поднят — поднимите его в разделе «Система».'
-          : `Изменений нет: ${applied.path} уже содержит ровно этот конфиг. Ничего не записано.`;
+        const entry = model.getTunnel(provider, file);
+
+        let notice;
+        if (entry === null) {
+          notice = 'Туннель не отмечен: предпросмотр пересчитан, файл не тронут.';
+        } else {
+          model.prepareTunnel(provider, file, {
+            name: entry.interface,
+            label: entry.name,
+            policyRouting,
+          });
+          notice =
+            `Политика маршрутизации ${policyRouting ? 'включена' : 'выключена'}: файл перезаписан. ` +
+            'Не забудьте сохранить.';
+        }
+
+        const preview = model.tunnelPreview(provider, file, {
+          name: String(entry?.interface ?? ''),
+          label: String(entry?.name ?? ''),
+          policyRouting,
+        });
         return {key: `tunnel:${provider}/${file}`, tunnel: preview, notice};
       },
     ),
@@ -1138,7 +1253,7 @@ export function createApp(options = {}) {
       const runtime = state.tunnels[name] ?? {applied: false};
       if (runtime.applied !== true) {
         throw new ConfigError(
-          `конфиг туннеля '${name}' не применён: сначала «Применить» в разделе «Провайдеры»`,
+          `конфиг туннеля '${name}' не применён: отметьте его галочкой «нужен» в «Провайдерах»`,
         );
       }
       const rights = tunnelRights()[name];

@@ -32,9 +32,21 @@ import {
   resolvePath,
   validateSettings,
 } from '../core/settings.mjs';
-import {normalizeTunnel} from '../core/normalize.mjs';
+import {
+  hasTableOff,
+  normalizeTunnel,
+  suggestTunnelName,
+  validateInterfaceName,
+  validateTunnelLabel,
+} from '../core/normalize.mjs';
 import {readSources, resolveSourcesRoot, sourceNames} from '../core/sources.mjs';
-import {applyTunnelConfig, tunnelConfigPath} from '../system/tunnel-file.mjs';
+import {
+  applyTunnelConfig,
+  listTunnelConfigNames,
+  removeTunnelConfig,
+  tunnelConfigApplied,
+  tunnelConfigPath,
+} from '../system/tunnel-file.mjs';
 import {asList, isTunnelProxy, requireMapping, urltestBlock, validateProxies} from '../core/validate.mjs';
 import {normalizeClashApi, normalizeProxy, normalizeWatchdog} from '../watchdog/watchdog.mjs';
 import {staleMap, treeSpec as buildTree} from './stale.mjs';
@@ -245,6 +257,26 @@ export function assertUsableName(name, what) {
         `в начало файла и порядок в webui.json перестанет быть предсказуемым`,
     );
   }
+}
+
+/**
+ * Derives a default FILE name from the human-readable tunnel name: only the
+ * characters an interface may carry, clipped to the kernel limit of 15.
+ *
+ * It is a suggestion the owner edits: `hidemyname-AustriaGrazS4` becomes
+ * `hidemyname-Aust`, which is valid but ugly on purpose — a silent truncation is
+ * visible, and the field next to it is where the owner picks something readable.
+ *
+ * @param {string} label
+ * @returns {string}
+ */
+function defaultInterfaceName(label) {
+  const cleaned = String(label ?? '')
+    .replace(/[^A-Za-z0-9_.-]+/g, '-')
+    .replace(/^[-.]+/, '')
+    .replace(/\.conf$/i, '');
+  const clipped = cleaned.slice(0, 15);
+  return clipped.length > 0 ? clipped : 'awg0';
 }
 
 /**
@@ -1079,14 +1111,16 @@ export class ProjectModel {
   /**
    * Runs the tunnel normaliser over one `*.conf` of a provider, for the preview.
    *
-   * It READS a file and changes nothing: no apply, no write to
-   * `/etc/amnezia/amneziawg/`, no `awg-quick@` (task §6.3). The interface name is
-   * an input because a WireGuard config carries none; it is validated here and
-   * falls back to the file's stem when empty.
+   * It READS a file and changes nothing: no write to `/etc/amnezia/amneziawg/`, no
+   * `awg-quick@`. Neither a WireGuard config nor an `.conf` file name carries the
+   * two names the editor works with, so both are inputs: `label` is the
+   * human-readable name (suggested as `<provider>-<file stem>`), `name` is the
+   * file name of the applied config (suggested from the label, clipped to the
+   * kernel limit). A marked tunnel supplies both from the document.
    *
    * @param {string} providerName
    * @param {string} fileName
-   * @param {{name?: string, policyRouting?: boolean}} [options]
+   * @param {{name?: string, label?: string, policyRouting?: boolean}} [options]
    * @returns {Record<string, unknown>}
    */
   tunnelPreview(providerName, fileName, options = {}) {
@@ -1107,11 +1141,28 @@ export class ProjectModel {
       throw new ConfigError(`файл туннеля ${filePath} не найден`);
     }
 
+    const stored = this.getTunnel(provider, file);
+    const requestedLabel = typeof options.label === 'string' ? options.label.trim() : '';
+    const label =
+      requestedLabel.length > 0
+        ? requestedLabel
+        : stored === null
+          ? suggestTunnelName(provider, file)
+          : stored.name;
     const requested = typeof options.name === 'string' ? options.name.trim() : '';
-    const fallback = path.basename(file, '.conf').slice(0, 15);
+    const iface =
+      requested.length > 0
+        ? requested
+        : stored === null
+          ? defaultInterfaceName(label)
+          : stored.interface;
+    const policyRouting =
+      options.policyRouting === undefined
+        ? stored?.policy_routing === true
+        : options.policyRouting === true;
     const result = normalizeTunnel(fs.readFileSync(filePath, 'utf8'), {
-      name: requested.length > 0 ? requested : fallback,
-      policyRouting: options.policyRouting === true,
+      name: iface,
+      policyRouting,
     });
 
     const target = this.amneziaDir ? tunnelConfigPath(this.amneziaDir, result.name) : null;
@@ -1119,9 +1170,15 @@ export class ProjectModel {
       provider,
       file,
       path: filePath,
-      // Where «Применить» would write, and whether that file is already there.
+      // The human-readable name and the file name travel together: the preview
+      // shows both, and the Providers form edits both.
+      label,
+      // Where the file is written and whether it is already there.
       target,
       applied: target !== null && fs.existsSync(target),
+      policyRouting,
+      // Whether the tunnel is marked «нужен» in the document.
+      marked: stored !== null,
       ...result,
     };
   }
@@ -1155,6 +1212,200 @@ export class ProjectModel {
       throw new ConfigError(`не удалось записать конфиг туннеля: ${error.message}`);
     }
     return {...result, name: preview.name, preview};
+  }
+
+  // ------------------------------------------------------------------
+  // Prepared tunnels (the «нужен» mark of the Providers panel)
+  // ------------------------------------------------------------------
+  //
+  // A tunnel exists independently of a proxy: the owner marks a `.conf` as needed,
+  // which normalises it, writes `<interface>.conf` into the amnezia directory and
+  // records the entry below. The entry is what the proxy form chooses from and
+  // what groups the System list; the FILE is the truth about what exists.
+
+  /**
+   * Prepared tunnels of the document, in document order.
+   *
+   * @returns {Array<Record<string, unknown>>}
+   */
+  tunnels() {
+    const value = this.document.tunnels;
+    return Array.isArray(value) ? value.filter((entry) => isMapping(entry)) : [];
+  }
+
+  /**
+   * One prepared tunnel by its source, or `null`.
+   *
+   * @param {string} providerName
+   * @param {string} fileName
+   * @returns {Record<string, unknown>|null}
+   */
+  getTunnel(providerName, fileName) {
+    const provider = String(providerName ?? '').trim();
+    const file = path.basename(String(fileName ?? '').trim());
+    return (
+      this.tunnels().find((entry) => entry.provider === provider && entry.file === file) ?? null
+    );
+  }
+
+  /**
+   * One prepared tunnel by its file name — the identity of the unit, or `null`.
+   *
+   * @param {string} name
+   * @returns {Record<string, unknown>|null}
+   */
+  getTunnelByInterface(name) {
+    const iface = String(name ?? '').trim();
+    return this.tunnels().find((entry) => entry.interface === iface) ?? null;
+  }
+
+  /**
+   * Rows of the `.conf` list of one provider for the Providers panel: is the
+   * tunnel marked, and which two names the form shows.
+   *
+   * @param {string} providerName
+   * @returns {Array<{file: string, marked: boolean, applied: boolean, name: string,
+   *   interface: string}>}
+   */
+  providerTunnelRows(providerName) {
+    const provider = String(providerName ?? '').trim();
+    const folder = this.sourcesInfo().providers.find((item) => item.name === provider);
+    if (folder === undefined) return [];
+
+    return (folder.entries ?? []).map((file) => {
+      const stored = this.getTunnel(provider, file);
+      if (stored !== null) {
+        return {
+          file,
+          marked: true,
+          applied: tunnelConfigApplied(this.amneziaDir, stored.interface),
+          name: stored.name,
+          interface: stored.interface,
+        };
+      }
+      const name = suggestTunnelName(provider, file);
+      return {file, marked: false, applied: false, name, interface: defaultInterfaceName(name)};
+    });
+  }
+
+  /**
+   * Ticks a tunnel «нужен»: validates both names, normalises the source config,
+   * writes `<interface>.conf` into the amnezia directory and records the entry.
+   *
+   * The tunnel is NOT started here — that is the lifecycle action of the System
+   * panel. Everything is checked BEFORE anything is written: a long file name, a
+   * name already taken, a foreign file in the target path or a normalised text
+   * without `Table = off` are all refusals, never a partial write.
+   *
+   * @param {string} providerName
+   * @param {string} fileName
+   * @param {{name?: unknown, label?: unknown, policyRouting?: boolean}} [options]
+   * @returns {{entry: Record<string, unknown>, applied: Record<string, unknown>}}
+   */
+  prepareTunnel(providerName, fileName, options = {}) {
+    if (this.amneziaDir.length === 0) {
+      throw new ConfigError(
+        'не задан каталог amnezia: укажите GATEHOUSE_AMNEZIA_DIR, иначе писать конфиг туннеля некуда',
+      );
+    }
+    const provider = String(providerName ?? '').trim();
+    const file = path.basename(String(fileName ?? '').trim());
+    const stored = this.getTunnel(provider, file);
+
+    const labelInput = String(options.label ?? '').trim();
+    const label = validateTunnelLabel(
+      labelInput.length > 0
+        ? labelInput
+        : stored === null
+          ? suggestTunnelName(provider, file)
+          : stored.name,
+    );
+    const nameInput = String(options.name ?? '').trim();
+    const iface = validateInterfaceName(
+      nameInput.length > 0
+        ? nameInput
+        : stored === null
+          ? defaultInterfaceName(label)
+          : stored.interface,
+    );
+
+    // The file name is the identity of the unit: two tunnels cannot share it.
+    for (const entry of this.tunnels()) {
+      if (entry.provider === provider && entry.file === file) continue;
+      if (entry.interface === iface) {
+        throw new ConfigError(
+          `имя файла '${iface}' уже занято туннелем '${entry.name}' (${entry.provider}/${entry.file})`,
+        );
+      }
+    }
+
+    // A file with this name that belongs to nobody is refused rather than
+    // overwritten: the owner may have put it there by hand on purpose.
+    const target = tunnelConfigPath(this.amneziaDir, iface);
+    if (fs.existsSync(target) && (stored === null || stored.interface !== iface)) {
+      throw new ConfigError(
+        `файл ${target} уже есть в каталоге amnezia и не принадлежит этому туннелю: ` +
+          'выберите другое имя файла',
+      );
+    }
+
+    const policyRouting =
+      options.policyRouting === undefined
+        ? stored?.policy_routing === true
+        : options.policyRouting === true;
+
+    const preview = this.tunnelPreview(provider, file, {name: iface, label, policyRouting});
+    if (!hasTableOff(preview.text)) {
+      throw new ConfigError(
+        `нормализованный конфиг туннеля '${label}' не содержит 'Table = off': записывать его нельзя`,
+      );
+    }
+
+    const applied = this.applyTunnel(provider, file, {name: iface, label, policyRouting});
+
+    const entry = {provider, file, name: label, interface: iface};
+    if (policyRouting) entry.policy_routing = true;
+    this.#storeTunnel(entry);
+    return {entry, applied};
+  }
+
+  /**
+   * Un-ticks a tunnel: drops the entry and removes `<interface>.conf`.
+   *
+   * The unit must already be down — stopping it needs sudo and therefore lives in
+   * the web layer, which calls this only after a successful `disable --now`. A
+   * tunnel still used by a proxy is refused: deleting the file would leave that
+   * proxy on an interface nobody provides. Snapshots are left alone.
+   *
+   * @param {string} providerName
+   * @param {string} fileName
+   * @returns {{entry: Record<string, unknown>, removed: boolean}}
+   */
+  unprepareTunnel(providerName, fileName) {
+    const provider = String(providerName ?? '').trim();
+    const file = path.basename(String(fileName ?? '').trim());
+    const entry = this.getTunnel(provider, file);
+    if (entry === null) throw new ConfigError(`туннель '${provider}/${file}' не отмечен`);
+
+    const users = this.tunnelProxies()
+      .filter((tunnel) => tunnel.provider === provider && tunnel.file === file)
+      .map((tunnel) => tunnel.tag);
+    if (users.length > 0) {
+      throw new ConfigError(
+        `туннель '${entry.name}' используют прокси (${users.join(', ')}): сначала удалите их`,
+      );
+    }
+
+    const removed =
+      this.amneziaDir.length > 0
+        ? removeTunnelConfig(this.amneziaDir, String(entry.interface))
+        : false;
+    this.document.tunnels = this.tunnels().filter(
+      (item) => !(item.provider === provider && item.file === file),
+    );
+    if (this.document.tunnels.length === 0) delete this.document.tunnels;
+    this.markDirty();
+    return {entry, removed};
   }
 
   /**
@@ -1193,42 +1444,94 @@ export class ProjectModel {
   }
 
   /**
-   * The tunnels of the document grouped by provider, the order the System panel
-   * renders them in.
+   * Every tunnel the System panel shows: the prepared entries of the document
+   * plus `.conf` files found in the amnezia directory that no entry claims.
+   *
+   * The FILES are the truth about what exists (§3.2): a config dropped in by hand
+   * is listed too, under an empty provider, so it can be seen, stopped and
+   * restarted. Snapshots do not end with `.conf` and file names that are not valid
+   * interfaces (`de.conf.conf`) are skipped — those are the leftovers of §2.4.
+   *
+   * @returns {Array<{provider: string, file: string|null, name: string,
+   *   interface: string, applied: boolean}>}
+   */
+  tunnelInventory() {
+    /** @type {Map<string, Record<string, unknown>>} */
+    const rows = new Map();
+    for (const entry of this.tunnels()) {
+      rows.set(String(entry.interface), {
+        provider: String(entry.provider),
+        file: String(entry.file),
+        name: String(entry.name),
+        interface: String(entry.interface),
+        applied: tunnelConfigApplied(this.amneziaDir, String(entry.interface)),
+      });
+    }
+
+    // A proxy of an older document may name an interface nothing else knows about
+    // yet: it is listed too, so the mark can be set and the unit managed.
+    for (const proxy of this.tunnelProxies()) {
+      const iface = String(proxy.interface);
+      if (rows.has(iface)) continue;
+      rows.set(iface, {
+        provider: String(proxy.provider),
+        file: String(proxy.file),
+        name: suggestTunnelName(proxy.provider, proxy.file),
+        interface: iface,
+        applied: tunnelConfigApplied(this.amneziaDir, iface),
+      });
+    }
+
+    if (this.amneziaDir.length > 0) {
+      for (const fileName of listTunnelConfigNames(this.amneziaDir)) {
+        const iface = fileName.slice(0, -'.conf'.length);
+        if (rows.has(iface)) continue;
+        try {
+          validateInterfaceName(iface);
+        } catch {
+          continue; // `de.conf.conf` and the like are leftovers, not tunnels
+        }
+        rows.set(iface, {provider: '', file: null, name: '', interface: iface, applied: true});
+      }
+    }
+    return [...rows.values()];
+  }
+
+  /**
+   * The inventory grouped by provider; a file no entry claims lands in
+   * «вне источников».
    *
    * @returns {Array<{provider: string, tunnels: Array<Record<string, unknown>>}>}
    */
   tunnelGroups() {
+    const standalone = 'вне источников';
     const groups = new Map();
-    for (const tunnel of this.tunnelProxies()) {
-      const list = groups.get(tunnel.provider) ?? [];
-      list.push(tunnel);
-      groups.set(tunnel.provider, list);
+    for (const row of this.tunnelInventory()) {
+      const key = row.provider.length > 0 ? row.provider : standalone;
+      const list = groups.get(key) ?? [];
+      list.push(row);
+      groups.set(key, list);
     }
-    return [...groups.entries()].map(([provider, tunnels]) => ({provider, tunnels}));
+    return [...groups.entries()]
+      .sort(([a], [b]) => (a === standalone ? 1 : b === standalone ? -1 : a.localeCompare(b)))
+      .map(([provider, tunnels]) => ({provider, tunnels}));
   }
 
   /**
-   * Tunnel configs offered to the proxy form, one per `*.conf` of every provider
-   * folder that was read. `name` is the suggested interface name (the file stem,
-   * clipped to the kernel limit).
+   * Prepared tunnels offered to the proxy form: only the ones the owner marked
+   * «нужен» (§3.2), so the form can never bind a proxy to a file nothing provides.
    *
-   * @returns {Array<{provider: string, file: string, name: string}>}
+   * @returns {Array<{provider: string, file: string, name: string, interface: string}>}
    */
   availableTunnels() {
-    const info = this.sourcesInfo();
-    const list = [];
-    for (const provider of info.providers) {
-      if (provider.error) continue;
-      for (const entry of provider.entries ?? []) {
-        list.push({
-          provider: provider.name,
-          file: entry,
-          name: entry.replace(/\.conf$/, '').slice(0, 15),
-        });
-      }
-    }
-    return list;
+    return this.tunnels()
+      .filter((entry) => tunnelConfigApplied(this.amneziaDir, String(entry.interface)))
+      .map((entry) => ({
+        provider: String(entry.provider),
+        file: String(entry.file),
+        name: String(entry.name),
+        interface: String(entry.interface),
+      }));
   }
 
   /** Reference: `load_server_tags`, reduced to what most callers need. */
@@ -1332,6 +1635,38 @@ export class ProjectModel {
     return this.document.routes;
   }
 
+  /** @returns {unknown[]} */
+  #ensureTunnels() {
+    if (!Array.isArray(this.document.tunnels)) this.document.tunnels = [];
+    return this.document.tunnels;
+  }
+
+  /**
+   * Stores one prepared tunnel, replacing the entry with the same source, and
+   * keeps every proxy that uses it pointed at the current file name.
+   *
+   * @param {Record<string, unknown>} entry
+   */
+  #storeTunnel(entry) {
+    const list = this.#ensureTunnels();
+    const index = list.findIndex(
+      (item) => isMapping(item) && item.provider === entry.provider && item.file === entry.file,
+    );
+    const previous = index < 0 ? null : list[index];
+    if (index < 0) list.push(entry);
+    else list[index] = entry;
+
+    if (previous !== null && previous.interface !== entry.interface) {
+      for (const proxy of this.#ensureProxies()) {
+        if (!isMapping(proxy) || !isMapping(proxy.tunnel)) continue;
+        if (proxy.tunnel.provider === entry.provider && proxy.tunnel.file === entry.file) {
+          proxy.tunnel = {...proxy.tunnel, interface: entry.interface};
+        }
+      }
+    }
+    this.markDirty();
+  }
+
   /**
    * Normalises a proxy into the shape the core expects: `servers`, `note`,
    * `pinned`, `watch` and `watch_url` are only written when they carry something,
@@ -1356,12 +1691,20 @@ export class ProjectModel {
     if (isMapping(candidate.tunnel)) {
       const provider = String(candidate.tunnel.provider ?? '').trim();
       const file = String(candidate.tunnel.file ?? '').trim();
-      const iface = String(candidate.tunnel.interface ?? '').trim();
-      if (provider.length === 0 || file.length === 0 || iface.length === 0) {
-        throw new ConfigError('туннель прокси задан неполно: нужны provider, file и interface');
+      const prepared = this.getTunnel(provider, file);
+      if (prepared === null) {
+        throw new ConfigError(
+          `туннель '${provider}/${file}' не подготовлен: отметьте его в «Провайдерах»`,
+        );
+      }
+      const requested = String(candidate.tunnel.interface ?? '').trim();
+      if (requested.length > 0 && requested !== prepared.interface) {
+        throw new ConfigError(
+          `туннель '${provider}/${file}' записан как '${prepared.interface}', а не '${requested}'`,
+        );
       }
       if (servers.length > 0) throw new ConfigError(TUNNEL_WITH_SERVERS_REFUSAL);
-      entry.tunnel = {provider, file, interface: iface};
+      entry.tunnel = {provider, file, interface: String(prepared.interface)};
     } else if (servers.length > 0) {
       entry.servers = servers;
     }

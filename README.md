@@ -28,12 +28,15 @@ maintains that settings file. It is built in three stages:
   second-rung switch on — restarts the daemon. Implemented:
   [`src/watchdog/watchdog.mjs`](src/watchdog/watchdog.mjs:1) and
   [`src/watchdog/clash.mjs`](src/watchdog/clash.mjs:1).
-* **tunnel lifecycle — file, unit, exit**: a tunnel stops being a picture. The
-  normalisation preview gains «Применить», which writes the normalised
-  `<name>.conf` into the amnezia directory; the «Система» panel grows a row per
-  tunnel (state read from systemd, one checkbox for both axes, restart, journal);
-  and a tunnel becomes a first-class proxy — one tunnel, one proxy, one exit — by
-  binding a `direct` outbound to the interface. Implemented:
+* **tunnel lifecycle — mark, file, unit, exit**: a tunnel stops being a picture.
+  Ticking «нужен» next to a `.conf` in «Провайдеры» normalises the config and
+  writes `<file name>.conf` into the amnezia directory, recording the two names in
+  `webui.json`; un-ticking stops the unit and removes the file. The «Система»
+  panel grows a row per tunnel (state read from systemd, one checkbox for both
+  axes, restart, journal); and a tunnel becomes a first-class proxy — one tunnel,
+  one proxy, one exit — by binding a `direct` outbound to the interface. A
+  start-up fuse refuses to start a unit whose config lacks `Table = off`, with no
+  way around it. Implemented:
   [`src/system/tunnel-file.mjs`](src/system/tunnel-file.mjs:1) and the tunnel
   functions of [`src/system/index.mjs`](src/system/index.mjs:1).
 
@@ -217,7 +220,7 @@ from a request:
 | `GATEHOUSE_CURL` | `/usr/bin/curl` | binary the watchdog probes an inbound with |
 | `GATEHOUSE_SUDO` | `/usr/bin/sudo` | `sudo`; the value `none` calls `systemctl` directly (the polkit variant) |
 | `GATEHOUSE_UNIT` | `sing-box` | unit name |
-| `GATEHOUSE_AMNEZIA_DIR` | `/etc/amnezia/amneziawg` | directory `awg-quick@<name>` reads `<name>.conf` from; «Применить» writes it here |
+| `GATEHOUSE_AMNEZIA_DIR` | `/etc/amnezia/amneziawg` | directory `awg-quick@<name>` reads `<name>.conf` from; the «нужен» mark writes it here |
 | `GATEHOUSE_SUDOERS` | `/etc/sudoers.d/gatehouse` | sudoers file the editor **reads** to learn which tunnels it may control. The editor never writes it |
 | `GATEHOUSE_CONFIG` | `/etc/sing-box/config.json` | default config of the commands; the UI passes the generated path |
 | `GATEHOUSE_TEST_URL` | `https://ipinfo.io` | target of the outbound test |
@@ -231,8 +234,9 @@ browser at a process that writes files is a path traversal waiting to happen.
 
 One tree node per screen: Общие, Провайдеры (source folders and their tunnels),
 Вывод, Прокси → tag, Маршруты → name, DNS, and under Система: Журнал,
-Тест серверов, Сторож. A tunnel config has its own normalisation preview screen
-with the «Применить» button and, further down, the tunnel rows grouped by provider.
+Тест серверов, Сторож. Inside a provider folder every `.conf` carries the «нужен»
+mark and its two names; clicking it opens a read-only normalisation preview with the
+policy-routing switch, and «Система» lists the tunnel rows grouped by provider.
 
 * **`webui.json` is flat; the profile level is gone.** The body used to be split
   between the active profile and `defaults`, but there was exactly one profile and
@@ -256,16 +260,18 @@ with the «Применить» button and, further down, the tunnel rows groupe
   folder shows the servers it hands out, a tunnels folder shows its `.conf` files,
   each opening the normalisation preview. No action touches the files on disk:
   "remove" means "do not read it", never "delete the owner's folder".
-* **A tunnel is applied from the preview, and only then does it become a proxy.**
+* **A tunnel is marked «нужен», and only then does it become a proxy.**
   The normaliser `src/core/normalize.mjs` is a pure function: it adds `Table = off`,
-  drops `DNS =`, keeps the interface name within 15 characters, and copies
-  `AllowedIPs` plus the obfuscation (`Jc/Jmin/Jmax`, `S1–S4`, `H1–H4`, `i1`) byte
-  for byte. The screen is a diff preview with exactly one checkbox (policy
-  routing) and a button «Применить», which writes `<amneziaDir>/<name>.conf` with
-  mode `0600` — overwriting only when the bytes really differ, and snapshotting the
-  previous version next to it (`<name>.conf.<ISO>`). It does **not** bring the
-  tunnel up: writing a file is reversible, starting a unit that carries the owner's
-  link to the router is not. See «Tunnels» below.
+  drops `DNS =`, and copies `AllowedIPs` plus the obfuscation (`Jc/Jmin/Jmax`,
+  `S1–S4`, `H1–H4`, `i1`) byte for byte. A tunnel has TWO names: a human-readable
+  one (suggested as `<provider>-<file stem>`, edited freely, up to 255 characters)
+  and the file name (typed by hand, at most 15 characters, because it is also the
+  kernel interface of `awg-quick@<file name>`). The mark writes
+  `<amneziaDir>/<file name>.conf` with mode `0600` — overwriting only when the bytes
+  really differ, and snapshotting the previous version next to it
+  (`<file name>.conf.<ISO>`). It does **not** bring the tunnel up: writing a file is
+  reversible, starting a unit that carries the owner's link to the router is not.
+  See «Tunnels» below.
 * **DNS is a JSON text field.** sing-box has 16 kinds of DNS servers, the schema is
   fresh and still moving, and DNS is edited rarely; only "a valid JSON object" is
   checked. Structural forms were deliberately not built.
@@ -373,19 +379,26 @@ environment, and the tests point them at the fake scripts of
 
 ## Tunnels
 
-An AmneziaWG / hidemy.name tunnel is a `awg-quick@<name>` unit reading
-`<amneziaDir>/<name>.conf`. Setting one up is three separate, deliberate steps:
-**apply → bring up → make a proxy**. They are split because each is reversible on
-its own terms, and a single button doing all three would drop the owner's link to
-the router without asking.
+An AmneziaWG / hidemy.name tunnel is a `awg-quick@<file name>` unit reading
+`<amneziaDir>/<file name>.conf`. Setting one up is three separate, deliberate
+steps: **mark «нужен» → bring up → make a proxy**. They are split because each is
+reversible on its own terms, and a single button doing all three would drop the
+owner's link to the router without asking.
 
-* **Apply (part 1).** The normalisation preview writes the config with mode `0600`
-  (it carries a private key) into `GATEHOUSE_AMNEZIA_DIR`. Identical bytes are a
-  no-op — «изменений нет», no file touched and no snapshot; differing bytes
-  snapshot the previous version next to it as `<name>.conf.<ISO>`. The unit is not
-  started.
+* **Mark «нужен» (part 1).** In a provider folder every `.conf` gets a checkbox and
+  two names: the human-readable one (`<provider>-<file stem>` by default, edited
+  freely, up to 255 characters) and the file name (typed by hand, at most 15
+  characters — it is also the kernel interface). Ticking validates both, normalises
+  the config and writes it with mode `0600` (it carries a private key) into
+  `GATEHOUSE_AMNEZIA_DIR`, recording the entry in `webui.json` under `tunnels`.
+  Identical bytes are a no-op — no file touched and no snapshot; differing bytes
+  snapshot the previous version next to it as `<file name>.conf.<ISO>`. Un-ticking
+  stops the unit first (with the sudoers rights) and only then removes the file. The
+  mark never starts the unit.
 * **Bring up (part 2).** The «Система» panel shows one row per tunnel, grouped by
-  provider. State is read from systemd (`is-active`, `is-enabled`) without `sudo`,
+  provider. The rows come from the `.conf` files of the amnezia directory plus the
+  marked entries, so a tunnel is visible and manageable before any proxy exists.
+  State is read from systemd (`is-active`, `is-enabled`) without `sudo`,
   never assumed: a tunnel someone started by hand is visible. One checkbox drives
   both axes (`enable --now` / `disable --now`), and a divergence — up but not
   enabled, or the reverse — is named in words, because that is what explains
@@ -400,6 +413,13 @@ the router without asking.
   of no automatic failover. A proxy whose tunnel is not up gets a warning at
   generation and a tree mark that names the consequence: «порт не работает:
   туннель не поднят».
+* **The start-up fuse.** Before `restart` or `enable --now` the editor reads the
+  file ON DISK again and refuses without `Table = off` — such a config makes
+  `wg-quick` install a default route and takes the whole router, the owner's own
+  link included, into the tunnel. No flag, setting or request turns the check off,
+  and a refusal returns without ever calling `systemctl`. Stopping is never blocked.
+  Leftovers such as `awg-quick@de.conf` and snapshots (`<name>.conf.<ISO>`) are not
+  taken for tunnels.
 * **Rights are shown, not granted.** The editor cannot and does not install
   sudoers rules (that is the privilege escalation the current narrow rule exists
   to prevent). It READS `GATEHOUSE_SUDOERS` and, for every tunnel lacking a rule,
@@ -542,6 +562,11 @@ Rules of the format:
 * **`sources` is a list of provider folder names** under the sources root. A folder
   may hold `links.txt`, `*.conf`, or both; a tunnel config becomes an exit only
   through a proxy carrying a `tunnel` descriptor (see below).
+* **`tunnels` lists the marked tunnels.** Each entry carries `provider`, `file`,
+  `name` (human-readable, up to 255 characters), `interface` (the `<file name>.conf`
+  of the amnezia directory and the kernel interface, at most 15 characters) and an
+  optional `policy_routing`. It is written when the owner ticks «нужен»; additive to
+  version 2, so a document without the key stays valid.
 * **`note` is a comment for humans** — in a profile and in a proxy. The core
   ignores it and it never reaches `config.json`.
 * **`pinned`, `watch` and `watch_url` on a proxy, and the `watchdog` section, are

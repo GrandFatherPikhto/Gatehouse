@@ -27,6 +27,43 @@
         "minLength": 1
       }
     },
+    "tunnels": {
+      "description": "Tunnels prepared for use: the human-readable name and the file name of the applied `<interface>.conf` in GATEHOUSE_AMNEZIA_DIR. Written when the owner ticks «нужен» in the Providers panel; a tunnel may exist without a proxy. Additive to version 2: a document without the key stays valid.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["provider", "file", "name", "interface"],
+        "properties": {
+          "provider": {
+            "description": "Provider folder the source `.conf` came from. Also the group heading of the System panel.",
+            "type": "string",
+            "minLength": 1
+          },
+          "file": {
+            "description": "Source file name inside the provider folder, with the `.conf` suffix.",
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "description": "Human-readable name of the tunnel: how it is chosen and edited. Never reaches the kernel, hence the 255 limit of the file system rather than 15.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "interface": {
+            "description": "File name of the applied config `<interface>.conf`, the systemd instance `awg-quick@<interface>` and the `bind_interface` of the generated outbound. Kernel limit is 15 characters.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 15
+          },
+          "policy_routing": {
+            "description": "The tunnel is also handed out through 3proxy by the source address, so the normalised config carries PostUp/PreDown with `ip rule`.",
+            "type": "boolean"
+          }
+        }
+      }
+    },
     "output_file": {
       "type": "string",
       "minLength": 1

@@ -21,6 +21,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import {hasTableOff} from '../core/normalize.mjs';
+
 /** Snapshot prefix separator: `<name>.conf` + `.` + label. */
 const SNAPSHOT_SEPARATOR = '.';
 
@@ -51,6 +53,107 @@ export function tunnelConfigPath(amneziaDir, name) {
  */
 export function tunnelConfigApplied(amneziaDir, name) {
   return fs.existsSync(tunnelConfigPath(amneziaDir, name));
+}
+
+/**
+ * Names of the applied tunnel configs in the amnezia directory, sorted.
+ *
+ * Snapshots (`<name>.conf.<label>`) do not end with `.conf` and therefore never
+ * appear here. A file whose stem ends with `.conf` (a `de.conf.conf` left from a
+ * manual `systemctl restart awg-quick@de.conf`) is returned by this function and
+ * dropped by the caller, which validates the stem as an interface name — that is
+ * what keeps such leftovers out of the tunnel lists (§2.4 of the task).
+ *
+ * @param {string} amneziaDir
+ * @returns {string[]} File names, not full paths.
+ */
+export function listTunnelConfigNames(amneziaDir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(amneziaDir);
+  } catch {
+    return [];
+  }
+  return entries.filter((entry) => entry.endsWith('.conf')).sort();
+}
+
+/**
+ * Reads the applied config of one tunnel.
+ *
+ * @param {string} amneziaDir
+ * @param {string} name
+ * @returns {{path: string, exists: boolean, text: string|null}}
+ */
+export function readTunnelConfig(amneziaDir, name) {
+  const filePath = tunnelConfigPath(amneziaDir, name);
+  try {
+    return {path: filePath, exists: true, text: fs.readFileSync(filePath, 'utf8')};
+  } catch {
+    return {path: filePath, exists: false, text: null};
+  }
+}
+
+/**
+ * The refusal of the start-up fuse, worded by its consequence.
+ *
+ * It is a refusal and not a warning on purpose: the price of the mistake is the
+ * owner's link to the router, so there must be no "start anyway". No flag, no
+ * setting and no request may bypass it — see `tunnelAction` of the system layer.
+ *
+ * @param {string} filePath
+ * @returns {string}
+ */
+export function unsafeTunnelMessage(filePath) {
+  return (
+    'Запуск отменён: этот конфиг уведёт в туннель весь трафик роутера, включая ваше ' +
+    `подключение к нему. В файле ${filePath} нет 'Table = off'. Откройте туннель в ` +
+    '«Провайдерах» и примените нормализованный конфиг.'
+  );
+}
+
+/**
+ * The start-up fuse: reads the file AS IT IS NOW and answers whether the tunnel
+ * may be started from it.
+ *
+ * The check is done at start time, not only at write time: between writing and
+ * starting the file may have been replaced, dropped in by hand or left over from
+ * earlier times. A missing file is a refusal too — there is nothing to start.
+ *
+ * @param {string} amneziaDir
+ * @param {string} name
+ * @returns {{safe: boolean, path: string, exists: boolean, reason: string|null}}
+ */
+export function tunnelStartupGuard(amneziaDir, name) {
+  const file = readTunnelConfig(amneziaDir, name);
+  if (!file.exists) {
+    return {
+      safe: false,
+      path: file.path,
+      exists: false,
+      reason: `Запуск отменён: файл ${file.path} не найден — запускать нечего.`,
+    };
+  }
+  if (!hasTableOff(file.text ?? '')) {
+    return {safe: false, path: file.path, exists: true, reason: unsafeTunnelMessage(file.path)};
+  }
+  return {safe: true, path: file.path, exists: true, reason: null};
+}
+
+/**
+ * Removes the applied config of one tunnel, leaving its snapshots in place.
+ *
+ * Snapshots are history: deleting them would erase the only copy of what the
+ * unit used to run. Returns `false` when there was nothing to remove.
+ *
+ * @param {string} amneziaDir
+ * @param {string} name
+ * @returns {boolean}
+ */
+export function removeTunnelConfig(amneziaDir, name) {
+  const target = tunnelConfigPath(amneziaDir, name);
+  if (!fs.existsSync(target)) return false;
+  fs.rmSync(target);
+  return true;
 }
 
 /**
