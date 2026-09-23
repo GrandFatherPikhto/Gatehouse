@@ -74,7 +74,7 @@ export function isDevSandbox(env = process.env) {
 }
 
 /** Panel shown when nothing else is asked for. */
-export const DEFAULT_PANEL = 'general';
+export const DEFAULT_PANEL = 'singbox';
 
 /** How many journal lines one snapshot of the journal shows. */
 export const JOURNAL_SNAPSHOT_LINES = 200;
@@ -100,6 +100,7 @@ const ROUTE_FIELDS = Object.freeze({
   '/route': ['name', 'outbound'],
   '/dns': ['dns'],
   '/output': ['output_file'],
+  '/amnezia': ['amnezia_dir'],
   '/watchdog': ['interval_seconds'],
   '/general': [
     'listen_ip',
@@ -174,12 +175,12 @@ export function createApp(options = {}) {
       path: options.settingsPath ?? null,
       stateDir: options.stateDir,
       snapshotKeep: options.snapshotKeep,
-      // Where «Применить» writes the normalised tunnel config.
+      // Fallback directory for the tunnel configs; the document may override it.
       amneziaDir: system.amneziaDir,
     });
   // `startServer` injects a model built before the environment was read; give it
-  // the amnezia directory too, without overriding a value a test set on purpose.
-  if (model.amneziaDir.length === 0) model.amneziaDir = system.amneziaDir;
+  // the fallback amnezia directory too, without overriding a document value.
+  model.setDefaultAmneziaDir(system.amneziaDir);
 
   // Runtime state of the host layer. It lives on the app, not in a module global,
   // so two editors in one process (the tests start many) cannot see each other's
@@ -700,6 +701,9 @@ export function createApp(options = {}) {
         model.applyGeneral(forms.parseGeneralForm(body));
         return {applied: true, key: 'general'};
       }
+      case '/amnezia':
+        model.setAmneziaDir(body.amnezia_dir);
+        return {applied: true, key: 'amnezia'};
       default:
         throw new ConfigError(`маршрут '${route}' не является формой правки`);
     }
@@ -735,12 +739,16 @@ export function createApp(options = {}) {
 
     const before = model.toText();
     const wasDirty = model.dirty;
+    // A merged panel (several routes, one page) keeps its own key: the routes
+    // name sections, not destinations, and returning `output` would send the
+    // owner to a panel that no longer exists.
+    const merged = routes.length > 1;
     let key = kind;
 
     try {
       for (const route of routes) {
         const outcome = applyRoute(route, req);
-        if (outcome.applied && outcome.key !== null) key = outcome.key;
+        if (!merged && outcome.applied && outcome.key !== null) key = outcome.key;
       }
     } catch (error) {
       model.restoreText(before);
@@ -772,19 +780,44 @@ export function createApp(options = {}) {
   // General settings
   // ------------------------------------------------------------------
 
+  // «Настройки Sing-Box»: one page, one form, three sections applied in order.
   app.post(
-    '/general',
-    mutation('general', (req) => {
-      applyEditForm('general', req);
-      return {key: 'general', notice: 'Применено — не забудьте сохранить'};
+    '/singbox',
+    mutation('singbox', (req) => {
+      applyEditForm('singbox', req);
+      return {key: 'singbox', notice: 'Настройки применены — не забудьте сохранить'};
     }),
   );
 
+  // «Настройки Amnezia»: the output directory of the tunnel configs.
   app.post(
-    '/dns',
-    mutation('dns', (req) => {
-      const {key} = applyEditForm('dns', req);
-      return {key, notice: 'DNS применён — не забудьте сохранить'};
+    '/amnezia',
+    mutation('amnezia', (req) => {
+      applyEditForm('amnezia', req);
+      return {key: 'amnezia', notice: 'Путь применён — не забудьте сохранить'};
+    }),
+  );
+
+  /**
+   * Re-normalises and rewrites every marked tunnel.
+   *
+   * This is a rewrite, not a start: it can be repeated without touching a live
+   * connection, and the report names, per tunnel, what changed. A failure of one
+   * tunnel does not stop the others.
+   */
+  app.post(
+    '/amnezia/regenerate',
+    mutation('amnezia', () => {
+      const regeneration = model.regenerateTunnels();
+      return {
+        key: 'amnezia',
+        regeneration,
+        notice:
+          regeneration.entries.length === 0
+            ? 'Включённых туннелей нет: перегенерировать нечего'
+            : `Туннелей: ${regeneration.entries.length}, изменено: ${regeneration.changed}, ` +
+              `ошибок: ${regeneration.failed}`,
+      };
     }),
   );
 
@@ -833,7 +866,7 @@ export function createApp(options = {}) {
 
         if (!forms.checkbox(req.body.needed)) {
           const entry = model.getTunnel(provider, file);
-          if (entry === null) throw new ConfigError(`туннель '${provider}/${file}' не отмечен`);
+          if (entry === null) throw new ConfigError(`туннель '${provider}/${file}' не включён`);
           const iface = String(entry.interface);
           const runtime = state.tunnels[iface] ?? {active: false};
           if (runtime.active === true) {
@@ -844,7 +877,7 @@ export function createApp(options = {}) {
                   (rights?.missingLines ?? []).join('\n'),
               );
             }
-            const stopped = await disableTunnel(iface, {env: systemEnv});
+            const stopped = await disableTunnel(iface, {env: systemEnv, amneziaDir: model.amneziaDir});
             if (!stopped.ok) {
               throw new ConfigError(
                 `не удалось остановить туннель '${iface}': ` +
@@ -857,7 +890,7 @@ export function createApp(options = {}) {
           return {
             key,
             notice:
-              `Туннель '${removed.name}' снят: отмеченный конфиг убран из каталога amnezia. ` +
+              `Туннель '${removed.name}' выключен: конфиг убран из каталога amnezia. ` +
               'Не забудьте сохранить.',
           };
         }
@@ -876,10 +909,10 @@ export function createApp(options = {}) {
           const oldIface = String(previous.interface);
           const runtime = state.tunnels[oldIface] ?? {active: false};
           if (runtime.active !== true) {
-            removeTunnelConfig(system.amneziaDir, oldIface);
+            removeTunnelConfig(model.amneziaDir, oldIface);
           } else if (tunnelRights()[oldIface]?.canToggle === true) {
-            await disableTunnel(oldIface, {env: systemEnv});
-            removeTunnelConfig(system.amneziaDir, oldIface);
+            await disableTunnel(oldIface, {env: systemEnv, amneziaDir: model.amneziaDir});
+            removeTunnelConfig(model.amneziaDir, oldIface);
           }
         }
         await refreshTunnelStates();
@@ -892,7 +925,7 @@ export function createApp(options = {}) {
         return {
           key,
           notice:
-            `Туннель '${entry.name}' отмечен: ${applied.path}${snapshot}. ` +
+            `Туннель '${entry.name}' включён: ${applied.path}${snapshot}. ` +
             'Туннель не поднят — поднимите его в разделе «Система». Не забудьте сохранить.',
         };
       },
@@ -971,16 +1004,8 @@ export function createApp(options = {}) {
   );
 
   app.post(
-    '/output',
-    mutation('output', (req) => {
-      applyEditForm('output', req);
-      return {key: 'output', notice: 'Путь вывода применён — не забудьте сохранить'};
-    }),
-  );
-
-  app.post(
     '/generate',
-    mutation('output', async () => {
+    mutation('singbox', async () => {
       // Snapshot BEFORE the generator overwrites the file: the whole point of the
       // rollback is to bring back byte-for-byte what the daemon was running, and
       // that copy has to be taken while it still exists.
@@ -1002,7 +1027,7 @@ export function createApp(options = {}) {
       state.lastCheck = null;
 
       return {
-        key: 'output',
+        key: 'singbox',
         generation,
         snapshot: snapshot === null ? null : path.basename(snapshot.path),
         notice: generation.summary,
@@ -1253,7 +1278,7 @@ export function createApp(options = {}) {
       const runtime = state.tunnels[name] ?? {applied: false};
       if (runtime.applied !== true) {
         throw new ConfigError(
-          `конфиг туннеля '${name}' не применён: отметьте его галочкой «нужен» в «Провайдерах»`,
+          `конфиг туннеля '${name}' не применён: включите его галочкой «включить» в «Провайдерах»`,
         );
       }
       const rights = tunnelRights()[name];
@@ -1266,8 +1291,8 @@ export function createApp(options = {}) {
 
       const up = forms.checkbox(req.body.up);
       const result = up
-        ? await enableTunnel(name, {env: systemEnv})
-        : await disableTunnel(name, {env: systemEnv});
+        ? await enableTunnel(name, {env: systemEnv, amneziaDir: model.amneziaDir})
+        : await disableTunnel(name, {env: systemEnv, amneziaDir: model.amneziaDir});
       await refreshTunnelStates();
 
       return {
@@ -1294,7 +1319,7 @@ export function createApp(options = {}) {
         );
       }
 
-      const result = await restartTunnel(name, {env: systemEnv});
+      const result = await restartTunnel(name, {env: systemEnv, amneziaDir: model.amneziaDir});
       await refreshTunnelStates();
 
       return {

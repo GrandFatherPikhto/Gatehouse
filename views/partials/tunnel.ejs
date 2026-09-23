@@ -4,8 +4,8 @@
     checkbox — the only sane value is known in advance and a checkbox would mean
     "break the router". The single checkbox is about FUTURE USE (handing the
     tunnel out through 3proxy too).
-    The two NAMES and the «нужен» mark live in the Providers panel; this screen
-    only looks and switches policy routing, which rewrites the file of a marked
+    The two NAMES and the «включить» mark live in the Providers panel; this screen
+    only looks and switches policy routing, which rewrites the file of an enabled
     tunnel. It never brings the tunnel up — that is the «Система» panel. %>
 <h2><%= panel.title %></h2>
 
@@ -24,15 +24,15 @@
       <% if (panel.preview.marked) { %>
         <%= panel.preview.applied ? '(записан)' : '(ещё не записан)' %>
       <% } else { %>
-        (туннель не отмечен — файл не создаётся)
+        (туннель не включён — файл не создаётся)
       <% } %>
     <% } else { %>
       (каталог amnezia не задан: <code>GATEHOUSE_AMNEZIA_DIR</code>)
     <% } %>
   </p>
   <p class="hint">
-    Оба имени правятся в «Провайдерах»; галочка «нужен» там же нормализует конфиг и
-    создаёт файл. Эта страница только показывает.
+    Оба имени правятся в «Провайдерах»; галочка «включить» там же нормализует
+    конфиг и создаёт файл. Эта страница только показывает.
   </p>
 
   <h3>Изменено <%= panel.preview.changes.length %> строк</h3>

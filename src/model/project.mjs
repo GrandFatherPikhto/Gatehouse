@@ -68,6 +68,8 @@ export const DEFAULT_LOG_LEVEL = 'info';
 
 /* Defaults of the web editor itself. */
 export const DEFAULT_PROXY_PORT = 54321;
+/** Default directory of the applied tunnel configs; mirrors `DEFAULT_AMNEZIA_DIR` of the system layer. */
+export const DEFAULT_AMNEZIA_DIR = '/etc/amnezia/amneziawg';
 export const DEFAULT_PROXY_TYPE = 'socks';
 export const DEFAULT_PROXY_TAG = 'new-proxy';
 export const DEFAULT_ROUTE_NAME = 'route';
@@ -292,13 +294,14 @@ export class ProjectModel {
     this.stateDir = options.stateDir ?? path.join(process.cwd(), DEFAULT_STATE_DIR);
     this.snapshotKeep = options.snapshotKeep ?? DEFAULT_SNAPSHOT_KEEP;
     /**
-     * Directory `awg-quick@<name>` reads `<name>.conf` from
-     * (`GATEHOUSE_AMNEZIA_DIR`). Empty means "not configured" and an apply is
-     * refused with a sentence instead of writing somewhere unexpected.
+     * Fallback directory for the tunnel configs, used when the document carries
+     * no `amnezia_dir`. The web layer passes `GATEHOUSE_AMNEZIA_DIR` here; empty
+     * means "not configured" and a write is refused with a sentence instead of
+     * touching a path nobody chose.
      *
      * @type {string}
      */
-    this.amneziaDir = typeof options.amneziaDir === 'string' ? options.amneziaDir : '';
+    this.defaultAmneziaDir = typeof options.amneziaDir === 'string' ? options.amneziaDir : '';
     this.path = null;
     this.document = newDocument();
     /**
@@ -512,6 +515,127 @@ export class ProjectModel {
   /** Reference: `resolved_output_path`. */
   resolvedOutputPath() {
     return resolvePath(this.settingsDir, this.outputFile);
+  }
+
+  /**
+   * Directory the applied tunnel configs go to, resolved: `amnezia_dir` of the
+   * document first (a relative path resolves against the settings directory, like
+   * `output_file`), then the fallback handed in by the web layer
+   * (`GATEHOUSE_AMNEZIA_DIR`), then `/etc/amnezia/amneziawg`.
+   *
+   * ONE value for the whole editor on purpose: the write path, the delete path
+   * and the start-up fuse of the system layer must look at the same directory, or
+   * the fuse would judge a file nothing ever wrote.
+   *
+   * @returns {string}
+   */
+  get amneziaDir() {
+    const value = this.document.amnezia_dir;
+    if (typeof value === 'string' && value.length > 0) return resolvePath(this.settingsDir, value);
+    if (this.defaultAmneziaDir.length > 0) return resolvePath(this.settingsDir, this.defaultAmneziaDir);
+    return DEFAULT_AMNEZIA_DIR;
+  }
+
+  /**
+   * Fills the fallback when the document carries no `amnezia_dir`. Called by the
+   * web layer, which alone may read the environment.
+   *
+   * @param {string} value
+   */
+  setDefaultAmneziaDir(value) {
+    if (typeof value === 'string' && value.length > 0 && this.defaultAmneziaDir.length === 0) {
+      this.defaultAmneziaDir = value;
+    }
+  }
+
+  /**
+   * Writes `amnezia_dir` into the document. An empty value CLEARS the field, so
+   * the path falls back to the environment instead of silently becoming the
+   * process working directory.
+   *
+   * @param {unknown} value
+   */
+  setAmneziaDir(value) {
+    const clean = String(value ?? '').trim();
+    if (clean.length === 0) delete this.document.amnezia_dir;
+    else this.document.amnezia_dir = clean;
+    this.markDirty();
+  }
+
+  /**
+   * What the Amnezia panel shows about the path: the raw field, the resolved
+   * directory and where the value came from.
+   *
+   * @returns {{value: string, resolved: string, source: string, fallback: string}}
+   */
+  amneziaDirInfo() {
+    const value = this.document.amnezia_dir;
+    if (typeof value === 'string' && value.length > 0) {
+      return {value, resolved: this.amneziaDir, source: 'документ', fallback: DEFAULT_AMNEZIA_DIR};
+    }
+    return {
+      value: '',
+      resolved: this.amneziaDir,
+      source: this.defaultAmneziaDir.length > 0 ? 'GATEHOUSE_AMNEZIA_DIR' : 'умолчание',
+      fallback: DEFAULT_AMNEZIA_DIR,
+    };
+  }
+
+  /**
+   * Rows of the Amnezia panel: one per marked tunnel, with its target path and
+   * whether the file is on disk.
+   *
+   * @returns {Array<Record<string, unknown>>}
+   */
+  amneziaRows() {
+    const dir = this.amneziaDir;
+    return this.tunnels().map((entry) => {
+      const iface = String(entry.interface);
+      return {
+        label: String(entry.name),
+        interface: iface,
+        provider: String(entry.provider),
+        file: String(entry.file),
+        path: tunnelConfigPath(dir, iface),
+        applied: tunnelConfigApplied(dir, iface),
+        policyRouting: entry.policy_routing === true,
+      };
+    });
+  }
+
+  /**
+   * Re-normalises and rewrites every marked tunnel, in document order.
+   *
+   * The list is the document's `tunnels`, not the files on disk: a tunnel whose
+   * source disappeared must be REPORTED, not silently dropped. One failure does
+   * not stop the rest — the report carries a line per tunnel — and no unit is
+   * started, because a rewrite is reversible and a start is not.
+   *
+   * @returns {{entries: Array<{label: string, interface: string, path: string|null,
+   *   changed: boolean|null, error: string|null}>, changed: number, failed: number}}
+   */
+  regenerateTunnels() {
+    const entries = [];
+    let changed = 0;
+    let failed = 0;
+
+    for (const tunnel of this.tunnels()) {
+      const label = String(tunnel.name);
+      const iface = String(tunnel.interface);
+      try {
+        const {applied} = this.prepareTunnel(String(tunnel.provider), String(tunnel.file), {
+          name: iface,
+          label,
+          policyRouting: tunnel.policy_routing === true,
+        });
+        entries.push({label, interface: iface, path: applied.path, changed: applied.changed, error: null});
+        if (applied.changed) changed += 1;
+      } catch (error) {
+        entries.push({label, interface: iface, path: null, changed: null, error: error.message});
+        failed += 1;
+      }
+    }
+    return {entries, changed, failed};
   }
 
   /**
@@ -1656,15 +1780,23 @@ export class ProjectModel {
     if (index < 0) list.push(entry);
     else list[index] = entry;
 
+    let retargeted = false;
     if (previous !== null && previous.interface !== entry.interface) {
       for (const proxy of this.#ensureProxies()) {
         if (!isMapping(proxy) || !isMapping(proxy.tunnel)) continue;
         if (proxy.tunnel.provider === entry.provider && proxy.tunnel.file === entry.file) {
           proxy.tunnel = {...proxy.tunnel, interface: entry.interface};
+          retargeted = true;
         }
       }
     }
-    this.markDirty();
+
+    // A regeneration that found the entry already correct must not mark the
+    // document dirty: the FILE may have been rewritten while the model did not
+    // change, and the header would then ask to save nothing.
+    if (index < 0 || canonicalJson(previous) !== canonicalJson(entry) || retargeted) {
+      this.markDirty();
+    }
   }
 
   /**

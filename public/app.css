@@ -76,6 +76,14 @@ ul.tree a {
 }
 ul.tree a:hover { background: #eef2f7; }
 ul.tree a.active { background: var(--accent); color: #fff; }
+/* A group node has no page: it is a heading and never looks clickable. */
+ul.tree span.group {
+  display: inline-block;
+  padding: 2px 6px;
+  font-weight: 600;
+  color: #55606e;
+  letter-spacing: 0.02em;
+}
 ul.tree li.stale > a { color: var(--warn); }
 ul.tree li.stale > a.active { color: #fff; }
 

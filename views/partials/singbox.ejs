@@ -1,0 +1,81 @@
+<%# «Настройки Sing-Box»: everything that edits sing-box on ONE page. The panel has a
+    single edit form (`id="panel-form"`) whose route applies three sections in
+    order — general, dns, output — so a refusal in any of them rolls the whole
+    panel back. Generation is a separate action form: it runs on the SAVED file,
+    and the header button never triggers it by accident. %>
+<h2><%= panel.title %></h2>
+
+<form id="panel-form" class="form" hx-post="/singbox" hx-target="#panel" hx-swap="innerHTML" method="post" action="/singbox">
+  <fieldset>
+    <legend>Сеть и urltest</legend>
+    <label for="listen_ip">listen_ip</label>
+    <input type="text" id="listen_ip" name="listen_ip" value="<%= panel.values.listen_ip %>">
+    <label for="urltest_url">urltest.url</label>
+    <input type="text" id="urltest_url" name="urltest_url" value="<%= panel.values.urltest.url %>">
+    <label for="urltest_interval">urltest.interval</label>
+    <input type="text" id="urltest_interval" name="urltest_interval" value="<%= panel.values.urltest.interval %>">
+    <label for="urltest_tolerance">urltest.tolerance</label>
+    <input type="number" id="urltest_tolerance" name="urltest_tolerance" value="<%= panel.values.urltest.tolerance %>">
+  </fieldset>
+
+  <fieldset>
+    <legend>log</legend>
+    <label for="log_level">level</label>
+    <input type="text" id="log_level" name="log_level" value="<%= panel.values.log.level %>">
+    <label class="check">
+      <input type="checkbox" name="log_timestamp" value="1" <%= panel.values.log.timestamp ? 'checked' : '' %>>
+      timestamp
+    </label>
+  </fieldset>
+
+  <fieldset>
+    <legend>exclude_from_auto</legend>
+    <p class="hint">Префиксы тегов, по одному в строке. Пустая строка ничего не добавляет.</p>
+    <textarea name="exclude_from_auto" rows="5" cols="40"><%= panel.values.exclude_from_auto.join('\n') %></textarea>
+  </fieldset>
+
+  <fieldset>
+    <legend>dns</legend>
+    <p class="hint">
+      Структурных форм здесь нет намеренно: секция dns уезжает в config.json как
+      есть. Проверяется только то, что это валидный JSON-объект.
+    </p>
+    <textarea name="dns" rows="14" cols="80" spellcheck="false"><%= panel.json %></textarea>
+  </fieldset>
+
+  <fieldset>
+    <legend>Куда писать config.json</legend>
+    <label for="output_file">output_file</label>
+    <input type="text" id="output_file" name="output_file" value="<%= panel.outputFile %>" size="60">
+    <p class="hint">Итоговый путь: <code><%= panel.resolvedOutput %></code></p>
+  </fieldset>
+
+  <button type="submit">Применить</button>
+</form>
+
+<h3>Генерация</h3>
+<form hx-post="/generate" hx-target="#panel" hx-swap="innerHTML" method="post" action="/generate">
+  <button type="submit">Сгенерировать config.json</button>
+</form>
+<p class="hint">
+  Генерация запускается по файлу на диске: сначала «Сохранить», потом
+  «Сгенерировать». Перед перезаписью предыдущий <code>config.json</code>
+  копируется в снапшот, поэтому откат возможен в один клик — в разделе
+  «Система». Дальше порядок там же: проверить конфиг и только после успешной
+  проверки перезапустить демон.
+</p>
+
+<% if (panel.generation) { %>
+  <h3>Результат</h3>
+  <p class="notice"><%= panel.generation.summary %></p>
+  <% if (panel.generation.wasDirty) { %>
+    <p class="hint">
+      На момент запуска в редакторе были несохранённые правки: в config.json они
+      не попали.
+    </p>
+  <% } %>
+  <p>Файл: <code><%= panel.generation.outputFile %></code></p>
+  <% if (panel.snapshot) { %>
+    <p class="hint">Предыдущая версия сохранена как снапшот <code><%= panel.snapshot %></code>.</p>
+  <% } %>
+<% } %>

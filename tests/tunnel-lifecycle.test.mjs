@@ -252,7 +252,7 @@ async function post(base, route, fields = {}) {
 }
 
 describe('the tunnel panel and its buttons (part 2)', () => {
-  test('the «нужен» mark writes the normalised config, never the source', async () => {
+  test('the «включить» mark writes the normalised config, never the source', async () => {
     const editor = await startEditor();
     try {
       const fields = {
@@ -264,7 +264,7 @@ describe('the tunnel panel and its buttons (part 2)', () => {
       };
 
       const first = await (await post(editor.base, '/tunnels', fields)).text();
-      assert.match(first, /отмечен:/);
+      assert.match(first, /включён:/);
       assert.match(first, /Туннель не поднят/);
 
       const target = path.join(editor.amneziaDir, 'hmn-graz4.conf');
@@ -315,7 +315,7 @@ describe('the tunnel panel and its buttons (part 2)', () => {
         await post(editor.base, '/tunnels', {provider: 'hidemyname', file: 'AustriaGrazS4.conf'})
       ).text();
 
-      assert.match(html, /снят/);
+      assert.match(html, /выключен/);
       assert.equal(fs.existsSync(target), false, 'the applied config is gone');
       assert.equal(editor.model.getTunnel('hidemyname', 'AustriaGrazS4.conf'), null);
     } finally {
@@ -481,7 +481,7 @@ describe('the tunnel panel and its buttons (part 2)', () => {
 
       const refused = await (await post(editor.base, '/tunnel/toggle', {name: 'hmn-graz4', up: '1'})).text();
       // The quotes are HTML-escaped in the rendered notice.
-      assert.match(refused, /не применён: отметьте его галочкой «нужен»/);
+      assert.match(refused, /не применён: включите его галочкой «включить»/);
     } finally {
       await editor.close();
     }

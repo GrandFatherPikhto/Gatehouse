@@ -12,12 +12,11 @@ import {DEFAULT_WATCH_URL} from '../system/index.mjs';
 
 /** Keys of the tree, without a name part. */
 export const PANEL_KINDS = Object.freeze([
-  'general',
+  'singbox',
+  'amnezia',
   'providers',
-  'output',
   'proxies',
   'routes',
-  'dns',
   'proxy',
   'route',
   'provider',
@@ -44,10 +43,11 @@ export const BUILTIN_OUTBOUNDS = Object.freeze(['auto-select', 'direct']);
 const EDIT_FORMS = Object.freeze({
   proxy: ['/proxy'],
   route: ['/route'],
-  dns: ['/dns'],
-  output: ['/output'],
+  // One panel, three sections: the form of «Настройки Sing-Box» applies them in
+  // this order, and a refusal anywhere rolls the whole panel back.
+  singbox: ['/general', '/dns', '/output'],
+  amnezia: ['/amnezia'],
   watchdog: ['/watchdog'],
-  general: ['/general'],
 });
 
 /**
@@ -176,8 +176,27 @@ export function buildPanel(model, key, extra = {}) {
   const system = extra.system ?? {};
 
   switch (kind) {
-    case 'general':
-      return {...base, title: 'Общие', values: model.generalValues()};
+    case 'singbox':
+      return {
+        ...base,
+        title: 'Настройки Sing-Box',
+        values: model.generalValues(),
+        json: model.dnsJson(),
+        outputFile: model.outputFile,
+        resolvedOutput: model.resolvedOutputPath(),
+        generation: extra.generation ?? null,
+        // Name of the snapshot taken before this generation, if any.
+        snapshot: extra.snapshot ?? null,
+      };
+
+    case 'amnezia':
+      return {
+        ...base,
+        title: 'Настройки Amnezia',
+        dir: model.amneziaDirInfo(),
+        tunnels: model.amneziaRows(),
+        regeneration: extra.regeneration ?? null,
+      };
 
     case 'providers':
       return {
@@ -197,22 +216,10 @@ export function buildPanel(model, key, extra = {}) {
         ...base,
         title: `Источник: ${name}`,
         provider,
-        // One row per `.conf`: the «нужен» mark and the two editable names.
+        // One row per `.conf`: the «включить» mark and the two editable names.
         tunnelRows: model.providerTunnelRows(name),
       };
     }
-
-    case 'output':
-      return {
-        ...base,
-        title: 'Вывод',
-        outputFile: model.outputFile,
-        resolvedOutput: model.resolvedOutputPath(),
-        generation: extra.generation ?? null,
-      };
-
-    case 'dns':
-      return {...base, title: 'DNS', json: model.dnsJson()};
 
     case 'proxies':
       return {...base, title: 'Прокси', tags: model.proxyTags()};

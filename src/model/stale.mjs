@@ -169,7 +169,8 @@ export function staleMap(document, allTags) {
  * @param {string} title
  * @param {string} kind
  * @param {{stale?: boolean, detail?: string, children?: unknown[], mark?: string,
- *   full?: string}} [extra] `full` is the untruncated mark, for a tooltip.
+ *   full?: string, group?: boolean}} [extra] `full` is the untruncated mark, for a
+ *   tooltip; `group` marks a node that has no page of its own.
  * @returns {Record<string, unknown>}
  */
 function node(key, title, kind, extra = {}) {
@@ -181,6 +182,9 @@ function node(key, title, kind, extra = {}) {
     detail: extra.detail ?? '',
     mark: extra.mark ?? '',
     full: extra.full ?? extra.mark ?? '',
+    // A group is a heading over its children; the template draws it without a
+    // link, so the tree cannot send the owner to a page that does not exist.
+    group: extra.group === true,
     children: extra.children ?? [],
   };
 }
@@ -323,17 +327,25 @@ export function treeSpec(options = {}) {
 
   return node('root', options.title ?? 'webui.json', 'root', {
     children: [
-      node('general', 'Общие', 'general'),
       node('providers', providersTitle, 'providers', {
         stale: providersMark !== '',
         detail: String(options.sourcesRoot ?? ''),
         mark: providersMark,
         children: providerNodes,
       }),
-      node('output', `Вывод: ${String(options.outputFile ?? 'config.json')}`, 'output'),
+      // «Настройки» is a GROUP: it has no page of its own, so the tree draws it
+      // as a heading. Everything that edits sing-box lives on ONE child panel
+      // (Общие + DNS + вывод собраны вместе), and the amnezia child holds the
+      // directory the tunnel configs are written to.
+      node('settings', 'Настройки', 'settings', {
+        group: true,
+        children: [
+          node('singbox', 'Настройки Sing-Box', 'singbox'),
+          node('amnezia', 'Настройки Amnezia', 'amnezia'),
+        ],
+      }),
       node('proxies', `Прокси (${proxyNodes.length})`, 'proxies', {children: proxyNodes}),
       node('routes', `Маршруты (${routeNodes.length})`, 'routes', {children: routeNodes}),
-      node('dns', 'DNS', 'dns'),
       // The host layer: check, restart, rollback under "Система", plus the live
       // journal and the outbound test. None of it edits `webui.json`, so the
       // nodes carry no stale mark.

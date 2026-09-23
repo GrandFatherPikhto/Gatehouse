@@ -1,0 +1,82 @@
+<%# «Настройки Amnezia»: where the tunnel configs are written, and a button that
+    re-normalises every ENABLED tunnel. The path is a document field; an empty one
+    falls back to GATEHOUSE_AMNEZIA_DIR. Regeneration only rewrites files — no unit
+    is started or stopped here, because a rewrite is reversible and a start is not. %>
+<h2><%= panel.title %></h2>
+
+<form id="panel-form" class="form" hx-post="/amnezia" hx-target="#panel" hx-swap="innerHTML" method="post" action="/amnezia">
+  <fieldset>
+    <legend>Куда писать конфиги туннелей</legend>
+    <label for="amnezia_dir">amnezia_dir</label>
+    <input type="text" id="amnezia_dir" name="amnezia_dir" value="<%= panel.dir.value %>" size="60">
+    <p class="hint">
+      Итоговый путь: <code><%= panel.dir.resolved %></code>
+      (источник: <%= panel.dir.source %>). Пустое поле означает
+      <code>GATEHOUSE_AMNEZIA_DIR</code>, а если и её нет —
+      <code><%= panel.dir.fallback %></code>. Относительный путь считается от
+      каталога <code>webui.json</code>, абсолютный берётся как есть.
+    </p>
+  </fieldset>
+  <button type="submit">Применить</button>
+</form>
+
+<h3>Включённые туннели (<%= panel.tunnels.length %>)</h3>
+<% if (panel.tunnels.length === 0) { %>
+  <p class="hint">
+    Ни один туннель не включён. Поставьте галочку «включить» у <code>.conf</code>
+    в «Провайдерах» — строка появится здесь, и её конфиг станет доступен кнопке
+    перегенерации.
+  </p>
+<% } else { %>
+  <table class="list">
+    <thead>
+      <tr><th>туннель</th><th>имя файла</th><th>путь</th><th>файл</th><th>policy routing</th></tr>
+    </thead>
+    <tbody>
+      <% for (const tunnel of panel.tunnels) { %>
+        <tr>
+          <td>
+            <code><%= tunnel.label %></code><br>
+            <span class="hint"><%= tunnel.provider %>/<%= tunnel.file %></span>
+          </td>
+          <td><code><%= tunnel.interface %></code></td>
+          <td><code><%= tunnel.path %></code></td>
+          <td><%= tunnel.applied ? 'на месте' : 'нет' %></td>
+          <td><%= tunnel.policyRouting ? 'да' : 'нет' %></td>
+        </tr>
+      <% } %>
+    </tbody>
+  </table>
+<% } %>
+
+<h3>Перегенерация</h3>
+<p class="hint">
+  Заново нормализует и перезаписывает каждый включённый туннель. Это только
+  запись файлов: юниты не поднимаются и не останавливаются, а прежняя версия
+  каждого изменившегося файла сохраняется снимком рядом с ним.
+</p>
+<form hx-post="/amnezia/regenerate" hx-target="#panel" hx-swap="innerHTML" method="post" action="/amnezia/regenerate">
+  <button type="submit" <%= panel.tunnels.length === 0 ? 'disabled' : '' %>>Перегенерировать конфиги</button>
+</form>
+
+<% if (panel.regeneration) { %>
+  <h3>Результат</h3>
+  <p class="<%= panel.regeneration.failed > 0 ? 'error' : 'notice' %>">
+    Туннелей: <%= panel.regeneration.entries.length %>,
+    изменено: <%= panel.regeneration.changed %>,
+    ошибок: <%= panel.regeneration.failed %>.
+  </p>
+  <ul class="list-plain">
+    <% for (const entry of panel.regeneration.entries) { %>
+      <li>
+        <code><%= entry.interface %></code>
+        <% if (entry.error) { %>
+          — <span class="error"><%= entry.error %></span>
+        <% } else { %>
+          — <%= entry.changed ? 'перезаписан' : 'изменений нет' %>:
+          <code><%= entry.path %></code>
+        <% } %>
+      </li>
+    <% } %>
+  </ul>
+<% } %>

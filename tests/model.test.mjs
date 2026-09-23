@@ -540,17 +540,14 @@ describe('stale references and the tree', () => {
 
     const kinds = model.treeSpec().children.map((child) => child.kind);
 
-    assert.deepEqual(kinds, [
-      'general',
-      'providers',
-      'output',
-      'proxies',
-      'routes',
-      'dns',
-      'system',
-    ]);
+    assert.deepEqual(kinds, ['providers', 'settings', 'proxies', 'routes', 'system']);
     assert.ok(!kinds.includes('profiles'));
     assert.ok(!kinds.includes('links'));
+
+    // «Настройки» is a GROUP: it has no page, only the two child panels.
+    const settings = model.treeSpec().children.find((child) => child.kind === 'settings');
+    assert.deepEqual(settings.children.map((child) => child.kind), ['singbox', 'amnezia']);
+    assert.equal(settings.group, true);
 
     const system = model.treeSpec().children.find((child) => child.kind === 'system');
     assert.deepEqual(system.children.map((child) => child.kind), ['journal', 'tests', 'watchdog']);

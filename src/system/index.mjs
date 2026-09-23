@@ -648,9 +648,16 @@ const STARTS_UNIT = new Set(['restart', 'enable']);
 async function tunnelAction(name, action, options = {}) {
   const config = systemConfig(options.env, options);
   const unit = tunnelUnitName(name);
+  // The directory comes from the caller when it knows better: the editor keeps
+  // `amnezia_dir` in `webui.json`, so its value must beat the environment, or the
+  // fuse would judge a file the write path never produced.
+  const amneziaDir =
+    typeof options.amneziaDir === 'string' && options.amneziaDir.trim().length > 0
+      ? options.amneziaDir.trim()
+      : config.amneziaDir;
 
   if (STARTS_UNIT.has(action[0])) {
-    const guard = tunnelStartupGuard(config.amneziaDir, name);
+    const guard = tunnelStartupGuard(amneziaDir, name);
     if (!guard.safe) {
       return {
         ok: false,

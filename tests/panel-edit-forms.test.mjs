@@ -103,12 +103,12 @@ const GENERAL_FIELDS = Object.freeze({
 /** The DNS text of the dns panel. */
 const DNS_TEXT = '{"servers": [], "final": "direct"}';
 
-describe('the general panel is the single settings form', () => {
+describe('the sing-box panel is the single settings form', () => {
   test('«Сохранить» applies the general fields and writes the file', async () => {
     const editor = await startEditor();
     try {
-      const response = await post(editor.base, '/save?panel=general', {
-        panel: 'general',
+      const response = await post(editor.base, '/save?panel=singbox', {
+        panel: 'singbox',
         ...GENERAL_FIELDS,
       });
 
@@ -130,10 +130,10 @@ describe('the general panel is the single settings form', () => {
   test('without htmx the same save redirects and still applies', async () => {
     const editor = await startEditor();
     try {
-      const response = await post(editor.base, '/save?panel=general', {panel: 'general', ...GENERAL_FIELDS}, false);
+      const response = await post(editor.base, '/save?panel=singbox', {panel: 'singbox', ...GENERAL_FIELDS}, false);
 
       assert.equal(response.status, 303);
-      assert.equal(response.headers.get('location'), '/panel/general');
+      assert.equal(response.headers.get('location'), '/panel/singbox');
       assert.equal(storedDocument(editor.settingsFile).listen_ip, '10.95.2.1');
     } finally {
       await editor.close();
@@ -141,14 +141,14 @@ describe('the general panel is the single settings form', () => {
   });
 });
 
-describe('the dns panel keeps its own edit form', () => {
-  test('a broken DNS text refuses, writes nothing and leaves the model untouched', async () => {
+describe('the sing-box panel carries the DNS section under the same form', () => {
+  test('a broken DNS text refuses the whole panel and writes nothing', async () => {
     const editor = await startEditor();
     try {
       const before = digest(editor.settingsFile);
 
-      const response = await post(editor.base, '/save?panel=dns', {
-        panel: 'dns',
+      const response = await post(editor.base, '/save?panel=singbox', {
+        panel: 'singbox',
         dns: '{oops',
       });
       const html = await response.text();
@@ -161,12 +161,12 @@ describe('the dns panel keeps its own edit form', () => {
     }
   });
 
-  test('«Применить DNS» stores a JSON object', async () => {
+  test('the DNS text of the same form is stored as a JSON object', async () => {
     const editor = await startEditor();
     try {
-      const response = await post(editor.base, '/dns', {dns: DNS_TEXT});
+      const response = await post(editor.base, '/singbox', {dns: DNS_TEXT});
 
-      assert.match(await response.text(), /DNS применён/);
+      assert.match(await response.text(), /Настройки применены/);
       assert.deepEqual(editor.model.body().dns, {servers: [], final: 'direct'});
     } finally {
       await editor.close();
@@ -175,27 +175,16 @@ describe('the dns panel keeps its own edit form', () => {
 });
 
 describe('the markup keeps one form element per panel', () => {
-  test('general binds the settings fields to the one panel-form', async () => {
+  test('singbox binds all three sections to the one panel-form', async () => {
     const editor = await startEditor();
     try {
-      const html = await (await fetch(`${editor.base}/panel/general`)).text();
+      const html = await (await fetch(`${editor.base}/panel/singbox`)).text();
 
       assert.equal(html.split('id="panel-form"').length - 1, 1, 'exactly one form element');
       assert.match(html, /name="listen_ip"/);
-      assert.match(html, />Применить<\/button>/);
-    } finally {
-      await editor.close();
-    }
-  });
-
-  test('dns binds its textarea to the one panel-form', async () => {
-    const editor = await startEditor();
-    try {
-      const html = await (await fetch(`${editor.base}/panel/dns`)).text();
-
-      assert.equal(html.split('id="panel-form"').length - 1, 1);
       assert.match(html, /<textarea[^>]*name="dns"/);
-      assert.match(html, /Применить DNS/);
+      assert.match(html, /name="output_file"/);
+      assert.match(html, />Применить<\/button>/);
     } finally {
       await editor.close();
     }

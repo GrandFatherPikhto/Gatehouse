@@ -25,15 +25,16 @@
 <% if (panel.provider.entries.length > 0) { %>
   <h3>Конфиги туннелей (<%= panel.provider.entries.length %>)</h3>
   <p class="hint">
-    Галочка «нужен» нормализует конфиг и кладёт <code><имя файла>.conf</code>
-    в каталог amnezia; снятие галочки останавливает туннель и убирает файл.
-    Имя файла — это <code><имя файла>.conf</code> в каталоге amnezia и юнит
+    Галочка «включить» нормализует конфиг и кладёт
+    <code><имя файла>.conf</code> в каталог amnezia; снятие галочки
+    останавливает туннель и убирает файл. Имя файла — это
+    <code><имя файла>.conf</code> в каталоге amnezia и юнит
     <code>awg-quick@<имя файла></code>, поэтому не длиннее 15 символов.
     В <code>config.json</code> конфиги туннелей сами по себе не попадают.
   </p>
   <table class="list">
     <thead>
-      <tr><th>файл</th><th>отметка и имена</th></tr>
+      <tr><th>файл</th><th>включение и имена</th></tr>
     </thead>
     <tbody>
       <% for (const row of panel.tunnelRows) { %>
@@ -54,7 +55,7 @@
                 <input type="checkbox" name="needed" value="1" <%= row.marked ? 'checked' : '' %>
                        hx-post="/tunnels" hx-trigger="change"
                        hx-target="#panel" hx-swap="innerHTML" hx-include="closest form">
-                нужен
+                включить
               </label>
               <label>имя туннеля
                 <input type="text" name="name" value="<%= row.name %>" maxlength="255" size="30">
@@ -62,7 +63,7 @@
               <label>имя файла
                 <input type="text" name="interface" value="<%= row.interface %>" maxlength="15" size="14">
               </label>
-              <button type="submit"><%= row.marked ? 'Сохранить' : 'Отметить' %></button>
+              <button type="submit">Применить</button>
               <% if (row.marked) { %>
                 <br><span class="hint"><%= row.applied ? 'файл на месте' : 'файла пока нет' %></span>
               <% } %>

@@ -64,6 +64,11 @@
         }
       }
     },
+    "amnezia_dir": {
+      "description": "Directory the applied tunnel configs are written to and read from (`<interface>.conf`). A relative path resolves against the directory of webui.json, an absolute one is used as is, exactly like output_file. Empty or absent falls back to GATEHOUSE_AMNEZIA_DIR, then /etc/amnezia/amneziawg.",
+      "type": "string",
+      "minLength": 1
+    },
     "output_file": {
       "type": "string",
       "minLength": 1

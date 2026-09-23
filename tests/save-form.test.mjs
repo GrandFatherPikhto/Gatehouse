@@ -228,7 +228,7 @@ describe('«Сохранить» applies the open edit form', () => {
   test('a panel without an edit form saves as before', async () => {
     const editor = await startEditor();
     try {
-      await post(editor.base, '/general', {
+      await post(editor.base, '/singbox', {
         listen_ip: '10.95.2.1',
         urltest_url: 'https://gstatic.com',
         urltest_interval: '3m',

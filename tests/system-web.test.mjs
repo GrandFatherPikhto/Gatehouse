@@ -186,7 +186,7 @@ describe('check and restart gating', () => {
   test('a passing check enables the restart, a failing one does not', async () => {
     const editor = await startEditor();
     try {
-      await post(editor.base, '/save', {panel: 'output'});
+      await post(editor.base, '/save', {panel: 'singbox'});
       await post(editor.base, '/generate', {});
 
       const checked = await post(editor.base, '/check');
@@ -216,7 +216,7 @@ describe('check and restart gating', () => {
   test('generating a new config invalidates the previous check', async () => {
     const editor = await startEditor();
     try {
-      await post(editor.base, '/save', {panel: 'output'});
+      await post(editor.base, '/save', {panel: 'singbox'});
       await post(editor.base, '/generate', {});
       await post(editor.base, '/check');
       assert.match(await (await fetch(`${editor.base}/panel/system`)).text(), /hx-post="\/restart"/);
@@ -238,7 +238,7 @@ describe('rollback', () => {
   test('restores the previous config.json byte for byte', async () => {
     const editor = await startEditor();
     try {
-      await post(editor.base, '/save', {panel: 'output'});
+      await post(editor.base, '/save', {panel: 'singbox'});
       await post(editor.base, '/generate', {});
       const first = fs.readFileSync(editor.configPath);
 
@@ -371,7 +371,7 @@ describe('mass outbound test over SSE', () => {
   test('streams one result per server and ends with a summary', async () => {
     const editor = await startEditor();
     try {
-      await post(editor.base, '/save', {panel: 'output'});
+      await post(editor.base, '/save', {panel: 'singbox'});
       await post(editor.base, '/generate', {});
 
       const response = await fetch(`${editor.base}/tests/stream`);
@@ -393,7 +393,7 @@ describe('mass outbound test over SSE', () => {
   test('a second concurrent run is refused by an event, and the connection stays open', async () => {
     const editor = await startEditor({system: {FAKE_SINGBOX_DELAY_MS: '150'}});
     try {
-      await post(editor.base, '/save', {panel: 'output'});
+      await post(editor.base, '/save', {panel: 'singbox'});
       await post(editor.base, '/generate', {});
 
       const controller = new AbortController();

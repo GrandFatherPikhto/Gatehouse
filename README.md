@@ -28,8 +28,8 @@ maintains that settings file. It is built in three stages:
   second-rung switch on — restarts the daemon. Implemented:
   [`src/watchdog/watchdog.mjs`](src/watchdog/watchdog.mjs:1) and
   [`src/watchdog/clash.mjs`](src/watchdog/clash.mjs:1).
-* **tunnel lifecycle — mark, file, unit, exit**: a tunnel stops being a picture.
-  Ticking «нужен» next to a `.conf` in «Провайдеры» normalises the config and
+* **tunnel lifecycle — enable, file, unit, exit**: a tunnel stops being a picture.
+  Ticking «включить» next to a `.conf` in «Провайдеры» normalises the config and
   writes `<file name>.conf` into the amnezia directory, recording the two names in
   `webui.json`; un-ticking stops the unit and removes the file. The «Система»
   panel grows a row per tunnel (state read from systemd, one checkbox for both
@@ -220,7 +220,7 @@ from a request:
 | `GATEHOUSE_CURL` | `/usr/bin/curl` | binary the watchdog probes an inbound with |
 | `GATEHOUSE_SUDO` | `/usr/bin/sudo` | `sudo`; the value `none` calls `systemctl` directly (the polkit variant) |
 | `GATEHOUSE_UNIT` | `sing-box` | unit name |
-| `GATEHOUSE_AMNEZIA_DIR` | `/etc/amnezia/amneziawg` | directory `awg-quick@<name>` reads `<name>.conf` from; the «нужен» mark writes it here |
+| `GATEHOUSE_AMNEZIA_DIR` | `/etc/amnezia/amneziawg` | fallback directory of the applied tunnel configs; the `amnezia_dir` field of «Настройки Amnezia» wins, this value is used when it is empty |
 | `GATEHOUSE_SUDOERS` | `/etc/sudoers.d/gatehouse` | sudoers file the editor **reads** to learn which tunnels it may control. The editor never writes it |
 | `GATEHOUSE_CONFIG` | `/etc/sing-box/config.json` | default config of the commands; the UI passes the generated path |
 | `GATEHOUSE_TEST_URL` | `https://ipinfo.io` | target of the outbound test |
@@ -232,11 +232,14 @@ The path of the settings file comes from the environment and from nowhere else.
 There is deliberately no "open file" box in the UI: a path arriving from the
 browser at a process that writes files is a path traversal waiting to happen.
 
-One tree node per screen: Общие, Провайдеры (source folders and their tunnels),
-Вывод, Прокси → tag, Маршруты → name, DNS, and under Система: Журнал,
-Тест серверов, Сторож. Inside a provider folder every `.conf` carries the «нужен»
-mark and its two names; clicking it opens a read-only normalisation preview with the
-policy-routing switch, and «Система» lists the tunnel rows grouped by provider.
+One tree node per screen: Провайдеры (source folders and their tunnels), Настройки —
+a group with two children, Прокси → tag, Маршруты → name, and under Система: Журнал,
+Тест серверов, Сторож. «Настройки Sing-Box» collects every sing-box setting on one page
+(the old Общие, DNS and Вывод); «Настройки Amnezia» holds the output directory of the
+tunnel configs and the regeneration button. Inside a provider folder every `.conf`
+carries the «включить» switch and its two names; clicking it opens a read-only
+normalisation preview with the policy-routing switch, and «Система» lists the tunnel
+rows grouped by provider.
 
 * **`webui.json` is flat; the profile level is gone.** The body used to be split
   between the active profile and `defaults`, but there was exactly one profile and
@@ -260,7 +263,7 @@ policy-routing switch, and «Система» lists the tunnel rows grouped by p
   folder shows the servers it hands out, a tunnels folder shows its `.conf` files,
   each opening the normalisation preview. No action touches the files on disk:
   "remove" means "do not read it", never "delete the owner's folder".
-* **A tunnel is marked «нужен», and only then does it become a proxy.**
+* **A tunnel is enabled with «включить», and only then does it become a proxy.**
   The normaliser `src/core/normalize.mjs` is a pure function: it adds `Table = off`,
   drops `DNS =`, and copies `AllowedIPs` plus the obfuscation (`Jc/Jmin/Jmax`,
   `S1–S4`, `H1–H4`, `i1`) byte for byte. A tunnel has TWO names: a human-readable
@@ -269,9 +272,11 @@ policy-routing switch, and «Система» lists the tunnel rows grouped by p
   kernel interface of `awg-quick@<file name>`). The mark writes
   `<amneziaDir>/<file name>.conf` with mode `0600` — overwriting only when the bytes
   really differ, and snapshotting the previous version next to it
-  (`<file name>.conf.<ISO>`). It does **not** bring the tunnel up: writing a file is
-  reversible, starting a unit that carries the owner's link to the router is not.
-  See «Tunnels» below.
+  (`<file name>.conf.<ISO>`). The directory comes from `amnezia_dir` of «Настройки
+  Amnezia» (falling back to `GATEHOUSE_AMNEZIA_DIR`, then `/etc/amnezia/amneziawg`),
+  and it is the SAME value the start-up fuse reads. It does **not** bring the tunnel
+  up: writing a file is reversible, starting a unit that carries the owner's link to
+  the router is not. See «Tunnels» below.
 * **DNS is a JSON text field.** sing-box has 16 kinds of DNS servers, the schema is
   fresh and still moving, and DNS is edited rarely; only "a valid JSON object" is
   checked. Structural forms were deliberately not built.
@@ -385,16 +390,21 @@ steps: **mark «нужен» → bring up → make a proxy**. They are split bec
 reversible on its own terms, and a single button doing all three would drop the
 owner's link to the router without asking.
 
-* **Mark «нужен» (part 1).** In a provider folder every `.conf` gets a checkbox and
+* **Enable «включить» (part 1).** In a provider folder every `.conf` gets a switch and
   two names: the human-readable one (`<provider>-<file stem>` by default, edited
   freely, up to 255 characters) and the file name (typed by hand, at most 15
   characters — it is also the kernel interface). Ticking validates both, normalises
-  the config and writes it with mode `0600` (it carries a private key) into
-  `GATEHOUSE_AMNEZIA_DIR`, recording the entry in `webui.json` under `tunnels`.
+  the config and writes it with mode `0600` (it carries a private key) into the
+  directory named by `amnezia_dir` of «Настройки Amnezia» (`GATEHOUSE_AMNEZIA_DIR`
+  when the field is empty), recording the entry in `webui.json` under `tunnels`.
   Identical bytes are a no-op — no file touched and no snapshot; differing bytes
   snapshot the previous version next to it as `<file name>.conf.<ISO>`. Un-ticking
   stops the unit first (with the sudoers rights) and only then removes the file. The
-  mark never starts the unit.
+  switch itself never starts the unit.
+* **Regeneration (part 1½).** «Настройки Amnezia» lists the enabled tunnels and
+  offers one button that re-normalises and rewrites them all. A source that
+  disappeared is reported per tunnel and does not stop the others; nothing is started
+  or stopped, because a rewrite is reversible and a start is not.
 * **Bring up (part 2).** The «Система» panel shows one row per tunnel, grouped by
   provider. The rows come from the `.conf` files of the amnezia directory plus the
   marked entries, so a tunnel is visible and manageable before any proxy exists.
@@ -562,11 +572,16 @@ Rules of the format:
 * **`sources` is a list of provider folder names** under the sources root. A folder
   may hold `links.txt`, `*.conf`, or both; a tunnel config becomes an exit only
   through a proxy carrying a `tunnel` descriptor (see below).
-* **`tunnels` lists the marked tunnels.** Each entry carries `provider`, `file`,
+* **`tunnels` lists the enabled tunnels.** Each entry carries `provider`, `file`,
   `name` (human-readable, up to 255 characters), `interface` (the `<file name>.conf`
   of the amnezia directory and the kernel interface, at most 15 characters) and an
-  optional `policy_routing`. It is written when the owner ticks «нужен»; additive to
-  version 2, so a document without the key stays valid.
+  optional `policy_routing`. It is written when the owner ticks «включить»; additive
+  to version 2, so a document without the key stays valid.
+* **`amnezia_dir` is where the tunnel configs are written.** A relative path resolves
+  against the directory of `webui.json`, exactly like `output_file`; empty or absent
+  falls back to `GATEHOUSE_AMNEZIA_DIR`, then `/etc/amnezia/amneziawg`. The write
+  path, the delete path and the start-up fuse read this same value, so they can never
+  disagree about which file is meant.
 * **`note` is a comment for humans** — in a profile and in a proxy. The core
   ignores it and it never reaches `config.json`.
 * **`pinned`, `watch` and `watch_url` on a proxy, and the `watchdog` section, are

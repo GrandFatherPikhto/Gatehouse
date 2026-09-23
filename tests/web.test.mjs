@@ -162,7 +162,7 @@ describe('pages and static files', () => {
       assert.equal(response.status, 200);
 
       const html = await response.text();
-      assert.match(html, /Общие/);
+      assert.match(html, /Настройки Sing-Box/);
       assert.match(html, /Провайдеры \(1\)/);
       assert.match(html, /href="\/static\/app.css"/);
       // No CDN: the bundle must be referenced on our own host.
@@ -239,7 +239,7 @@ describe('pages and static files', () => {
       assert.equal(unknown.status, 200);
       assert.match(html, /неизвестный раздел/);
       assert.match(html, /nonsense/);
-      assert.match(html, /Общие/, 'it falls back to a panel that exists');
+      assert.match(html, /Настройки Sing-Box/, 'it falls back to a panel that exists');
 
       const missing = await fetch(`${editor.base}/panel/${encodeURIComponent('proxy:ghost')}`);
       const missingHtml = await missing.text();
@@ -258,7 +258,7 @@ describe('editing forms', () => {
   test('the general form writes into the document and marks it dirty', async () => {
     const editor = await startEditor();
     try {
-      const response = await post(editor.base, '/general', {
+      const response = await post(editor.base, '/singbox', {
         listen_ip: '10.95.2.1',
         urltest_url: 'https://gstatic.com',
         urltest_interval: '5m',
@@ -270,7 +270,7 @@ describe('editing forms', () => {
 
       assert.equal(response.status, 200);
       const html = await response.text();
-      assert.match(html, /Применено/);
+      assert.match(html, /Настройки применены/);
       assert.match(html, /есть несохранённые правки/);
 
       assert.equal(editor.model.listenIp, '10.95.2.1');
@@ -306,14 +306,14 @@ describe('editing forms', () => {
   test('a non-JSON DNS text is refused, a JSON object is stored', async () => {
     const editor = await startEditor();
     try {
-      const bad = await post(editor.base, '/dns', {dns: '{oops'});
+      const bad = await post(editor.base, '/singbox', {dns: '{oops'});
       assert.match(await bad.text(), /не валидный JSON/);
 
-      const list = await post(editor.base, '/dns', {dns: '[]'});
+      const list = await post(editor.base, '/singbox', {dns: '[]'});
       assert.match(await list.text(), /ожидается JSON-объект/);
 
-      const good = await post(editor.base, '/dns', {dns: '{"servers": [], "final": "direct"}'});
-      assert.match(await good.text(), /DNS применён/);
+      const good = await post(editor.base, '/singbox', {dns: '{"servers": [], "final": "direct"}'});
+      assert.match(await good.text(), /Настройки применены/);
       assert.deepEqual(editor.model.body().dns, {servers: [], final: 'direct'});
     } finally {
       await editor.close();
@@ -382,7 +382,7 @@ describe('editing forms', () => {
     try {
       const response = await post(
         editor.base,
-        '/general',
+        '/singbox',
         {
           listen_ip: '10.95.2.1',
           urltest_url: 'https://gstatic.com',
@@ -395,7 +395,7 @@ describe('editing forms', () => {
 
       // The redirect must not be followed: its target is the panel page.
       assert.equal(response.status, 303);
-      assert.equal(response.headers.get('location'), panelUrl('general'));
+      assert.equal(response.headers.get('location'), panelUrl('singbox'));
       assert.equal(editor.model.listenIp, '10.95.2.1', 'the change still happened');
     } finally {
       await editor.close();
@@ -436,7 +436,7 @@ describe('saving and generating from the UI', () => {
   test('reload drops the unsaved edits', async () => {
     const editor = await startEditor();
     try {
-      await post(editor.base, '/general', {
+      await post(editor.base, '/singbox', {
         listen_ip: '10.95.2.1',
         urltest_url: 'https://gstatic.com',
         urltest_interval: '3m',
@@ -445,7 +445,7 @@ describe('saving and generating from the UI', () => {
       });
       assert.equal(editor.model.dirty, true);
 
-      const response = await post(editor.base, '/reload', {panel: 'general'});
+      const response = await post(editor.base, '/reload', {panel: 'singbox'});
 
       assert.match(await response.text(), /перечитан/);
       assert.equal(editor.model.listenIp, '127.0.0.1');
@@ -458,7 +458,7 @@ describe('saving and generating from the UI', () => {
   test('generating from the UI gives the same config.json as tools/generate.mjs', async () => {
     const editor = await startEditor();
     try {
-      await post(editor.base, '/save', {panel: 'output'});
+      await post(editor.base, '/save', {panel: 'singbox'});
 
       const generated = await post(editor.base, '/generate', {});
       const html = await generated.text();
@@ -481,7 +481,7 @@ describe('saving and generating from the UI', () => {
   test('generation reports the core error without a stack trace', async () => {
     const editor = await startEditor({overrides: {sources: ['nowhere']}});
     try {
-      await post(editor.base, '/save', {panel: 'output'});
+      await post(editor.base, '/save', {panel: 'singbox'});
 
       const response = await post(editor.base, '/generate', {});
 
@@ -765,7 +765,7 @@ describe('environment of the server', () => {
       const html = await response.text();
       assert.equal(response.status, 200);
       assert.match(html, /webui\.json/);
-      assert.match(html, /Общие/);
+      assert.match(html, /Настройки Sing-Box/);
       assert.match(html, /файл ещё не создан/, 'nothing was written to disk yet');
       assert.ok(!fs.existsSync(missing), 'a fresh document is not saved until asked');
     } finally {

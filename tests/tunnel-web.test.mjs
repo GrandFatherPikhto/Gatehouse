@@ -117,7 +117,7 @@ describe('the tunnel preview (NEW)', () => {
       assert.doesNotMatch(html, />Применить</);
       assert.match(html, /hx-post="\/tunnel\/policy"/, 'the policy switch has its own route');
       assert.match(html, /Имя туннеля: <code>hidemyname-AustriaGrazS4<\/code>/);
-      assert.match(html, /туннель не отмечен/, 'an unmarked tunnel says the file is not created');
+      assert.match(html, /туннель не включён/, 'a disabled tunnel says the file is not created');
     } finally {
       await editor.close();
     }

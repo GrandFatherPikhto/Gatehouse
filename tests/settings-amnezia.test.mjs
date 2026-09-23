@@ -1,0 +1,284 @@
+// «Настройки»: the group node of the tree, the sing-box panel that absorbed
+// «Общие»/«DNS»/«Вывод», and «Настройки Amnezia» — the output directory of the
+// tunnel configs plus the regeneration of every enabled tunnel.
+//
+// The path itself is the interesting part: the write, the delete and the start-up
+// fuse must all read the SAME directory, so the tests put the document value and
+// the environment value in different places on purpose.
+
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import {describe, test} from 'node:test';
+
+import {startServer} from '../src/web/server.mjs';
+import {
+  FIXTURES_DIR,
+  fakeSystemEnv,
+  makeTempDir,
+  tunnelSystemEnv,
+  writeLinksFile,
+  writeSettings,
+  writeSudoers,
+} from './helpers.mjs';
+
+const PROVIDER_CONF = path.join(FIXTURES_DIR, 'tunnel', 'provider.conf');
+const NORMALIZED_CONF = path.join(FIXTURES_DIR, 'tunnel', 'normalized.conf');
+
+/** Escapes a path for use inside a RegExp. */
+function pattern(text) {
+  return new RegExp(String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+}
+
+/**
+ * Starts the editor over a project with one (or two) tunnel sources.
+ *
+ * `GATEHOUSE_AMNEZIA_DIR` deliberately points at a directory the document does NOT
+ * use, so a test can tell which of the two the editor really writes to.
+ *
+ * @param {{document?: Record<string, unknown>, sudoers?: string[], secondConf?: boolean}} [options]
+ * @returns {Promise<Record<string, unknown>>}
+ */
+async function startEditor(options = {}) {
+  const dir = makeTempDir();
+  writeLinksFile(dir);
+  const tunnelDir = path.join(dir, 'sources', 'hidemyname');
+  fs.mkdirSync(tunnelDir, {recursive: true});
+  fs.copyFileSync(PROVIDER_CONF, path.join(tunnelDir, 'AustriaGrazS4.conf'));
+  if (options.secondConf === true) {
+    fs.copyFileSync(PROVIDER_CONF, path.join(tunnelDir, 'AustriaViennaS6.conf'));
+  }
+
+  const settingsFile = writeSettings(dir, {
+    sources: ['vpnd', 'hidemyname'],
+    proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
+    ...(options.document ?? {}),
+  });
+  const stateDir = path.join(dir, 'state');
+  const envDir = path.join(dir, 'env-amnezia');
+  const sudoers = writeSudoers(path.join(dir, 'sudoers-gatehouse'), options.sudoers ?? []);
+
+  const env = {
+    ...fakeSystemEnv(),
+    ...tunnelSystemEnv(dir, {sudoers}),
+    GATEHOUSE_AMNEZIA_DIR: envDir,
+    FAKE_SYSTEMCTL_ARGV_LOG: path.join(dir, 'argv.log'),
+    GATEHOUSE_SETTINGS: settingsFile,
+    GATEHOUSE_HOST: '127.0.0.1',
+    GATEHOUSE_PORT: '0',
+    GATEHOUSE_STATE_DIR: stateDir,
+  };
+
+  const {server, model, url} = await startServer({env});
+  return {
+    dir,
+    env,
+    settingsFile,
+    model,
+    envDir,
+    base: url.replace(/\/$/, ''),
+    async close() {
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+/**
+ * POSTs a form the way htmx does it.
+ *
+ * @param {string} base
+ * @param {string} route
+ * @param {Record<string, string>} [fields]
+ * @returns {Promise<Response>}
+ */
+async function post(base, route, fields = {}) {
+  return fetch(`${base}${route}`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded', 'HX-Request': 'true'},
+    body: new URLSearchParams(fields),
+  });
+}
+
+/** Every argv the fake `systemctl` saw, in order. */
+function systemctlCalls(editor) {
+  const log = editor.env.FAKE_SYSTEMCTL_ARGV_LOG;
+  if (!fs.existsSync(log)) return [];
+  return fs
+    .readFileSync(log, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line));
+}
+
+/** A mark form for the graz tunnel. */
+const GRAZ_MARK = {
+  provider: 'hidemyname',
+  file: 'AustriaGrazS4.conf',
+  name: 'hidemyname-AustriaGrazS4',
+  interface: 'hmn-graz4',
+  needed: '1',
+};
+
+describe('the «Настройки» group of the tree (NEW)', () => {
+  test('it is a heading with two children and never a link', async () => {
+    const editor = await startEditor();
+    try {
+      const html = await (await fetch(editor.base)).text();
+
+      assert.match(html, /<span class="group"[^>]*>Настройки<\/span>/);
+      assert.doesNotMatch(html, /\/panel\/settings/, 'a group has no page to open');
+      assert.match(html, /panel\/singbox/);
+      assert.match(html, /panel\/amnezia/);
+      assert.match(html, /Настройки Sing-Box/);
+      assert.match(html, /Настройки Amnezia/);
+
+      // The flat nodes are gone with their panels.
+      assert.doesNotMatch(html, /panel\/general/);
+      assert.doesNotMatch(html, /panel\/dns/);
+      assert.doesNotMatch(html, /panel\/output/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('the sing-box panel joins the three sections under one form', async () => {
+    const editor = await startEditor();
+    try {
+      const html = await (await fetch(`${editor.base}/panel/singbox`)).text();
+
+      assert.equal(html.split('id="panel-form"').length - 1, 1, 'exactly one edit form');
+      assert.match(html, /name="listen_ip"/);
+      assert.match(html, /<textarea[^>]*name="dns"/);
+      assert.match(html, /name="output_file"/);
+      assert.match(html, /Настройки Sing-Box/);
+    } finally {
+      await editor.close();
+    }
+  });
+});
+
+describe('the amnezia output directory (NEW)', () => {
+  test('the panel shows the resolved path and its source, and the document wins', async () => {
+    const editor = await startEditor();
+    try {
+      const html = await (await fetch(`${editor.base}/panel/amnezia`)).text();
+      assert.match(html, /name="amnezia_dir"/);
+      assert.match(html, /источник: GATEHOUSE_AMNEZIA_DIR/);
+      assert.match(html, pattern(editor.envDir), 'the fallback directory is shown resolved');
+
+      const saved = await post(editor.base, '/amnezia', {amnezia_dir: 'etc/amnezia'});
+      assert.match(await saved.text(), /Путь применён/);
+      assert.equal(editor.model.body().amnezia_dir, 'etc/amnezia');
+      assert.equal(
+        editor.model.amneziaDir,
+        path.join(editor.dir, 'etc', 'amnezia'),
+        'a relative path resolves against the settings directory',
+      );
+
+      // An empty field CLEARS the key instead of storing an empty string.
+      await post(editor.base, '/amnezia', {amnezia_dir: ''});
+      assert.equal(editor.model.body().amnezia_dir, undefined);
+      assert.equal(editor.model.amneziaDir, editor.envDir, 'the environment takes over again');
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('the write and the start-up fuse read the DOCUMENT directory', async () => {
+    const editor = await startEditor({
+      document: {amnezia_dir: 'tunnels'},
+      sudoers: ['hmn-graz4'],
+    });
+    try {
+      const docDir = path.join(editor.dir, 'tunnels');
+
+      await post(editor.base, '/tunnels', GRAZ_MARK);
+      assert.ok(fs.existsSync(path.join(docDir, 'hmn-graz4.conf')), 'written where the document says');
+      assert.equal(
+        fs.existsSync(path.join(editor.envDir, 'hmn-graz4.conf')),
+        false,
+        'the environment directory is ignored while the document names one',
+      );
+
+      // Someone drops a raw provider config over the applied file: the fuse must
+      // read the document directory and refuse, naming the exact path.
+      fs.writeFileSync(path.join(docDir, 'hmn-graz4.conf'), '[Interface]\nPrivateKey = x\n');
+      const html = await (
+        await post(editor.base, '/tunnel/toggle', {name: 'hmn-graz4', up: '1'})
+      ).text();
+
+      assert.match(html, /Table = off/);
+      assert.match(html, pattern(path.join(docDir, 'hmn-graz4.conf')));
+    } finally {
+      await editor.close();
+    }
+  });
+});
+
+describe('regenerating the enabled tunnel configs (NEW)', () => {
+  test('it rewrites the applied files, and an unchanged rerun does not dirty the model', async () => {
+    const editor = await startEditor();
+    try {
+      await post(editor.base, '/tunnels', GRAZ_MARK);
+      await post(editor.base, '/save', {panel: 'amnezia'});
+      assert.equal(editor.model.dirty, false);
+
+      const target = path.join(editor.model.amneziaDir, 'hmn-graz4.conf');
+      fs.writeFileSync(target, 'damaged\n');
+
+      const html = await (await post(editor.base, '/amnezia/regenerate', {})).text();
+      assert.match(html, /Туннелей: 1, изменено: 1, ошибок: 0/);
+      assert.equal(
+        fs.readFileSync(target, 'utf8'),
+        fs.readFileSync(NORMALIZED_CONF, 'utf8'),
+        'the normaliser output is restored byte for byte',
+      );
+      assert.equal(
+        editor.model.dirty,
+        false,
+        'rewriting a file the document already describes is not a model change',
+      );
+
+      const again = await (await post(editor.base, '/amnezia/regenerate', {})).text();
+      assert.match(again, /изменено: 0/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('a source that disappeared is reported, and the other tunnels still run', async () => {
+    const editor = await startEditor({secondConf: true});
+    try {
+      await post(editor.base, '/tunnels', GRAZ_MARK);
+      await post(editor.base, '/tunnels', {
+        provider: 'hidemyname',
+        file: 'AustriaViennaS6.conf',
+        name: 'hidemyname-AustriaViennaS6',
+        interface: 'hmn-wien',
+        needed: '1',
+      });
+      await post(editor.base, '/save', {panel: 'amnezia'});
+
+      const graz = path.join(editor.model.amneziaDir, 'hmn-graz4.conf');
+      fs.writeFileSync(graz, 'damaged\n');
+      fs.rmSync(path.join(editor.dir, 'sources', 'hidemyname', 'AustriaViennaS6.conf'));
+
+      const html = await (await post(editor.base, '/amnezia/regenerate', {})).text();
+
+      assert.match(html, /Туннелей: 2, изменено: 1, ошибок: 1/);
+      assert.match(html, /AustriaViennaS6\.conf/, 'the failure names the missing source');
+      assert.equal(
+        fs.readFileSync(graz, 'utf8'),
+        fs.readFileSync(NORMALIZED_CONF, 'utf8'),
+        'the healthy tunnel is rewritten anyway',
+      );
+
+      const mutating = systemctlCalls(editor).filter((argv) =>
+        argv.some((word) => ['restart', 'enable', 'disable', 'start', 'stop'].includes(word)),
+      );
+      assert.deepEqual(mutating, [], 'regeneration never starts or stops a unit');
+    } finally {
+      await editor.close();
+    }
+  });
+});

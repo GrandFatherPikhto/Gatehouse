@@ -597,7 +597,7 @@ describe('watchdog over HTTP', () => {
     });
     try {
       // A real config on disk, so a stray write would be visible.
-      await post(editor.base, '/save', {panel: 'output'});
+      await post(editor.base, '/save', {panel: 'singbox'});
       await post(editor.base, '/generate', {});
 
       const webuiBefore = digest(editor.settingsFile);

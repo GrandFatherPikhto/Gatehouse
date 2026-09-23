@@ -1,16 +1,15 @@
 <%# Dispatcher: one include per panel kind. Keeping the switch here means the
     route handlers never build markup and never pick a template. %>
 <% switch (panel.kind) {
-     case 'general': %><%- include('general', {panel}) %><% break;
+     case 'singbox': %><%- include('singbox', {panel}) %><% break;
+     case 'amnezia': %><%- include('amnezia', {panel}) %><% break;
      case 'providers': %><%- include('providers', {panel}) %><% break;
      case 'provider': %><%- include('provider', {panel}) %><% break;
-     case 'output': %><%- include('output', {panel}) %><% break;
      case 'proxies': %><%- include('proxies', {panel}) %><% break;
      case 'proxy': %><%- include('proxy', {panel}) %><% break;
      case 'routes': %><%- include('routes', {panel}) %><% break;
      case 'route': %><%- include('route', {panel}) %><% break;
      case 'tunnel': %><%- include('tunnel', {panel}) %><% break;
-     case 'dns': %><%- include('dns', {panel}) %><% break;
      case 'system': %><%- include('system', {panel}) %><% break;
      case 'journal': %><%- include('journal', {panel}) %><% break;
      case 'tests': %><%- include('tests', {panel}) %><% break;

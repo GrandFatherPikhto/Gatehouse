@@ -6,13 +6,19 @@
 <ul class="tree">
   <% for (const node of tree.children) { %>
     <li class="<%= node.stale ? 'stale' : '' %>">
-      <a href="<%= '/panel/' + encodeURIComponent(node.key) %>"
-         hx-get="/panel/<%= encodeURIComponent(node.key) %>"
-         hx-target="#panel"
-         hx-swap="innerHTML"
-         hx-push-url="true"
-         <%- node.full ? `title="${node.full}"` : '' %>
-         class="<%= node.key === key ? 'active' : '' %>"><%= node.title %></a>
+      <%# A GROUP node has no page of its own: it is a heading over its children,
+          so it is drawn as a label and never as a link that would lead nowhere. %>
+      <% if (node.group) { %>
+        <span class="group"<%- node.full ? ` title="${node.full}"` : '' %>><%= node.title %></span>
+      <% } else { %>
+        <a href="<%= '/panel/' + encodeURIComponent(node.key) %>"
+           hx-get="/panel/<%= encodeURIComponent(node.key) %>"
+           hx-target="#panel"
+           hx-swap="innerHTML"
+           hx-push-url="true"
+           <%- node.full ? `title="${node.full}"` : '' %>
+           class="<%= node.key === key ? 'active' : '' %>"><%= node.title %></a>
+      <% } %>
       <% if (node.children.length > 0) { %>
         <ul>
           <% for (const child of node.children) { %>
