@@ -11,8 +11,5 @@
      case 'route': %><%- include('route', {panel}) %><% break;
      case 'tunnel': %><%- include('tunnel', {panel}) %><% break;
      case 'system': %><%- include('system', {panel}) %><% break;
-     case 'journal': %><%- include('journal', {panel}) %><% break;
-     case 'tests': %><%- include('tests', {panel}) %><% break;
-     case 'watchdog': %><%- include('watchdog', {panel}) %><% break;
      default: %><p class="error">Неизвестный раздел '<%= panel.kind %>'</p><% break;
    } %>

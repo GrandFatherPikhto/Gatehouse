@@ -346,16 +346,10 @@ export function treeSpec(options = {}) {
       }),
       node('proxies', `Прокси (${proxyNodes.length})`, 'proxies', {children: proxyNodes}),
       node('routes', `Маршруты (${routeNodes.length})`, 'routes', {children: routeNodes}),
-      // The host layer: check, restart, rollback under "Система", plus the live
-      // journal and the outbound test. None of it edits `webui.json`, so the
-      // nodes carry no stale mark.
-      node('system', 'Система', 'system', {
-        children: [
-          node('journal', 'Журнал', 'journal'),
-          node('tests', 'Тест серверов', 'tests'),
-          node('watchdog', 'Сторож', 'watchdog'),
-        ],
-      }),
+      // The host layer. It edits nothing, so the node carries no stale mark, and
+      // its former children — journal, server test, watchdog — are TABS of this
+      // one panel now (`system:singbox`, `system:amnezia`, `system:watchdog`).
+      node('system', 'Система', 'system'),
     ],
   });
 }

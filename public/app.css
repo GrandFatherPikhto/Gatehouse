@@ -64,6 +64,25 @@ h3 { margin: 20px 0 8px; font-size: 15px; }
 
 /* --- tree ---------------------------------------------------------------- */
 
+/* Tabs of the «Система» panel. Each tab is a link, so it works without script. */
+nav.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 12px;
+  border-bottom: 1px solid #d7dde5;
+}
+nav.tabs a.tab {
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  text-decoration: none;
+  color: inherit;
+}
+nav.tabs a.tab:hover { background: #eef2f7; }
+nav.tabs a.tab.active { border-color: #d7dde5; background: #fff; font-weight: 600; }
+
 ul.tree, ul.tree ul { list-style: none; margin: 0; padding-left: 0; }
 ul.tree ul { padding-left: 14px; }
 ul.tree li { margin: 2px 0; }

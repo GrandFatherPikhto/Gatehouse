@@ -6,7 +6,8 @@
 <% const state = panel.state; %>
 <% const config = panel.config; %>
 <% const api = panel.api; %>
-<h2><%= panel.title %></h2>
+<%# The heading is rendered by the «Система» container: this partial is its
+    «Сторож» tab now. %>
 
 <p class="hint">
   Сторож проверяет связь <strong>через сам инбаунд</strong> прокси — ту же дорогу,
@@ -24,6 +25,9 @@
 </p>
 
 <form id="panel-form" class="form" hx-post="/watchdog" hx-target="#panel" hx-swap="innerHTML" method="post" action="/watchdog">
+  <%# Keeps the tab: the response names the panel it should render, and without the
+      field the owner would land on the first tab after applying the settings. %>
+  <input type="hidden" name="panel" value="<%= panel.key %>">
   <fieldset>
     <legend>Сторож</legend>
     <label class="check">

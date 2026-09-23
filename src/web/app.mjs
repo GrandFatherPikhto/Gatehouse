@@ -343,7 +343,7 @@ export function createApp(options = {}) {
           canRestart: permission.canRestart === true,
           canToggle: permission.canToggle === true,
           missingLines: permission.missingLines ?? [],
-          journalUrl: `/panel/journal?unit=${encodeURIComponent(unit)}&level=warning`,
+          journalUrl: `/panel/${encodeURIComponent('system:singbox')}?unit=${encodeURIComponent(unit)}&level=warning`,
         };
       }),
     }));
@@ -587,7 +587,13 @@ export function createApp(options = {}) {
    */
   async function panelExtra(key, req) {
     const kind = typeof key === 'string' && key.includes(':') ? key.slice(0, key.indexOf(':')) : key;
-    if (kind === 'journal') return {journal: await journalSnapshot(req)};
+    if (kind === 'system') {
+      // The journal is a section of the SING-BOX tab, so only that tab pays for a
+      // `journalctl` call; the other tabs render without touching the host.
+      const tab =
+        typeof key === 'string' && key.includes(':') ? key.slice(key.indexOf(':') + 1) : 'singbox';
+      return tab === 'singbox' ? {journal: await journalSnapshot(req)} : {};
+    }
     if (kind === 'tunnel') {
       // The preview reads a file, so it is built here, in the route, and handed
       // to the panel builder, which stays pure. A key without `provider/file`
@@ -1165,7 +1171,7 @@ export function createApp(options = {}) {
 
   app.post(
     '/check',
-    mutation('system', async () => {
+    mutation('system:singbox', async () => {
       const configPath = model.resolvedOutputPath();
       if (!model.configExists()) {
         throw new ConfigError(
@@ -1188,7 +1194,7 @@ export function createApp(options = {}) {
       state.lastRestart = null;
 
       return {
-        key: 'system',
+        key: 'system:singbox',
         notice: result.ok
           ? 'Схема принята: sing-box check прошёл (exit=0). Это проверка декодирования, ' +
             'а не доказательство корректности — дубль порта, чужой тег и опечатку в dns.final ' +
@@ -1200,7 +1206,7 @@ export function createApp(options = {}) {
 
   app.post(
     '/restart',
-    mutation('system', async () => {
+    mutation('system:singbox', async () => {
       if (state.lastCheck === null || !state.lastCheck.ok) {
         throw new ConfigError(
           'перезапуск не предлагается: сначала успешная проверка config.json',
@@ -1219,7 +1225,7 @@ export function createApp(options = {}) {
       };
 
       return {
-        key: 'system',
+        key: 'system:singbox',
         notice: result.ok
           ? 'sing-box перезапущен. Все текущие соединения оборвались — как и предупреждали.'
           : `Перезапуск не удался: ${result.stderr.trim() || result.error || 'без вывода'}`,
@@ -1229,7 +1235,7 @@ export function createApp(options = {}) {
 
   app.post(
     '/rollback',
-    mutation('system', async () => {
+    mutation('system:singbox', async () => {
       const configPath = model.resolvedOutputPath();
       const restored = restoreLatestConfig(model.stateDir, configPath);
       if (restored === null) {
@@ -1253,7 +1259,7 @@ export function createApp(options = {}) {
 
       const from = path.basename(restored.from);
       return {
-        key: 'system',
+        key: 'system:singbox',
         notice: result.ok
           ? `Восстановлен ${from} и sing-box перезапущен.`
           : `Конфиг восстановлен из ${from}, но перезапуск не удался: ` +
@@ -1273,7 +1279,7 @@ export function createApp(options = {}) {
 
   app.post(
     '/tunnel/toggle',
-    mutation('system', async (req) => {
+    mutation('system:amnezia', async (req) => {
       const name = assertKnownTunnel(req.body.name);
       const runtime = state.tunnels[name] ?? {applied: false};
       if (runtime.applied !== true) {
@@ -1296,7 +1302,7 @@ export function createApp(options = {}) {
       await refreshTunnelStates();
 
       return {
-        key: 'system',
+        key: 'system:amnezia',
         notice: result.ok
           ? `Туннель '${name}' ${
               up ? 'поднят и включён в автозагрузку' : 'опущен и убран из автозагрузки'
@@ -1309,7 +1315,7 @@ export function createApp(options = {}) {
 
   app.post(
     '/tunnel/restart',
-    mutation('system', async (req) => {
+    mutation('system:amnezia', async (req) => {
       const name = assertKnownTunnel(req.body.name);
       const rights = tunnelRights()[name];
       if (rights?.canRestart !== true) {
@@ -1323,7 +1329,7 @@ export function createApp(options = {}) {
       await refreshTunnelStates();
 
       return {
-        key: 'system',
+        key: 'system:amnezia',
         notice: result.ok
           ? `Туннель '${name}' перезапущен. Соединения через него оборвались — как и предупреждали.`
           : `Перезапуск туннеля '${name}' не удался: ` +
@@ -1336,8 +1342,8 @@ export function createApp(options = {}) {
   // Journal
   // ------------------------------------------------------------------
   //
-  // The journal is a snapshot, served by `/panel/journal`: the panel route reads
-  // `journalctl` once and renders the last lines. There is deliberately no live
+  // The journal is a snapshot, served by the «Sing-box» tab of «Система»: that
+  // route reads `journalctl` once and renders the last lines. There is no live
   // SSE stream — it needed a counter, a cap and a child killed on
   // `req.on('close')`, and the real scenario is "show me why", not "watch the
   // lines".
@@ -1414,10 +1420,12 @@ export function createApp(options = {}) {
 
   app.post(
     '/watchdog',
-    mutation('watchdog', (req) => {
-      applyEditForm('watchdog', req);
+    mutation('system:watchdog', (req) => {
+      applyEditForm('system', req);
       return {
-        key: 'watchdog',
+        // The form carries the panel key, so applying the settings keeps the owner
+        // on the tab they were editing instead of dropping them on the first one.
+        key: panelFromBody(req, 'system:watchdog'),
         notice: 'Настройки сторожа применены — не забудьте сохранить',
       };
     }),
@@ -1425,10 +1433,10 @@ export function createApp(options = {}) {
 
   app.post(
     '/watchdog/check',
-    mutation('watchdog', async () => {
+    mutation('system:watchdog', async () => {
       const run = await watchdog.checkAll();
       return {
-        key: 'watchdog',
+        key: 'system:watchdog',
         notice:
           run.skipped === 'disabled'
             ? 'Сторож выключен общим рубильником: проверок не было'
@@ -1439,9 +1447,9 @@ export function createApp(options = {}) {
 
   app.post(
     '/watchdog/reset',
-    mutation('watchdog', () => {
+    mutation('system:watchdog', () => {
       watchdog.reset();
-      return {key: 'watchdog', notice: 'Состояние сторожа сброшено'};
+      return {key: 'system:watchdog', notice: 'Состояние сторожа сброшено'};
     }),
   );
 

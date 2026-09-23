@@ -236,7 +236,7 @@ describe('«Сохранить» applies the open edit form', () => {
         log_level: 'info',
       });
 
-      const response = await post(editor.base, '/save', {panel: 'journal'});
+      const response = await post(editor.base, '/save', {panel: 'system:singbox'});
 
       assert.match(await response.text(), /Сохранено/);
       const document = JSON.parse(fs.readFileSync(editor.settingsFile, 'utf8'));
@@ -290,11 +290,12 @@ describe('the header button is bound to the edit form', () => {
   test('a panel without an edit form keeps the standalone save form', async () => {
     const editor = await startEditor();
     try {
-      // `journal` has action buttons only and therefore no edit form to bind.
-      const html = await (await fetch(`${editor.base}/panel/journal`)).text();
+      // The sing-box tab has action buttons and the journal refresh form only, so
+      // there is no edit form for the header button to bind to.
+      const html = await (await fetch(`${editor.base}/panel/system:singbox`)).text();
 
       assert.doesNotMatch(html, /hx-include="#panel-form"/);
-      assert.match(html, /<input type="hidden" name="panel" value="journal">/);
+      assert.match(html, /<input type="hidden" name="panel" value="system:singbox">/);
     } finally {
       await editor.close();
     }

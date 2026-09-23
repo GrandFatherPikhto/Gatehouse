@@ -2,16 +2,16 @@
     на сервере. Строк не больше `panel.lines`; уровень — минимальный, всё, что
     важнее него, остаётся. Снимок осмысленно звать из места поломки — «покажи
     почему», а не «слежу за строками». %>
-<h2><%= panel.title %></h2>
-
+<%# The heading is rendered by the «Система» container: this partial is one section
+    of its sing-box tab now. %>
 <p class="hint">
   Юнит: <code><%= panel.unit %></code>. Читается без привилегий (нужно членство в
   группе <code>adm</code>). Сейчас это снимок: последние
   <strong><%= panel.lines %></strong> строк одним запросом, без живого потока.
 </p>
 
-<form method="get" action="/panel/journal"
-      hx-get="/panel/journal" hx-target="#panel" hx-swap="innerHTML">
+<form method="get" action="/panel/system:singbox"
+      hx-get="/panel/system:singbox" hx-target="#panel" hx-swap="innerHTML">
   <label for="journal-unit">Юнит</label>
   <input id="journal-unit" name="unit"
          value="<%= panel.snapshot ? panel.snapshot.unit : panel.unit %>">

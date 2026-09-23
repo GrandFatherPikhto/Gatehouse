@@ -1,199 +1,225 @@
-<%# Система: проверка, перезапуск и откат демона ПЛЮС жизненный цикл туннелей.
-    Порядок у демона жёсткий и виден на экране: сгенерировать → проверить → и
-    только потом предлагается перезапуск. У юнита стоит Restart=always, поэтому
-    неподнявшийся конфиг даёт вечный цикл перезапусков и весь трафик в доме
-    встаёт. Кнопка перезапуска не рисуется, пока проверка не прошла.
-    Туннели сгруппированы по провайдеру: состояние читается из systemd, галочка
-    одна и двигает обе оси сразу, а без правила sudoers кнопок нет — вместо них
-    готовые строки для вставки. %>
+<%# «Система»: три вкладки. «Sing-box» — проверка схемы, перезапуск демона, откат,
+    журнал и тест серверов; «Amnezia» — жизненный цикл туннелей; «Сторож» — его
+    настройки, состояние и история.
+    Вкладка выражается КЛЮЧОМ панели (`system:singbox`), то есть это обычная ссылка:
+    адрес вкладки можно сохранить, а без JavaScript она просто открывается переходом.
+    У вкладок Sing-box и Amnezia формы правки нет, у «Сторожа» — есть, и `editForm`
+    истинно только на ней, чтобы кнопка «Сохранить» в шапке не ссылалась на форму,
+    которой на странице нет. %>
 <h2><%= panel.title %></h2>
 
-<p class="hint">
-  Проверяется файл на диске: <code><%= panel.configPath %></code>.
-  <% if (!panel.configExists) { %>
-    <strong>Файла ещё нет</strong> — сначала «Сгенерировать» на панели «Вывод».
+<nav class="tabs">
+  <% for (const tab of panel.tabs) { %>
+    <% const active = tab.name === panel.tab; %>
+    <a href="/panel/<%= encodeURIComponent(tab.key) %>"
+       hx-get="/panel/<%= encodeURIComponent(tab.key) %>"
+       hx-target="#panel" hx-swap="innerHTML" hx-push-url="true"
+       class="tab<%= active ? ' active' : '' %>"<%= active ? ' aria-current="page"' : '' %>><%= tab.title %></a>
   <% } %>
-</p>
+</nav>
 
-<h3>1. Проверка схемы</h3>
-<p class="hint">
-  <code>sing-box check</code> проверяет <strong>только декодирование</strong>.
-  Проверено на живом sing-box 1.14: неизвестный тип инбаунда и лишние поля он
-  ловит, а дубль <code>listen_port</code>, ссылку на несуществующий тег аутбаунда
-  и опечатку в <code>dns.final</code> пропускает с <code>exit=0</code>. Поэтому
-  надпись здесь — «схема принята», а не «конфиг корректен».
-</p>
-<form hx-post="/check" hx-target="#panel" hx-swap="innerHTML" method="post" action="/check">
-  <button type="submit">Проверить config.json</button>
-</form>
+<% if (panel.tab === 'amnezia') { %>
 
-<% if (panel.lastCheck) { %>
-  <p class="<%= panel.lastCheck.ok ? 'notice' : 'error' %>">
-    <% if (panel.lastCheck.ok) { %>
-      Схема принята (exit=<%= panel.lastCheck.code %>), проверено <%= panel.lastCheck.at %>.
-    <% } else { %>
-      Проверка не прошла (exit=<%= panel.lastCheck.code %>)<%= panel.lastCheck.timedOut ? ', превышен таймаут' : '' %>.
-    <% } %>
-  </p>
-  <% if (panel.lastCheck.stdout) { %>
-    <h4>stdout</h4>
-    <pre class="output"><%= panel.lastCheck.stdout %></pre>
-  <% } %>
-  <% if (panel.lastCheck.stderr) { %>
-    <h4>stderr</h4>
-    <pre class="output"><%= panel.lastCheck.stderr %></pre>
-  <% } %>
-  <% if (panel.lastCheck.error) { %>
-    <p class="error"><%= panel.lastCheck.error %></p>
-  <% } %>
-<% } %>
-
-<h3>2. Перезапуск демона</h3>
-<% if (panel.canRestart) { %>
-  <p class="hint">
-    Юнит: <code><%= panel.unit %></code>. Перезапуск выполняется через
-    <code>sudo -n systemctl restart <%= panel.unit %></code> по единственному
-    правилу sudoers, выданному этому сервису.
-  </p>
-  <form hx-post="/restart" hx-target="#panel" hx-swap="innerHTML" method="post" action="/restart">
-    <button type="submit" class="danger"
-            hx-confirm="Перезапустить sing-box? ВСЕ текущие соединения в доме оборвутся, включая это.">Перезапустить sing-box</button>
-  </form>
-<% } else { %>
-  <p class="hint">
-    Кнопка перезапуска появится только после успешной проверки текущего
-    <code>config.json</code>. Так устроено намеренно: неподнявшийся конфиг при
-    <code>Restart=always</code> означает вечный цикл перезапусков.
-  </p>
-<% } %>
-
-<% if (panel.lastRestart) { %>
-  <p class="<%= panel.lastRestart.ok ? 'notice' : 'error' %>">
-    <% if (panel.lastRestart.ok) { %>
-      Последний перезапуск: успешен (exit=<%= panel.lastRestart.code %>), <%= panel.lastRestart.at %>.
-    <% } else { %>
-      Последний перезапуск: не удался (exit=<%= panel.lastRestart.code %>), <%= panel.lastRestart.at %>.
-    <% } %>
-  </p>
-  <% if (panel.lastRestart.stderr) { %>
-    <pre class="output"><%= panel.lastRestart.stderr %></pre>
-  <% } %>
-  <% if (panel.lastRestart.error) { %>
-    <p class="error"><%= panel.lastRestart.error %></p>
-  <% } %>
-  <%# «Показать почему» стоит там, где поломка замечена, а не в отдельном
-      разделе: снимок последних строк открывается одним переходом. %>
-  <% if (!panel.lastRestart.ok) { %>
+  <h3>Туннели</h3>
+  <% if (panel.tunnels.length === 0) { %>
     <p class="hint">
-      <a href="/panel/journal?unit=<%= encodeURIComponent(panel.unit) %>&level=warning">Показать журнал</a>
-      — последние строки юнита, чтобы понять, почему демон не поднялся.
+      Ни один туннель не включён. Откройте папку-источник на вкладке «Провайдеры» и
+      поставьте галочку «включить» у её <code>.conf</code> — строка появится здесь.
+    </p>
+  <% } else { %>
+    <p class="hint">
+      Состояние читается из systemd без привилегий: работает сейчас и поднимается
+      при загрузке — две разные оси. Галочка одна и двигает обе
+      (<code>enable --now</code> / <code>disable --now</code>); если оси всё же
+      разошлись, это написано словами, а не спрятано. Через туннель
+      <code>de</code> идёт связь с роутером — перезапуск оборвёт её.
+    </p>
+    <% for (const group of panel.tunnels) { %>
+      <h4><%= group.provider %></h4>
+      <table class="list">
+        <thead>
+          <tr><th>туннель</th><th>состояние</th><th>поднят</th><th>перезапуск</th><th>прокси</th><th>журнал</th></tr>
+        </thead>
+        <tbody>
+          <% for (const tunnel of group.tunnels) { %>
+            <tr class="<%= tunnel.applied && (tunnel.active !== tunnel.enabled) ? 'stale' : '' %>">
+              <td>
+                <% if (tunnel.label) { %><strong><%= tunnel.label %></strong><br><% } %>
+                <code><%= tunnel.interface %></code><br><span class="hint"><%= tunnel.unit %></span>
+              </td>
+              <td>
+                <% if (!tunnel.applied) { %>
+                  конфиг не применён
+                <% } else { %>
+                  <%= tunnel.active ? 'работает' : 'остановлен' %>,
+                  <%= tunnel.enabled ? 'в автозагрузке' : 'не в автозагрузке' %>
+                  <% if (tunnel.divergence) { %>
+                    <br><span class="error"><%= tunnel.divergence %></span>
+                  <% } %>
+                <% } %>
+              </td>
+              <td>
+                <% if (!tunnel.applied) { %>
+                  —
+                <% } else if (tunnel.canToggle) { %>
+                  <form class="inline" hx-post="/tunnel/toggle" hx-target="#panel" hx-swap="innerHTML" method="post" action="/tunnel/toggle">
+                    <input type="hidden" name="name" value="<%= tunnel.interface %>">
+                    <label class="check">
+                      <input type="checkbox" name="up" value="1"
+                             hx-post="/tunnel/toggle" hx-trigger="change"
+                             hx-target="#panel" hx-swap="innerHTML" hx-include="closest form"
+                             <%= tunnel.active && tunnel.enabled ? 'checked' : '' %>>
+                      поднят и в автозагрузке
+                    </label>
+                    <button type="submit"><%= tunnel.active && tunnel.enabled ? 'Опустить' : 'Поднять' %></button>
+                  </form>
+                <% } else { %>
+                  <span class="hint">нет права sudoers — добавьте строки:</span>
+                  <pre class="output"><%= tunnel.missingLines.join('\n') %></pre>
+                <% } %>
+              </td>
+              <td>
+                <% if (tunnel.canRestart) { %>
+                  <form class="inline" hx-post="/tunnel/restart" hx-target="#panel" hx-swap="innerHTML" method="post" action="/tunnel/restart">
+                    <input type="hidden" name="name" value="<%= tunnel.interface %>">
+                    <button type="submit" class="danger"
+                            hx-confirm="Перезапустить туннель '<%= tunnel.interface %>'?<%= tunnel.usedBy.length > 0 ? ` Прокси '${tunnel.usedBy.join(', ')}' работают через него и оборвутся.` : '' %><%= tunnel.interface === 'de' ? ' Через этот туннель идёт ваш доступ к роутеру — вы потеряете связь.' : '' %>">Перезапустить</button>
+                  </form>
+                <% } else { %>
+                  <span class="hint">нет правила sudoers — добавьте строку:</span>
+                  <pre class="output"><%= tunnel.missingLines.filter((line) => line.includes('restart')).join('\n') %></pre>
+                <% } %>
+              </td>
+              <td>
+                <% if (tunnel.usedBy.length === 0) { %>
+                  —
+                <% } else { %>
+                  <% for (const tag of tunnel.usedBy) { %><code><%= tag %></code> <% } %>
+                <% } %>
+              </td>
+              <td><a href="<%= tunnel.journalUrl %>">Журнал</a></td>
+            </tr>
+          <% } %>
+        </tbody>
+      </table>
+    <% } %>
+  <% } %>
+
+<% } else if (panel.tab === 'watchdog') { %>
+
+  <h3>Сторож</h3>
+  <%- include('watchdog', {panel}) %>
+
+<% } else { %>
+
+  <h3>1. Проверка схемы</h3>
+  <p class="hint">
+    Проверяется файл на диске: <code><%= panel.configPath %></code>.
+    <% if (!panel.configExists) { %>
+      <strong>Файла ещё нет</strong> — сначала «Сгенерировать» на панели «Вывод».
+    <% } %>
+  </p>
+  <p class="hint">
+    <code>sing-box check</code> проверяет <strong>только декодирование</strong>.
+    Проверено на живом sing-box 1.14: неизвестный тип инбаунда и лишние поля он
+    ловит, а дубль <code>listen_port</code>, ссылку на несуществующий тег аутбаунда
+    и опечатку в <code>dns.final</code> пропускает с <code>exit=0</code>. Поэтому
+    надпись здесь — «схема принята», а не «конфиг корректен».
+  </p>
+  <form hx-post="/check" hx-target="#panel" hx-swap="innerHTML" method="post" action="/check">
+    <button type="submit">Проверить config.json</button>
+  </form>
+
+  <% if (panel.lastCheck) { %>
+    <p class="<%= panel.lastCheck.ok ? 'notice' : 'error' %>">
+      <% if (panel.lastCheck.ok) { %>
+        Схема принята (exit=<%= panel.lastCheck.code %>), проверено <%= panel.lastCheck.at %>.
+      <% } else { %>
+        Проверка не прошла (exit=<%= panel.lastCheck.code %>)<%= panel.lastCheck.timedOut ? ', превышен таймаут' : '' %>.
+      <% } %>
+    </p>
+    <% if (panel.lastCheck.stdout) { %>
+      <h4>stdout</h4>
+      <pre class="output"><%= panel.lastCheck.stdout %></pre>
+    <% } %>
+    <% if (panel.lastCheck.stderr) { %>
+      <h4>stderr</h4>
+      <pre class="output"><%= panel.lastCheck.stderr %></pre>
+    <% } %>
+    <% if (panel.lastCheck.error) { %>
+      <p class="error"><%= panel.lastCheck.error %></p>
+    <% } %>
+  <% } %>
+
+  <h3>2. Перезапуск демона</h3>
+  <% if (panel.canRestart) { %>
+    <p class="hint">
+      Юнит: <code><%= panel.unit %></code>. Перезапуск выполняется через
+      <code>sudo -n systemctl restart <%= panel.unit %></code> по единственному
+      правилу sudoers, выданному этому сервису.
+    </p>
+    <form hx-post="/restart" hx-target="#panel" hx-swap="innerHTML" method="post" action="/restart">
+      <button type="submit" class="danger"
+              hx-confirm="Перезапустить sing-box? ВСЕ текущие соединения в доме оборвутся, включая это.">Перезапустить sing-box</button>
+    </form>
+  <% } else { %>
+    <p class="hint">
+      Кнопка перезапуска появится только после успешной проверки текущего
+      <code>config.json</code>. Так устроено намеренно: неподнявшийся конфиг при
+      <code>Restart=always</code> означает вечный цикл перезапусков.
     </p>
   <% } %>
-<% } %>
 
-<h3>3. Откат предыдущего конфига</h3>
-<p class="hint">
-  Перед каждой генерацией предыдущий <code>config.json</code> копируется в
-  каталог состояния (<code>snapshots/config-<метка>.json</code>, хранятся
-  последние 10). Откат возвращает файл побайтово и сразу перезапускает демон —
-  чинить конфиг руками в аварии, когда весь дом без сети, не приходится.
-</p>
-<form hx-post="/rollback" hx-target="#panel" hx-swap="innerHTML" method="post" action="/rollback">
-  <button type="submit" class="danger" <%= panel.snapshots.length === 0 ? 'disabled' : '' %>
-          hx-confirm="Вернуть предыдущий config.json и перезапустить sing-box? Текущие соединения оборвутся.">Вернуть предыдущий конфиг и перезапустить</button>
-</form>
-
-<% if (panel.snapshots.length === 0) { %>
-  <p class="hint">Снапшотов ещё нет: они появятся после первой генерации поверх существующего файла.</p>
-<% } else { %>
-  <ul class="list-plain">
-    <% for (const snapshot of panel.snapshots.slice(-5).reverse()) { %>
-      <li><code><%= snapshot.file %></code></li>
+  <% if (panel.lastRestart) { %>
+    <p class="<%= panel.lastRestart.ok ? 'notice' : 'error' %>">
+      <% if (panel.lastRestart.ok) { %>
+        Последний перезапуск: успешен (exit=<%= panel.lastRestart.code %>), <%= panel.lastRestart.at %>.
+      <% } else { %>
+        Последний перезапуск: не удался (exit=<%= panel.lastRestart.code %>), <%= panel.lastRestart.at %>.
+      <% } %>
+    </p>
+    <% if (panel.lastRestart.stderr) { %>
+      <pre class="output"><%= panel.lastRestart.stderr %></pre>
     <% } %>
-  </ul>
-<% } %>
-
-<h3>4. Туннели</h3>
-<% if (panel.tunnels.length === 0) { %>
-  <p class="hint">
-    Ни один туннель не включён. Откройте папку-источник на вкладке «Провайдеры» и
-    поставьте галочку «включить» у её <code>.conf</code> — строка появится здесь.
-  </p>
-<% } else { %>
-  <p class="hint">
-    Состояние читается из systemd без привилегий: работает сейчас и поднимается
-    при загрузке — две разные оси. Галочка одна и двигает обе
-    (<code>enable --now</code> / <code>disable --now</code>); если оси всё же
-    разошлись, это написано словами, а не спрятано. Через туннель
-    <code>de</code> идёт связь с роутером — перезапуск оборвёт её.
-  </p>
-  <% for (const group of panel.tunnels) { %>
-    <h4><%= group.provider %></h4>
-    <table class="list">
-      <thead>
-        <tr><th>туннель</th><th>состояние</th><th>поднят</th><th>перезапуск</th><th>прокси</th><th>журнал</th></tr>
-      </thead>
-      <tbody>
-        <% for (const tunnel of group.tunnels) { %>
-          <tr class="<%= tunnel.applied && (tunnel.active !== tunnel.enabled) ? 'stale' : '' %>">
-            <td>
-              <% if (tunnel.label) { %><strong><%= tunnel.label %></strong><br><% } %>
-              <code><%= tunnel.interface %></code><br><span class="hint"><%= tunnel.unit %></span>
-            </td>
-            <td>
-              <% if (!tunnel.applied) { %>
-                конфиг не применён
-              <% } else { %>
-                <%= tunnel.active ? 'работает' : 'остановлен' %>,
-                <%= tunnel.enabled ? 'в автозагрузке' : 'не в автозагрузке' %>
-                <% if (tunnel.divergence) { %>
-                  <br><span class="error"><%= tunnel.divergence %></span>
-                <% } %>
-              <% } %>
-            </td>
-            <td>
-              <% if (!tunnel.applied) { %>
-                —
-              <% } else if (tunnel.canToggle) { %>
-                <form class="inline" hx-post="/tunnel/toggle" hx-target="#panel" hx-swap="innerHTML" method="post" action="/tunnel/toggle">
-                  <input type="hidden" name="name" value="<%= tunnel.interface %>">
-                  <label class="check">
-                    <input type="checkbox" name="up" value="1"
-                           hx-post="/tunnel/toggle" hx-trigger="change"
-                           hx-target="#panel" hx-swap="innerHTML" hx-include="closest form"
-                           <%= tunnel.active && tunnel.enabled ? 'checked' : '' %>>
-                    поднят и в автозагрузке
-                  </label>
-                  <button type="submit"><%= tunnel.active && tunnel.enabled ? 'Опустить' : 'Поднять' %></button>
-                </form>
-              <% } else { %>
-                <span class="hint">нет права sudoers — добавьте строки:</span>
-                <pre class="output"><%= tunnel.missingLines.join('\n') %></pre>
-              <% } %>
-            </td>
-            <td>
-              <% if (tunnel.canRestart) { %>
-                <form class="inline" hx-post="/tunnel/restart" hx-target="#panel" hx-swap="innerHTML" method="post" action="/tunnel/restart">
-                  <input type="hidden" name="name" value="<%= tunnel.interface %>">
-                  <button type="submit" class="danger"
-                          hx-confirm="Перезапустить туннель '<%= tunnel.interface %>'?<%= tunnel.usedBy.length > 0 ? ` Прокси '${tunnel.usedBy.join(', ')}' работают через него и оборвутся.` : '' %><%= tunnel.interface === 'de' ? ' Через этот туннель идёт ваш доступ к роутеру — вы потеряете связь.' : '' %>">Перезапустить</button>
-                </form>
-              <% } else { %>
-                <span class="hint">нет правила sudoers — добавьте строку:</span>
-                <pre class="output"><%= tunnel.missingLines.filter((line) => line.includes('restart')).join('\n') %></pre>
-              <% } %>
-            </td>
-            <td>
-              <% if (tunnel.usedBy.length === 0) { %>
-                —
-              <% } else { %>
-                <% for (const tag of tunnel.usedBy) { %><code><%= tag %></code> <% } %>
-              <% } %>
-            </td>
-            <td><a href="<%= tunnel.journalUrl %>">Журнал</a></td>
-          </tr>
-        <% } %>
-      </tbody>
-    </table>
+    <% if (panel.lastRestart.error) { %>
+      <p class="error"><%= panel.lastRestart.error %></p>
+    <% } %>
+    <%# «Показать почему» стоит там, где поломка замечена: снимок последних строк
+        открывается одним переходом на первой вкладке, где он и живёт. %>
+    <% if (!panel.lastRestart.ok) { %>
+      <p class="hint">
+        <a href="/panel/<%= encodeURIComponent('system:singbox') %>?unit=<%= encodeURIComponent(panel.unit) %>&level=warning">Показать журнал</a>
+        — последние строки юнита, чтобы понять, почему демон не поднялся.
+      </p>
+    <% } %>
   <% } %>
+
+  <h3>3. Откат предыдущего конфига</h3>
+  <p class="hint">
+    Перед каждой генерацией предыдущий <code>config.json</code> копируется в
+    каталог состояния (<code>snapshots/config-<метка>.json</code>, хранятся
+    последние 10). Откат возвращает файл побайтово и сразу перезапускает демон —
+    чинить конфиг руками в аварии, когда весь дом без сети, не приходится.
+  </p>
+  <form hx-post="/rollback" hx-target="#panel" hx-swap="innerHTML" method="post" action="/rollback">
+    <button type="submit" class="danger" <%= panel.snapshots.length === 0 ? 'disabled' : '' %>
+            hx-confirm="Вернуть предыдущий config.json и перезапустить sing-box? Текущие соединения оборвутся.">Вернуть предыдущий конфиг и перезапустить</button>
+  </form>
+
+  <% if (panel.snapshots.length === 0) { %>
+    <p class="hint">Снапшотов ещё нет: они появятся после первой генерации поверх существующего файла.</p>
+  <% } else { %>
+    <ul class="list-plain">
+      <% for (const snapshot of panel.snapshots.slice(-5).reverse()) { %>
+        <li><code><%= snapshot.file %></code></li>
+      <% } %>
+    </ul>
+  <% } %>
+
+  <h3>Журнал sing-box</h3>
+  <%- include('journal', {panel}) %>
+
+  <h3>Тест серверов</h3>
+  <%- include('tests', {panel}) %>
+
 <% } %>

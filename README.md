@@ -233,13 +233,15 @@ There is deliberately no "open file" box in the UI: a path arriving from the
 browser at a process that writes files is a path traversal waiting to happen.
 
 One tree node per screen: Провайдеры (source folders and their tunnels), Настройки —
-a group with two children, Прокси → tag, Маршруты → name, and under Система: Журнал,
-Тест серверов, Сторож. «Настройки Sing-Box» collects every sing-box setting on one page
-(the old Общие, DNS and Вывод); «Настройки Amnezia» holds the output directory of the
-tunnel configs and the regeneration button. Inside a provider folder every `.conf`
-carries the «включить» switch and its two names; clicking it opens a read-only
-normalisation preview with the policy-routing switch, and «Система» lists the tunnel
-rows grouped by provider.
+a group with two children, Прокси → tag, Маршруты → name, and Система, which is ONE
+panel with three tabs: Sing-box (schema check, daemon restart, rollback, the journal
+and the server test), Amnezia (the tunnel rows grouped by provider) and Сторож. A tab
+is carried by the panel key (`system:amnezia`), so it is a real address that can be
+bookmarked and works without script. «Настройки Sing-Box» collects every sing-box
+setting on one page (the old Общие, DNS and Вывод); «Настройки Amnezia» holds the
+output directory of the tunnel configs and the regeneration button. Inside a provider
+folder every `.conf` carries the «включить» switch and its two names; clicking it opens
+a read-only normalisation preview with the policy-routing switch.
 
 * **`webui.json` is flat; the profile level is gone.** The body used to be split
   between the active profile and `defaults`, but there was exactly one profile and

@@ -281,7 +281,7 @@ describe('journal snapshot', () => {
   test('the panel renders the last lines of the unit', async () => {
     const editor = await startEditor();
     try {
-      const panel = await (await fetch(`${editor.base}/panel/journal`)).text();
+      const panel = await (await fetch(`${editor.base}/panel/system:singbox`)).text();
       assert.match(panel, /Журнал sing-box/);
       assert.match(panel, /tail line 0</, 'the first line of the fake is warning');
       assert.match(panel, /tail line 199</, 'the snapshot reads 200 lines by default');
@@ -293,12 +293,12 @@ describe('journal snapshot', () => {
   test('the minimum level parameter filters the snapshot', async () => {
     const editor = await startEditor();
     try {
-      const all = await (await fetch(`${editor.base}/panel/journal?lines=14&level=debug`)).text();
+      const all = await (await fetch(`${editor.base}/panel/system:singbox?lines=14&level=debug`)).text();
       assert.match(all, /tail line 1</, 'an info line is visible at level debug');
       assert.match(all, /tail line 0</, 'a warning line is visible too');
 
       const warnings = await (
-        await fetch(`${editor.base}/panel/journal?lines=14&level=warning`)
+        await fetch(`${editor.base}/panel/system:singbox?lines=14&level=warning`)
       ).text();
       assert.doesNotMatch(warnings, /tail line 1</, 'the info line is filtered out');
       assert.match(warnings, /tail line 0</, 'the warning line stays');
@@ -312,7 +312,7 @@ describe('journal snapshot', () => {
     const pidFile = path.join(dir, 'journalctl.pid');
     const editor = await startEditor({system: {FAKE_JOURNALCTL_PIDFILE: pidFile}});
     try {
-      const panel = await (await fetch(`${editor.base}/panel/journal`)).text();
+      const panel = await (await fetch(`${editor.base}/panel/system:singbox`)).text();
       assert.match(panel, /tail line 0</);
       // The fake writes its pid only in follow mode (`-f`). The snapshot never
       // passes `-f`, so no pid file appears — and there is no child to kill when
@@ -326,7 +326,7 @@ describe('journal snapshot', () => {
   test('the unit may be overridden in the query', async () => {
     const editor = await startEditor();
     try {
-      const panel = await (await fetch(`${editor.base}/panel/journal?unit=gatehouse-test`)).text();
+      const panel = await (await fetch(`${editor.base}/panel/system:singbox?unit=gatehouse-test`)).text();
       assert.match(panel, /value="gatehouse-test"/);
     } finally {
       await editor.close();
@@ -416,7 +416,7 @@ describe('mass outbound test over SSE', () => {
   test('the tests panel lists the servers of the profile', async () => {
     const editor = await startEditor();
     try {
-      const panel = await (await fetch(`${editor.base}/panel/tests`)).text();
+      const panel = await (await fetch(`${editor.base}/panel/system:singbox`)).text();
       assert.match(panel, /Проверить все серверы профиля \(3\)/);
       assert.match(panel, /Одновременно запускается не больше/);
     } finally {
@@ -432,7 +432,7 @@ describe('system panels render', () => {
       const page = await (await fetch(`${editor.base}/`)).text();
       assert.match(page, /Система/);
 
-      for (const kind of ['system', 'journal', 'tests']) {
+      for (const kind of ['system', 'system:singbox', 'system:amnezia', 'system:watchdog']) {
         const response = await fetch(`${editor.base}/panel/${kind}`);
         assert.equal(response.status, 200, kind);
         assert.ok(!(await response.text()).includes('Неизвестный раздел'), kind);

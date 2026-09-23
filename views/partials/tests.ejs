@@ -3,8 +3,8 @@
     блокировать на это один HTTP-запрос нельзя.
     Тест НЕ трогает работающий демон: `sing-box tools fetch` поднимает свой
     экземпляр, инбаунды не биндит и никого не перезапускает. %>
-<h2><%= panel.title %></h2>
-
+<%# The heading is rendered by the «Система» container: this partial is one section
+    of its sing-box tab now. %>
 <p class="hint">
   Проверяется конфиг: <code><%= panel.configPath %></code>.
   Одновременно запускается не больше <strong><%= panel.concurrency %></strong>

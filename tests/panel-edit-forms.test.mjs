@@ -198,9 +198,9 @@ describe('the markup keeps one form element per panel', () => {
 /** Action forms that carry input fields and are allowed to be neither the edit form. */
 const EDITABLE_ACTION_FORMS = Object.freeze({
   // The journal is a snapshot: its refresh form carries the unit and the level and
-  // GETs the panel again. It is an action form, not an edit form — there is
-  // nothing to save, so it must not be `id="panel-form"`.
-  journal: [{route: '/panel/journal', hidden: null}],
+  // GETs the sing-box tab of «Система» again. It is an action form, not an edit
+  // form — there is nothing to save, so it must not be `id="panel-form"`.
+  system: [{route: '/panel/system:singbox', hidden: null}],
   // The tunnel preview only shows what the normaliser WOULD change: its single
   // policy-routing checkbox posts to its own route and rewrites the file of a
   // marked tunnel. There is no apply, so it is an action form too.

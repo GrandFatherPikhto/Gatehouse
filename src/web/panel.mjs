@@ -22,10 +22,14 @@ export const PANEL_KINDS = Object.freeze([
   'provider',
   'tunnel',
   'system',
-  'journal',
-  'tests',
-  'watchdog',
 ]);
+
+/**
+ * Tabs of the «Система» panel. The tab is carried by the panel KEY
+ * (`system:singbox`), so a tab is a real address: it can be bookmarked, and with
+ * JavaScript off it is simply a link.
+ */
+export const SYSTEM_TABS = Object.freeze(['singbox', 'amnezia', 'watchdog']);
 
 /** Outbounds that exist in every generated config. */
 export const BUILTIN_OUTBOUNDS = Object.freeze(['auto-select', 'direct']);
@@ -47,7 +51,10 @@ const EDIT_FORMS = Object.freeze({
   // this order, and a refusal anywhere rolls the whole panel back.
   singbox: ['/general', '/dns', '/output'],
   amnezia: ['/amnezia'],
-  watchdog: ['/watchdog'],
+  // The watchdog settings are the only edit form of the «Система» panel: it is
+  // applied on its tab, and `buildPanel` reports `editForm: false` on the others
+  // so the header button never binds to a form that is not on the page.
+  system: ['/watchdog'],
 });
 
 /**
@@ -262,15 +269,39 @@ export function buildPanel(model, key, extra = {}) {
 
     case 'system': {
       const lastCheck = system.lastCheck ?? null;
+      // The tab comes from the panel KEY; an unknown or absent one means the first
+      // tab, so `/panel/system` and a stale bookmark never render nothing.
+      const tab = SYSTEM_TABS.includes(name) ? name : SYSTEM_TABS[0];
+      const info = model.sourcesInfo();
+      // Runtime state comes from the Watchdog object, handed in by `app.mjs` as
+      // `extra.watchdog`: the panels arrange what it already did and never step a
+      // check themselves.
+      const watchdogState = extra.watchdog ?? {
+        running: false,
+        lastRun: null,
+        restartsLastDay: 0,
+        history: [],
+        proxies: [],
+      };
+
+      // ONE panel object carries the fields of every tab: each tab is a partial
+      // included by the container, and all of them read from here.
       return {
         ...base,
         title: 'Система',
+        tab,
+        tabs: SYSTEM_TABS.map((item) => ({
+          name: item,
+          title: item === 'singbox' ? 'Sing-box' : item === 'amnezia' ? 'Amnezia' : 'Сторож',
+          key: panelKey('system', item),
+        })),
+        // The watchdog settings are the only edit form, and they live on their own
+        // tab: elsewhere there is no `id="panel-form"` for the header to bind to.
+        editForm: tab === 'watchdog',
+
+        // --- Sing-box: check, restart, rollback, journal, server test ---
         configPath: model.resolvedOutputPath(),
         configExists: model.configExists(),
-        // Tunnels grouped by provider, each row carrying the runtime state read
-        // from systemd and the sudoers rights. The app assembles it, because only
-        // it may talk to the host; this builder only arranges what it was given.
-        tunnels: extra.tunnels ?? [],
         // Only the NAMES are exposed to the view: a snapshot is restored by the
         // route from the state directory, never by a path arriving from a form.
         snapshots: listConfigSnapshots(model.stateDir).map((file) => ({file})),
@@ -284,21 +315,31 @@ export function buildPanel(model, key, extra = {}) {
         checkedOk: lastCheck === null ? null : Boolean(lastCheck.ok),
         unit: system.unit ?? 'sing-box',
         tokenRequired: Boolean(extra.auth?.tokenRequired),
-      };
-    }
-
-    case 'journal':
-      return {
-        ...base,
-        title: 'Журнал sing-box',
-        unit: system.unit ?? 'sing-box',
+        // Journal. The snapshot is fetched by the ROUTE and handed in as
+        // `extra.journal`; this builder only arranges what it was given.
         lines: system.journalLines ?? 200,
         level: system.journalLevel ?? 'info',
         levels: system.journalLevels ?? [],
-        // The snapshot is fetched by the ROUTE and handed in as `extra.journal`;
-        // this builder only arranges what it was given, it never runs a command.
         snapshot: extra.journal ?? null,
+        // Server test.
+        tags: info.tags,
+        linksError: info.error,
+        concurrency: system.testConcurrency ?? 4,
+
+        // --- Amnezia: one row per tunnel, grouped by provider, with the runtime
+        // state read from systemd and the sudoers rights. The app assembles it. ---
+        tunnels: extra.tunnels ?? [],
+
+        // --- Watchdog ---
+        config: model.watchdogValues(),
+        api: model.clashApiValues(),
+        // The secret itself never travels: only whether the environment carries it.
+        secretPresent: Boolean(extra.auth?.apiSecretPresent),
+        defaultWatchUrl: DEFAULT_WATCH_URL,
+        listenIp: model.listenIp,
+        state: watchdogState,
       };
+    }
 
     case 'tunnel':
       // The preview is computed by the ROUTE (it reads a file) and handed in as
@@ -308,42 +349,6 @@ export function buildPanel(model, key, extra = {}) {
         title: name === null ? 'Нормализация туннеля' : `Туннель: ${name}`,
         preview: extra.tunnel ?? null,
       };
-
-    case 'tests': {
-      const info = model.sourcesInfo();
-      return {
-        ...base,
-        title: 'Тест серверов',
-        tags: info.tags,
-        linksError: info.error,
-        concurrency: system.testConcurrency ?? 4,
-        configPath: model.resolvedOutputPath(),
-      };
-    }
-
-    case 'watchdog': {
-      // Runtime state comes from the Watchdog object, handed in by `app.mjs` as
-      // `extra.watchdog`: the panel arranges what the watchdog already did and
-      // never steps a check itself.
-      const state = extra.watchdog ?? {
-        running: false,
-        lastRun: null,
-        restartsLastDay: 0,
-        history: [],
-        proxies: [],
-      };
-      return {
-        ...base,
-        title: 'Сторож',
-        config: model.watchdogValues(),
-        api: model.clashApiValues(),
-        // The secret itself never travels: only whether the environment carries it.
-        secretPresent: Boolean(extra.auth?.apiSecretPresent),
-        defaultWatchUrl: DEFAULT_WATCH_URL,
-        listenIp: model.listenIp,
-        state,
-      };
-    }
 
     default:
       throw new ConfigError(`неизвестный раздел '${kind}'`);

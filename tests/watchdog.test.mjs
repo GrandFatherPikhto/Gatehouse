@@ -549,11 +549,14 @@ describe('watchdog over HTTP', () => {
   test('the watchdog panel is reachable and explains the ladder', async () => {
     const editor = await startEditor();
     try {
+      // The tree has no «Сторож» node any more: the watchdog is a TAB of
+      // «Система», and the page itself proves the tab is reachable.
       const page = await (await fetch(`${editor.base}/`)).text();
-      assert.match(page, /Сторож/);
+      assert.match(page, /Система/);
 
-      const panel = await (await fetch(`${editor.base}/panel/watchdog`)).text();
+      const panel = await (await fetch(`${editor.base}/panel/system:watchdog`)).text();
       assert.ok(!panel.includes('Неизвестный раздел'));
+      assert.match(panel, /Сторож/);
       assert.match(panel, /Общий рубильник/);
       assert.match(panel, /через сам инбаунд/);
       assert.match(panel, /перезапуск рвёт соединения у <strong>всех<\/strong>/);

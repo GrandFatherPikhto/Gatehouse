@@ -17,7 +17,7 @@
            hx-swap="innerHTML"
            hx-push-url="true"
            <%- node.full ? `title="${node.full}"` : '' %>
-           class="<%= node.key === key ? 'active' : '' %>"><%= node.title %></a>
+           class="<%= node.key === key || String(key).startsWith(`${node.key}:`) ? 'active' : '' %>"><%= node.title %></a>
       <% } %>
       <% if (node.children.length > 0) { %>
         <ul>

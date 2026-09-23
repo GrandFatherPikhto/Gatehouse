@@ -326,7 +326,7 @@ describe('the tunnel panel and its buttons (part 2)', () => {
   test('a tunnel without a proxy is listed in «Система» and manageable', async () => {
     const editor = await startEditor({withProxy: false, applied: 'de', rules: ['de']});
     try {
-      const panel = await (await fetch(`${editor.base}/panel/system`)).text();
+      const panel = await (await fetch(`${editor.base}/panel/system:amnezia`)).text();
 
       assert.match(panel, /awg-quick@de/);
       assert.match(panel, /hx-post="\/tunnel\/toggle"/);
@@ -429,7 +429,7 @@ describe('the tunnel panel and its buttons (part 2)', () => {
         'old bytes\n',
       );
 
-      const panel = await (await fetch(`${editor.base}/panel/system`)).text();
+      const panel = await (await fetch(`${editor.base}/panel/system:amnezia`)).text();
 
       assert.match(panel, /awg-quick@de</, 'the real config is listed');
       assert.doesNotMatch(panel, /awg-quick@de\.conf/, 'a `de.conf.conf` leftover is not a tunnel');
@@ -446,7 +446,7 @@ describe('the tunnel panel and its buttons (part 2)', () => {
       enabled: [],
     });
     try {
-      const panel = await (await fetch(`${editor.base}/panel/system`)).text();
+      const panel = await (await fetch(`${editor.base}/panel/system:amnezia`)).text();
       assert.match(panel, /awg-quick@hmn-graz4/);
       assert.match(panel, /поднят, но не в автозагрузке: после перезагрузки пропадёт/);
       assert.match(panel, /hx-post="\/tunnel\/restart"/);
@@ -460,7 +460,7 @@ describe('the tunnel panel and its buttons (part 2)', () => {
   test('without a sudoers rule there is no button, only the line to paste', async () => {
     const editor = await startEditor({applied: 'hmn-graz4', sudoers: false});
     try {
-      const panel = await (await fetch(`${editor.base}/panel/system`)).text();
+      const panel = await (await fetch(`${editor.base}/panel/system:amnezia`)).text();
       assert.doesNotMatch(panel, /hx-post="\/tunnel\/restart"/);
       assert.doesNotMatch(panel, /hx-post="\/tunnel\/toggle"/);
       assert.match(panel, /enable --now awg-quick@hmn-graz4/);
@@ -475,7 +475,7 @@ describe('the tunnel panel and its buttons (part 2)', () => {
   test('an unapplied tunnel is a sentence, not a checkbox', async () => {
     const editor = await startEditor();
     try {
-      const panel = await (await fetch(`${editor.base}/panel/system`)).text();
+      const panel = await (await fetch(`${editor.base}/panel/system:amnezia`)).text();
       assert.match(panel, /конфиг не применён/);
       assert.doesNotMatch(panel, /hx-post="\/tunnel\/toggle"/);
 
