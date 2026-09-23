@@ -12,9 +12,7 @@ import {DEFAULT_WATCH_URL} from '../system/index.mjs';
 
 /** Keys of the tree, without a name part. */
 export const PANEL_KINDS = Object.freeze([
-  'profiles',
   'general',
-  'defaults',
   'links',
   'output',
   'proxies',
@@ -34,18 +32,12 @@ export const BUILTIN_OUTBOUNDS = Object.freeze(['auto-select', 'direct']);
 /**
  * Routes of the edit form of a panel, in application order. A panel has ONE form
  * element (`id="panel-form"`) and every «Применить» button on the panel sends it
- * whole, so a panel may legitimately have several routes: on "Значения по
- * умолчанию" the general fields post to `/general` and the DNS text posts to
- * `/dns`, and either button must apply BOTH.
+ * whole, so a panel may legitimately have several routes.
  *
  * An empty list means the panel has no edit form at all; its «Сохранить» keeps the
  * standalone behaviour. The list is deliberately explicit: the action buttons
  * (`/proxy/remove`, `/generate`, `/watchdog/check` …) are never listed, because a
  * wrong entry here would make the save button fire a delete request.
- *
- * `general` and `defaults` share the `settings-form.ejs` element, and `profiles`
- * edits only the note; `proxies`, `routes`, `system`, `journal` and `tests` have
- * action buttons only.
  */
 const EDIT_FORMS = Object.freeze({
   proxy: ['/proxy'],
@@ -55,8 +47,6 @@ const EDIT_FORMS = Object.freeze({
   links: ['/links'],
   watchdog: ['/watchdog'],
   general: ['/general'],
-  defaults: ['/general', '/dns'],
-  profiles: ['/profiles'],
 });
 
 /**
@@ -91,7 +81,7 @@ export function panelKey(kind, name = null) {
  * @returns {{kind: string, name: string|null}}
  */
 export function parsePanelKey(key) {
-  const text = typeof key === 'string' && key.length > 0 ? key : 'profiles';
+  const text = typeof key === 'string' && key.length > 0 ? key : 'general';
   const index = text.indexOf(':');
   const kind = index < 0 ? text : text.slice(0, index);
   const name = index < 0 ? null : text.slice(index + 1);
@@ -119,25 +109,6 @@ export function panelUrl(key) {
 }
 
 /**
- * Human readable origin of a shared field, for the badge next to it. Without the
- * badge the inheritance is a trap: editing `defaults` would change nothing
- * visible while the profile keeps overriding it.
- *
- * @param {'profile'|'defaults'|'absent'} scope
- * @returns {{text: string, className: string}}
- */
-export function originLabel(scope) {
-  switch (scope) {
-    case 'profile':
-      return {text: 'задано в профиле', className: 'origin-profile'};
-    case 'defaults':
-      return {text: 'унаследовано из defaults', className: 'origin-defaults'};
-    default:
-      return {text: 'не задано', className: 'origin-absent'};
-  }
-}
-
-/**
  * Outbounds a route may name: the servers of the links file, the two built-ins
  * and the per-proxy pools.
  *
@@ -161,7 +132,7 @@ export function knownOutbounds(model) {
  * @returns {string[]}
  */
 export function autoExcludePrefixes(model) {
-  if (model.fieldOrigin('exclude_from_auto').scope === 'absent') return [...DEFAULT_EXCLUDE];
+  if (!Object.hasOwn(model.body(), 'exclude_from_auto')) return [...DEFAULT_EXCLUDE];
   return model.generalValues().exclude_from_auto;
 }
 
@@ -195,41 +166,8 @@ export function buildPanel(model, key, extra = {}) {
   const system = extra.system ?? {};
 
   switch (kind) {
-    case 'profiles':
-      return {
-        ...base,
-        title: 'Профили',
-        names: model.profileNames(),
-        active: model.activeProfileName(),
-        note: model.profileBody().note ?? '',
-      };
-
-    case 'general': {
-      const values = model.generalValues();
-      return {
-        ...base,
-        title: 'Общие (активный профиль)',
-        values,
-        origins: {
-          listen_ip: originLabel(values.origins.listen_ip),
-          urltest: originLabel(values.origins.urltest),
-          log: originLabel(values.origins.log),
-          exclude_from_auto: originLabel(values.origins.exclude_from_auto),
-        },
-        scope: 'profile',
-      };
-    }
-
-    case 'defaults': {
-      const values = model.defaultsValues();
-      return {
-        ...base,
-        title: 'Значения по умолчанию (defaults)',
-        values,
-        defaultsDns: model.dnsJson('defaults'),
-        scope: 'defaults',
-      };
-    }
+    case 'general':
+      return {...base, title: 'Общие', values: model.generalValues()};
 
     case 'links':
       return {...base, title: 'Файл ссылок', info: model.linksInfo()};
@@ -243,16 +181,8 @@ export function buildPanel(model, key, extra = {}) {
         generation: extra.generation ?? null,
       };
 
-    case 'dns': {
-      const origin = model.fieldOrigin('dns');
-      return {
-        ...base,
-        title: 'DNS',
-        scope: 'profile',
-        json: model.dnsJson('profile'),
-        origin: originLabel(origin.scope),
-      };
-    }
+    case 'dns':
+      return {...base, title: 'DNS', json: model.dnsJson()};
 
     case 'proxies':
       return {...base, title: 'Прокси', tags: model.proxyTags()};
@@ -377,6 +307,5 @@ export function buildStatus(model) {
     exists: model.fileExists,
     dirty: model.dirty,
     snapshotKeep: model.snapshotKeep,
-    active: model.activeProfileName(),
   };
 }

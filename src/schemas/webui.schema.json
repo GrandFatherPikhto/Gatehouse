@@ -2,225 +2,196 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/gatehouse/schemas/webui.schema.json",
   "title": "webui.json",
-  "description": "Settings of the sing-box config generator. Replaces settings.yaml of the reference implementation.",
+  "description": "Settings of the sing-box config generator. Flat since version 2: the profile level and the `defaults` object were removed (see techdocs/architecture.md §8.9). A version-1 file is migrated once by the editor.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "active", "profiles"],
-  "profileMustExist": true,
+  "required": ["version"],
   "properties": {
     "version": {
-      "description": "Schema version, bumped only on incompatible changes.",
-      "const": 1
+      "description": "Schema version, bumped only on incompatible changes. 1 was the profile-level form; 2 is flat.",
+      "const": 2
     },
-    "active": {
-      "description": "Name of the profile to apply. Two profiles can never be applied at once: they overlap on ports and sing-box is a single process.",
+    "note": {
+      "description": "Free-form comment carried over from settings.yaml. Ignored by the core.",
+      "type": "string"
+    },
+    "listen_ip": {
       "type": "string",
       "minLength": 1
     },
-    "defaults": {
-      "description": "Shared body of all profiles. A same-named key of the active profile overrides it (top level only).",
-      "$ref": "#/definitions/profile"
+    "links_file": {
+      "type": "string",
+      "minLength": 1
     },
-    "profiles": {
-      "description": "Named profiles. A name must contain at least one non-digit character: JavaScript reorders integer-like object keys, so a profile called \"2024\" would silently jump to the front of the file on the next save.",
+    "output_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "exclude_from_auto": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "urltest": {
       "type": "object",
-      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "interval": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tolerance": {
+          "type": "integer"
+        }
+      }
+    },
+    "log": {
+      "description": "Passed into config.json unchanged.",
+      "type": "object"
+    },
+    "dns": {
+      "description": "Passed into config.json unchanged.",
+      "type": "object"
+    },
+    "proxies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["tag", "type", "port"],
+        "properties": {
+          "tag": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "description": "Kept in sync with PROXY_TYPES of errors.mjs; a test guards the drift.",
+            "enum": ["socks", "http", "mixed"]
+          },
+          "port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          },
+          "servers": {
+            "description": "Server tags. An empty or missing list means auto-select. A single string is accepted and normalised by the core, exactly as in the reference.",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            ]
+          },
+          "note": {
+            "description": "Free-form comment. Ignored by the core.",
+            "type": "string"
+          },
+          "pinned": {
+            "description": "The exit of this proxy is fixed on purpose. Ignored by the core; enforced by the model: a pinned proxy may name at most one server.",
+            "type": "boolean"
+          },
+          "watch": {
+            "description": "The watchdog checks this proxy's inbound and may act on it. Ignored by the core.",
+            "type": "boolean"
+          },
+          "watch_url": {
+            "description": "Per-proxy check target. Empty means the neutral default (generate_204). Ignored by the core.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "routes": {
+      "description": "Domain routes layered on top of the proxies. Route names carry the same restriction as before: a name made of digits only would be reordered by JavaScript object key rules and would break the byte-for-byte match with the reference.",
+      "type": "object",
       "propertyNames": {
         "pattern": "\\D"
       },
       "additionalProperties": {
-        "$ref": "#/definitions/profile"
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "outbound": {
+            "type": "string"
+          },
+          "domains": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "note": {
+            "description": "Free-form comment. Ignored by the core: buildRules reads only outbound and domains.",
+            "type": "string"
+          }
+        }
       }
-    }
-  },
-  "definitions": {
-    "profile": {
+    },
+    "clash_api": {
+      "description": "External HTTP API of the daemon (Clash-compatible). Off by default; disabled means config.json stays byte-identical to the reference. The secret is NEVER stored here: it comes from GATEHOUSE_API_SECRET.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "note": {
-          "description": "Free-form comment carried over from settings.yaml. Ignored by the core.",
-          "type": "string"
+        "enabled": {
+          "type": "boolean"
         },
-        "listen_ip": {
+        "controller": {
+          "description": "external_controller, host:port. Only 127.0.0.1 is accepted; anything else is refused by the generator.",
           "type": "string",
           "minLength": 1
+        }
+      }
+    },
+    "watchdog": {
+      "description": "Liveness watchdog of the editor. Read-only for the watchdog itself: it never writes webui.json or config.json.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Global switch. With it off a proxy marked watch is not checked at all.",
+          "type": "boolean"
         },
-        "links_file": {
-          "type": "string",
-          "minLength": 1
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 10
         },
-        "output_file": {
-          "type": "string",
-          "minLength": 1
+        "failures_before_action": {
+          "description": "Consecutive failed checks before the first rung. Two by default.",
+          "type": "integer",
+          "minimum": 1
         },
-        "exclude_from_auto": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
+        "pause_seconds": {
+          "description": "Minimum pause between two actions on one proxy.",
+          "type": "integer",
+          "minimum": 0
         },
-        "urltest": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "url": {
-              "type": "string",
-              "minLength": 1
-            },
-            "interval": {
-              "type": "string",
-              "minLength": 1
-            },
-            "tolerance": {
-              "type": "integer"
-            }
-          }
+        "max_restarts_per_day": {
+          "description": "After this many restarts the watchdog gives up until the owner resets it.",
+          "type": "integer",
+          "minimum": 0
         },
-        "log": {
-          "description": "Passed into config.json unchanged.",
-          "type": "object"
-        },
-        "dns": {
-          "description": "Passed into config.json unchanged.",
-          "type": "object"
-        },
-        "proxies": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["tag", "type", "port"],
-            "properties": {
-              "tag": {
-                "type": "string",
-                "minLength": 1
-              },
-              "type": {
-                "description": "Kept in sync with PROXY_TYPES of errors.mjs; a test guards the drift.",
-                "enum": ["socks", "http", "mixed"]
-              },
-              "port": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 65535
-              },
-              "servers": {
-                "description": "Server tags. An empty or missing list means auto-select. A single string is accepted and normalised by the core, exactly as in the reference.",
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "array",
-                    "items": {
-                      "type": "string",
-                      "minLength": 1
-                    }
-                  }
-                ]
-              },
-              "note": {
-                "description": "Free-form comment. Ignored by the core.",
-                "type": "string"
-              },
-              "pinned": {
-                "description": "The exit of this proxy is fixed on purpose. Ignored by the core; enforced by the model: a pinned proxy may name at most one server.",
-                "type": "boolean"
-              },
-              "watch": {
-                "description": "The watchdog checks this proxy's inbound and may act on it. Ignored by the core.",
-                "type": "boolean"
-              },
-              "watch_url": {
-                "description": "Per-proxy check target. Empty means the neutral default (generate_204). Ignored by the core.",
-                "type": "string"
-              }
-            }
-          }
-        },
-        "routes": {
-          "description": "Domain routes layered on top of the proxies. Route names carry the same restriction as profile names: a name made of digits only would be reordered by JavaScript object key rules and would break the byte-for-byte match with the reference.",
-          "type": "object",
-          "propertyNames": {
-            "pattern": "\\D"
-          },
-          "additionalProperties": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "outbound": {
-                "type": "string"
-              },
-              "domains": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  }
-                ]
-              },
-              "note": {
-                "description": "Free-form comment, like the one a profile and a proxy carry. Ignored by the core: buildRules reads only outbound and domains.",
-                "type": "string"
-              }
-            }
-          }
-        },
-        "clash_api": {
-          "description": "External HTTP API of the daemon (Clash-compatible). Off by default; disabled means config.json stays byte-identical to the reference. The secret is NEVER stored here: it comes from GATEHOUSE_API_SECRET.",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "controller": {
-              "description": "external_controller, host:port. Only 127.0.0.1 is accepted; anything else is refused by the generator.",
-              "type": "string",
-              "minLength": 1
-            }
-          }
-        },
-        "watchdog": {
-          "description": "Liveness watchdog of the editor. Read-only for the watchdog itself: it never writes webui.json or config.json.",
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "enabled": {
-              "description": "Global switch. With it off a proxy marked watch is not checked at all.",
-              "type": "boolean"
-            },
-            "interval_seconds": {
-              "type": "integer",
-              "minimum": 10
-            },
-            "failures_before_action": {
-              "description": "Consecutive failed checks before the first rung. Two by default.",
-              "type": "integer",
-              "minimum": 1
-            },
-            "pause_seconds": {
-              "description": "Minimum pause between two actions on one proxy.",
-              "type": "integer",
-              "minimum": 0
-            },
-            "max_restarts_per_day": {
-              "description": "After this many restarts the watchdog gives up until the owner resets it.",
-              "type": "integer",
-              "minimum": 0
-            },
-            "restart_enabled": {
-              "description": "Second rung: restart the daemon. Off by default until the owner confirms it helps.",
-              "type": "boolean"
-            }
-          }
+        "restart_enabled": {
+          "description": "Second rung: restart the daemon. Off by default until the owner confirms it helps.",
+          "type": "boolean"
         }
       }
     }

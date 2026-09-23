@@ -10,6 +10,18 @@
 // marks the tree node, and saving stays possible. Only the generator refuses to
 // build a pool for a missing server.
 //
+// Two rules of the current task live here, because this is where node labels are
+// built (not in the templates):
+//
+//   * NO label may print a list of arbitrary length. At most `LABEL_NAMES_CAP`
+//     names are shown, then the count; the full list travels in `full` for a
+//     tooltip or an expansion and never in the tree line itself;
+//   * a diagnosis replaces a symptom. When the links file was not read, the
+//     servers did not "disappear" — there was nowhere to take them from, and the
+//     mark says which of the four states happened instead of guessing from an
+//     empty list. The state is passed in explicitly by the caller, never derived
+//     here from emptiness.
+//
 // Pure functions on plain data: no filesystem, no HTTP, so the whole module is
 // testable on its own.
 
@@ -23,6 +35,45 @@ export const BUILTIN_OUTBOUNDS = Object.freeze(['auto-select', 'direct']);
 export const POOL_PREFIX = 'pool-';
 
 /**
+ * How many names a node label may print before it switches to a count. Named on
+ * purpose: the number is a presentation decision and must not be a literal buried
+ * in an expression, so changing it is one edit in one place.
+ */
+export const LABEL_NAMES_CAP = 3;
+
+/**
+ * Renders a list of names for a label without ever printing the whole list.
+ *
+ * Below or at the cap the names are joined as they are, which keeps the common
+ * one- or two-name case readable. Above it, the count plus the first `cap` names
+ * plus an ellipsis: `5 — a, b, c …`. `full` always carries every name, for the
+ * tooltip.
+ *
+ * @param {string[]} names
+ * @param {number} [cap]
+ * @returns {{shown: string, full: string, truncated: boolean}}
+ */
+export function summarizeNames(names, cap = LABEL_NAMES_CAP) {
+  const full = names.join(', ');
+  if (names.length <= cap) return {shown: full, full, truncated: false};
+  return {shown: `${names.length} — ${names.slice(0, cap).join(', ')} …`, full, truncated: true};
+}
+
+/**
+ * Builds the mark of a missing-server reference from the server names alone.
+ *
+ * @param {string[]} names
+ * @returns {{mark: string, full: string}}
+ */
+function missingServersMark(names) {
+  const summary = summarizeNames(names);
+  return {
+    mark: `[!] нет в списке серверов: ${summary.shown}`,
+    full: `[!] нет в списке серверов: ${summary.full}`,
+  };
+}
+
+/**
  * Finds references to server tags that are not in the current links file.
  * Reference: `find_stale_refs` — same two places, same shape of the location
  * string (`proxies.<tag>.servers` / `routes.<name>.outbound`).
@@ -32,7 +83,7 @@ export const POOL_PREFIX = 'pool-';
  * character by character. A single string is normalised into a one-element list,
  * exactly like `validate_proxies` in the core does it.
  *
- * @param {unknown} document Parsed webui.json.
+ * @param {unknown} document Parsed webui.json (flat since version 2).
  * @param {string[]} allTags Server tags of the current links file.
  * @returns {Array<[string, string]>} `[where, tag]` pairs.
  */
@@ -41,8 +92,7 @@ export function findStaleRefs(document, allTags) {
   const stale = [];
   const data = isMapping(document) ? document : {};
 
-  const proxies = isMapping(data.profiles) ? profileOf(data) : {};
-  for (const proxy of asList(proxies.proxies)) {
+  for (const proxy of asList(data.proxies)) {
     if (!isMapping(proxy)) continue;
     for (const server of asList(proxy.servers)) {
       if (typeof server !== 'string') continue;
@@ -50,7 +100,7 @@ export function findStaleRefs(document, allTags) {
     }
   }
 
-  const routes = isMapping(proxies.routes) ? proxies.routes : {};
+  const routes = isMapping(data.routes) ? data.routes : {};
   for (const [name, route] of Object.entries(routes)) {
     const outbound = isMapping(route) ? route.outbound : undefined;
     if (typeof outbound !== 'string' || outbound.length === 0) continue;
@@ -112,25 +162,14 @@ export function staleMap(document, allTags) {
 }
 
 /**
- * The active profile body of a document, or an empty object.
- *
- * @param {Record<string, unknown>} document
- * @returns {Record<string, unknown>}
- */
-function profileOf(document) {
-  if (!isMapping(document.profiles)) return {};
-  const body = document.profiles[document.active];
-  return isMapping(body) ? body : {};
-}
-
-/**
  * Builds a tree node. Plain data, no Qt and no HTML: the same tree feeds the
  * EJS template and the tests.
  *
  * @param {string} key
  * @param {string} title
  * @param {string} kind
- * @param {{stale?: boolean, detail?: string, children?: unknown[], mark?: string}} [extra]
+ * @param {{stale?: boolean, detail?: string, children?: unknown[], mark?: string,
+ *   full?: string}} [extra] `full` is the untruncated mark, for a tooltip.
  * @returns {Record<string, unknown>}
  */
 function node(key, title, kind, extra = {}) {
@@ -141,28 +180,54 @@ function node(key, title, kind, extra = {}) {
     stale: Boolean(extra.stale),
     detail: extra.detail ?? '',
     mark: extra.mark ?? '',
+    full: extra.full ?? extra.mark ?? '',
     children: extra.children ?? [],
   };
 }
 
 /**
- * Tree specification of the project. Reference: `tree_spec`, extended with the
- * two nodes the profiles brought in: `profiles` and `defaults`.
+ * Diagnoses of the links file, keyed by the state `linksInfo` reports. The
+ * difference runs on the SOURCE, not on the number: a file that was read and
+ * happens to list none of the proxies' servers still produces the per-proxy
+ * fourth message, while a file that was never read produces one of the first
+ * three and nothing else.
  *
- * @param {{document: unknown, allTags?: string[], active?: string|null,
- *   title?: string, linksFile?: string, linksExists?: boolean,
- *   linksError?: string|null}} options
+ * @param {'ok'|'missing'|'unreadable'|'empty'} state
+ * @param {string} linksPath
+ * @returns {string} Empty for `ok`.
+ */
+export function linksDiagnosis(state, linksPath) {
+  switch (state) {
+    case 'missing':
+      return `[!] файл ссылок не найден: ${linksPath}`;
+    case 'unreadable':
+      return `[!] файл ссылок недоступен: ${linksPath}`;
+    case 'empty':
+      return `[!] в файле ссылок нет ни одной ссылки: ${linksPath}`;
+    default:
+      return '';
+  }
+}
+
+/**
+ * Tree specification of the project. Reference: `tree_spec`.
+ *
+ * The profile level is gone, so the tree is flat: one `general` node holds every
+ * setting that used to be split between the active profile and `defaults`.
+ *
+ * @param {{document: unknown, allTags?: string[], title?: string, linksFile?: string,
+ *   linksPath?: string, linksState?: 'ok'|'missing'|'unreadable'|'empty',
+ *   linksError?: string|null, outputFile?: string}} options
  * @returns {Record<string, unknown>} Root node.
  */
 export function treeSpec(options = {}) {
   const document = isMapping(options.document) ? options.document : {};
   const allTags = asList(options.allTags).filter((tag) => typeof tag === 'string');
-  const profile = profileOf(document);
   const stale = staleMap(document, allTags);
   const linksFile = options.linksFile ?? 'links.txt';
 
   const proxyNodes = [];
-  for (const proxy of asList(profile.proxies)) {
+  for (const proxy of asList(document.proxies)) {
     if (!isMapping(proxy)) continue;
     const tag = typeof proxy.tag === 'string' ? proxy.tag : '';
     const missing = stale.get(staleKey('proxies', tag)) ?? [];
@@ -170,7 +235,12 @@ export function treeSpec(options = {}) {
     // point of the flag is that the owner notices the lock at a glance. The mark
     // is a plain text label, so the template stays a single interpolation.
     const marks = [];
-    if (missing.length > 0) marks.push(`[!] нет в списке серверов: ${missing.join(', ')}`);
+    let missingFull = '';
+    if (missing.length > 0) {
+      const built = missingServersMark(missing);
+      marks.push(built.mark);
+      missingFull = built.full;
+    }
     if (proxy.pinned === true) marks.push('[🔒] выход зафиксирован');
     if (proxy.watch === true) marks.push('[👁] сторож');
     const mark = marks.join('  ');
@@ -179,12 +249,13 @@ export function treeSpec(options = {}) {
         stale: missing.length > 0,
         detail: tag,
         mark,
+        full: missingFull,
       }),
     );
   }
 
   const routeNodes = [];
-  const routes = isMapping(profile.routes) ? profile.routes : {};
+  const routes = isMapping(document.routes) ? document.routes : {};
   for (const name of Object.keys(routes)) {
     const missing = stale.get(staleKey('routes', name)) ?? [];
     const mark = missing.length > 0 ? `[!] неизвестный outbound: ${missing[0]}` : '';
@@ -197,20 +268,17 @@ export function treeSpec(options = {}) {
     );
   }
 
-  // The tree carries a short mark only: the full error text (the reason parsing
-  // failed, with the file name and the line) belongs in the panel, where it is
-  // readable, not in a node title.
-  let linksMark = '';
-  if (options.linksExists === false) linksMark = '[!] файл не найден';
-  else if (options.linksError) linksMark = '[!] ошибка чтения файла ссылок';
-
-  const active = typeof options.active === 'string' ? options.active : document.active;
+  // The tree carries the honest diagnosis: the reason parsing failed (a path, a
+  // permission, an empty file) belongs in the node, where the owner looks, and
+  // not only in the panel.
+  const linksMark = linksDiagnosis(
+    options.linksState ?? (options.linksError ? 'unreadable' : 'ok'),
+    options.linksPath ?? linksFile,
+  );
 
   return node('root', options.title ?? 'webui.json', 'root', {
     children: [
-      node('profiles', `Профили (активен: ${String(active)})`, 'profiles'),
       node('general', 'Общие', 'general'),
-      node('defaults', 'Значения по умолчанию', 'defaults'),
       node('links', `Файл ссылок: ${linksFile}`, 'links', {
         stale: linksMark !== '',
         detail: linksFile,

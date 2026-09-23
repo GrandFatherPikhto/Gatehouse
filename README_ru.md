@@ -93,11 +93,67 @@ npm run dev      # http://127.0.0.1:9091/
 Данные песочницы (`dev/root/`) в репозиторий сознательно не попадают — в них
 ключи и личные списки серверов. Обезличенные образцы лежат в `dev/root.example/`:
 
+В наборе образцов есть и файл ссылок; без него все сервера всех прокси считаются
+пропавшими — копировать надо все три:
+
 ```bash
 mkdir -p dev/root/etc/sing-box
-cp dev/root.example/webui.json dev/root/webui.json
-cp dev/root.example/etc/sing-box/config.json dev/root/etc/sing-box/config.json
+cp dev/root.example/webui.json                dev/root/webui.json
+cp dev/root.example/etc/sing-box/config.json  dev/root/etc/sing-box/config.json
+cp dev/root.example/links.txt                 dev/root/links.txt
 ```
+
+### Работа на боевых данных
+
+Образцов хватает, чтобы запустить редактор, но в них три синтетических сервера.
+Чтобы разрабатывать на том, что реально крутится на роутере, надо перенести его
+файлы. Важно, где они лежат: настройки — в `/etc/`, а в `/var/lib/` только
+снимки и списки серверов.
+
+```bash
+mkdir -p dev/root/sources/vpnd dev/root/etc/sing-box
+scp denis@10.95.2.1:/etc/gatehouse/webui.json          dev/root/
+scp denis@10.95.2.1:/etc/sing-box/config.json          dev/root/etc/sing-box/
+scp denis@10.95.2.1:/var/lib/gatehouse/sources/vpnd/links.txt  dev/root/sources/vpnd/
+```
+
+**После этого в скопированном `webui.json` надо переписать два пути.** На роутере
+они абсолютные, а `links_file` и `output_file` разрешаются относительно каталога
+с файлом настроек — поэтому абсолютный `output_file` заставит песочницу целиться
+в настоящий `/etc/sing-box/config.json` машины, а абсолютный `links_file` будет
+указывать в каталог, которого на рабочей станции нет:
+
+```json
+"links_file":  "sources/vpnd/links.txt",
+"output_file": "etc/sing-box/config.json"
+```
+
+Править **при остановленном сервере**. Он держит настройки в памяти и записывает
+их обратно при сохранении, так что правка под работающим экземпляром пропадёт
+при первом же сохранении.
+
+### Сверка песочницы с боевым конфигом
+
+Когда боевые данные на месте, генератор обязан воспроизвести тот конфиг, который
+роутер крутит прямо сейчас, — байт в байт. Это самая сильная из доступных
+проверок того, что правка модели или генератора не сдвинула вывод:
+
+```bash
+cp dev/root/etc/sing-box/config.json /tmp/live-config.json
+node tools/generate.mjs --settings dev/root/webui.json --quiet
+cmp /tmp/live-config.json dev/root/etc/sing-box/config.json && echo identical
+```
+
+Это ручная проверка, а не часть `node --test`: `dev/root/` в репозиторий не
+попадает, и гонять её набору тестов не на чем. Автоматическим гейтом остаётся
+золотой файл, собранный из закоммиченных фикстур, — см. «Приёмка по золотому
+файлу».
+
+### Одна вкладка за раз
+
+Редактор держит документ в процессе сервера, а не в браузере. Две открытые
+вкладки затирают правки друг друга. Dev-сервер говорит об этом при запуске; это
+не ограничение песочницы, а устройство редактора.
 
 ## Использование
 

@@ -174,8 +174,7 @@ export function parseRouteForm(body) {
 }
 
 /**
- * Parses the general/defaults form. Both forms carry the same fields, only the
- * destination differs.
+ * Parses the general settings form.
  *
  * @param {Record<string, unknown>} body
  * @returns {{listen_ip: string, urltest: Record<string, unknown>,

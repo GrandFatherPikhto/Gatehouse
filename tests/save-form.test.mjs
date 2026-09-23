@@ -78,10 +78,9 @@ async function post(base, route, fields = {}, htmx = true) {
   });
 }
 
-/** Reads the active profile of a settings file. */
-function storedProfile(settingsFile) {
-  const document = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-  return document.profiles[document.active];
+/** Reads the document of a settings file. */
+function storedDocument(settingsFile) {
+  return JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
 }
 
 /** SHA-256 of a file. */
@@ -109,7 +108,7 @@ describe('«Сохранить» applies the open edit form', () => {
       });
       const html = await response.text();
 
-      const proxy = storedProfile(editor.settingsFile).proxies.find((item) => item.tag === 'claude-http');
+      const proxy = storedDocument(editor.settingsFile).proxies.find((item) => item.tag === 'claude-http');
       assert.equal(proxy.watch, true, 'the watchdog flag reached webui.json');
       assert.match(html, /name="watch" value="1" checked/, 'the redrawn form shows it ticked');
       assert.doesNotMatch(html, /Нечего сохранять/);
@@ -131,7 +130,7 @@ describe('«Сохранить» applies the open edit form', () => {
         note: 'через сохранить',
       });
 
-      const proxy = storedProfile(editor.settingsFile).proxies.find((item) => item.tag === 'claude-http');
+      const proxy = storedDocument(editor.settingsFile).proxies.find((item) => item.tag === 'claude-http');
       assert.equal(proxy.port, 54999);
       assert.equal(proxy.note, 'через сохранить');
     } finally {
@@ -219,7 +218,7 @@ describe('«Сохранить» applies the open edit form', () => {
         response.headers.get('location'),
         `/panel/${encodeURIComponent('proxy:claude-http')}`,
       );
-      const proxy = storedProfile(editor.settingsFile).proxies.find((item) => item.tag === 'claude-http');
+      const proxy = storedDocument(editor.settingsFile).proxies.find((item) => item.tag === 'claude-http');
       assert.equal(proxy.watch, true, 'the change still happened');
     } finally {
       await editor.close();
@@ -230,7 +229,6 @@ describe('«Сохранить» applies the open edit form', () => {
     const editor = await startEditor();
     try {
       await post(editor.base, '/general', {
-        scope: 'profile',
         listen_ip: '10.95.2.1',
         urltest_url: 'https://gstatic.com',
         urltest_interval: '3m',
@@ -242,7 +240,7 @@ describe('«Сохранить» applies the open edit form', () => {
 
       assert.match(await response.text(), /Сохранено/);
       const document = JSON.parse(fs.readFileSync(editor.settingsFile, 'utf8'));
-      assert.equal(document.profiles.default.listen_ip, '10.95.2.1');
+      assert.equal(document.listen_ip, '10.95.2.1');
     } finally {
       await editor.close();
     }
@@ -292,8 +290,7 @@ describe('the header button is bound to the edit form', () => {
   test('a panel without an edit form keeps the standalone save form', async () => {
     const editor = await startEditor();
     try {
-      // `journal` has action buttons only; `profiles` used to be in this list too
-      // but now carries the note form as its edit form.
+      // `journal` has action buttons only and therefore no edit form to bind.
       const html = await (await fetch(`${editor.base}/panel/journal`)).text();
 
       assert.doesNotMatch(html, /hx-include="#panel-form"/);

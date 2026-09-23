@@ -163,7 +163,7 @@ describe('generate.mjs: argument handling (NEW)', () => {
     assert.match(result.stdout, /Использование: node tools\/generate\.mjs/);
   });
 
-  test('--profile picks another profile', () => {
+  test('a version-1 file is refused by the CLI, never migrated', () => {
     const dir = makeTempDir();
     writeLinksFile(dir);
     const document = {
@@ -172,24 +172,18 @@ describe('generate.mjs: argument handling (NEW)', () => {
       defaults: {links_file: 'links.txt'},
       profiles: {
         first: {listen_ip: '127.0.0.1', proxies: [{tag: 'main-socks', type: 'socks', port: 54321}]},
-        second: {listen_ip: '10.0.0.2', proxies: [{tag: 'main-socks', type: 'socks', port: 54321}]},
       },
     };
     const settingsFile = path.join(dir, 'webui.json');
     fs.writeFileSync(settingsFile, JSON.stringify(document, null, 2), 'utf8');
     const output = path.join(dir, 'config.json');
 
-    const result = runTool('generate.mjs', [
-      '--settings',
-      settingsFile,
-      '--profile',
-      'second',
-      '--output',
-      output,
-    ]);
+    const result = runTool('generate.mjs', ['--settings', settingsFile, '--output', output]);
 
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(JSON.parse(fs.readFileSync(output, 'utf8')).inbounds[0].listen, '10.0.0.2');
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /старого формата/);
+    assert.match(result.stderr, /редакторе GateHouse/);
+    assert.ok(!fs.existsSync(output), 'nothing is generated from a legacy document');
   });
 
   test('--warnings-file collects the warnings for the caller', () => {

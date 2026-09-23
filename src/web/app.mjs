@@ -67,7 +67,7 @@ export function isDevSandbox(env = process.env) {
 }
 
 /** Panel shown when nothing else is asked for. */
-export const DEFAULT_PANEL = 'profiles';
+export const DEFAULT_PANEL = 'general';
 
 /** How many journal lines one snapshot of the journal shows. */
 export const JOURNAL_SNAPSHOT_LINES = 200;
@@ -92,7 +92,6 @@ const ROUTE_FIELDS = Object.freeze({
   '/proxy': ['tag', 'type', 'port'],
   '/route': ['name', 'outbound'],
   '/dns': ['dns'],
-  '/profiles': ['action', 'note'],
   '/links': ['links_file'],
   '/output': ['output_file'],
   '/watchdog': ['interval_seconds'],
@@ -178,6 +177,8 @@ export function createApp(options = {}) {
     lastCheck: null,
     lastRestart: null,
     testsRunning: false,
+    // A document migrated by `model.open` is announced once, on the first render.
+    migrationNoticeShown: false,
   };
 
   // The API secret is read from the environment of the process and never from a
@@ -193,12 +194,12 @@ export function createApp(options = {}) {
    * @returns {Record<string, unknown>}
    */
   const watchdogContext = () => {
-    const profile = model.effectiveProfile();
+    const body = model.body();
     return {
-      watchdog: profile.watchdog,
+      watchdog: body.watchdog,
       api: {
-        enabled: profile.clash_api?.enabled === true,
-        controller: profile.clash_api?.controller,
+        enabled: body.clash_api?.enabled === true,
+        controller: body.clash_api?.controller,
         secret: apiSecret,
       },
       listenIp: model.listenIp,
@@ -306,10 +307,25 @@ export function createApp(options = {}) {
    * @returns {Record<string, unknown>}
    */
   function buildView(key, extra) {
+    // A version-1 file is rewritten on disk by `model.open` before the first
+    // render. The owner must be told once, and told what moved: a silent rewrite
+    // of their own file is exactly the kind of surprise the migration warnings
+    // exist to prevent.
+    let withNotices = extra;
+    if (model.lastMigration !== null && !state.migrationNoticeShown) {
+      state.migrationNoticeShown = true;
+      const lines = ['webui.json переведён на версию 2: профили упразднены.'];
+      if (model.lastMigration.snapshot !== null) {
+        lines.push(`Снимок прежней версии: ${path.basename(model.lastMigration.snapshot)}.`);
+      }
+      lines.push(...model.lastMigration.warnings);
+      withNotices = {...extra, notice: lines.join(' ')};
+    }
+
     // The panel builders get the runtime state of the host layer, not a way to
     // run anything: `buildPanel` only arranges what the routes already did.
     const enriched = {
-      ...extra,
+      ...withNotices,
       system: {
         lastCheck: state.lastCheck,
         lastRestart: state.lastRestart,
@@ -465,11 +481,6 @@ export function createApp(options = {}) {
    * Applies exactly one edit-form route to the live model and reports the panel
    * key the result belongs to.
    *
-   * `scope` is the destination of the shared settings and is decided by the PANEL
-   * the button stands on, never by the request body: pressing «Применить» on
-   * "Значения по умолчанию" writes to `defaults`, the same field on "Общие"
-   * writes to the active profile.
-   *
    * `applied` is false when the body carries none of the fields of the route.
    * That is how a direct POST of a single route stays a partial edit of a panel
    * whose edit form has more than one route, instead of being refused because a
@@ -477,10 +488,9 @@ export function createApp(options = {}) {
    *
    * @param {string} route One of the routes a form posts to (`/proxy`, `/dns`, …).
    * @param {import('express').Request} req
-   * @param {'profile'|'defaults'} scope Destination of the shared settings.
    * @returns {{applied: boolean, key: string|null}}
    */
-  function applyRoute(route, req, scope) {
+  function applyRoute(route, req) {
     const body = req.body ?? {};
     const fields = ROUTE_FIELDS[route] ?? [];
     if (!fields.some((field) => Object.hasOwn(body, field))) {
@@ -501,21 +511,8 @@ export function createApp(options = {}) {
         return {applied: true, key: panelKey('route', candidate.name)};
       }
       case '/dns':
-        model.applyDns(String(body.dns ?? ''), scope);
-        return {applied: true, key: scope === 'defaults' ? 'defaults' : 'dns'};
-      case '/profiles': {
-        // The panel's edit form is the note field and nothing else. Refusing every
-        // other action is what stops a body posted to `/save` from renaming or
-        // deleting a profile behind the button that owns that action.
-        const action = String(body.action ?? 'note');
-        if (action !== 'note') {
-          throw new ConfigError(
-            `панель «Профили» принимает только заметку, получено действие '${action}'`,
-          );
-        }
-        model.setProfileNote(body.note ?? '');
-        return {applied: true, key: 'profiles'};
-      }
+        model.applyDns(String(body.dns ?? ''));
+        return {applied: true, key: 'dns'};
       case '/links':
         model.setLinksFile(String(body.links_file ?? '').trim());
         return {applied: true, key: 'links'};
@@ -527,10 +524,8 @@ export function createApp(options = {}) {
         model.applyClashApi(forms.parseClashApiForm(body));
         return {applied: true, key: 'watchdog'};
       case '/general': {
-        const values = forms.parseGeneralForm(body);
-        if (scope === 'defaults') model.applyDefaults(values);
-        else model.applyGeneral(values);
-        return {applied: true, key: scope === 'defaults' ? 'defaults' : 'general'};
+        model.applyGeneral(forms.parseGeneralForm(body));
+        return {applied: true, key: 'general'};
       }
       default:
         throw new ConfigError(`маршрут '${route}' не является формой правки`);
@@ -546,9 +541,8 @@ export function createApp(options = {}) {
    * such a form at all — the action buttons (`/proxy/remove`, `/generate`, …) are
    * never routed through here.
    *
-   * A panel may have more than one route (the "Значения по умолчанию" panel posts
-   * the general fields to `/general` and the DNS text to `/dns`), and a button
-   * applies the WHOLE panel, so every route of the panel is applied in order. A
+   * A panel may have more than one route, and a button applies the WHOLE panel,
+   * so every route of the panel is applied in order. A
    * canonical snapshot is taken before the first route: if any route refuses, the
    * model is put back exactly as it was, so the owner never gets a panel that is
    * applied halfway while the notice only reports the refusal. The file is not
@@ -565,7 +559,6 @@ export function createApp(options = {}) {
   function applyEditForm(kind, req) {
     const routes = editFormRoutes(kind);
     if (routes.length === 0) throw new ConfigError(`у панели '${kind}' нет формы правки`);
-    const scope = kind === 'defaults' ? 'defaults' : 'profile';
 
     const before = model.toText();
     const wasDirty = model.dirty;
@@ -573,7 +566,7 @@ export function createApp(options = {}) {
 
     try {
       for (const route of routes) {
-        const outcome = applyRoute(route, req, scope);
+        const outcome = applyRoute(route, req);
         if (outcome.applied && outcome.key !== null) key = outcome.key;
       }
     } catch (error) {
@@ -603,77 +596,21 @@ export function createApp(options = {}) {
   });
 
   // ------------------------------------------------------------------
-  // Profiles
-  // ------------------------------------------------------------------
-
-  app.post(
-    '/profiles',
-    mutation('profiles', (req) => {
-      const action = String(req.body.action ?? '');
-      const name = String(req.body.name ?? '').trim();
-      const current = String(req.body.current ?? '').trim();
-
-      switch (action) {
-        case 'activate':
-          model.setActive(name);
-          return {notice: `Активен профиль '${name}'`};
-        case 'create':
-          model.createProfile(name);
-          return {notice: `Профиль '${name}' создан — не забудьте сохранить`};
-        case 'rename':
-          model.renameProfile(current, name);
-          return {notice: `Профиль '${current}' переименован в '${name}'`};
-        case 'duplicate': {
-          const copy = model.duplicateProfile(current, name.length > 0 ? name : null);
-          return {notice: `Профиль '${current}' скопирован как '${copy}'`};
-        }
-        case 'remove':
-          model.removeProfile(name);
-          return {notice: `Профиль '${name}' удалён`};
-        case 'note':
-          model.setProfileNote(req.body.note ?? '');
-          return {notice: 'Заметка профиля сохранена'};
-        default:
-          throw new ConfigError(`неизвестное действие '${action}'`);
-      }
-    }),
-  );
-
-  // ------------------------------------------------------------------
-  // Shared settings: the active profile and the defaults
+  // General settings
   // ------------------------------------------------------------------
 
   app.post(
     '/general',
     mutation('general', (req) => {
-      // The scope names the PANEL the button stands on, and that panel owns the
-      // whole edit form: on "Значения по умолчанию" the general button applies the
-      // DNS text too, on "Общие" it writes the active profile.
-      const scope = req.body.scope === 'defaults' ? 'defaults' : 'profile';
-      const kind = scope === 'defaults' ? 'defaults' : 'general';
-      const key = scope === 'defaults' ? 'defaults' : 'general';
-
-      if (req.body.action === 'reset') {
-        const field = String(req.body.field ?? '');
-        if (!model.resetProfileField(field)) {
-          throw new ConfigError(`поле '${field}' и так не задано в профиле`);
-        }
-        return {key, notice: `'${field}' убран из профиля: снова действует значение по умолчанию`};
-      }
-
-      applyEditForm(kind, req);
-      return {key, notice: 'Применено — не забудьте сохранить'};
+      applyEditForm('general', req);
+      return {key: 'general', notice: 'Применено — не забудьте сохранить'};
     }),
   );
 
   app.post(
     '/dns',
     mutation('dns', (req) => {
-      // Same rule as `/general`: the DNS button of the defaults panel applies the
-      // general fields of that panel as well.
-      const scope = req.body.scope === 'defaults' ? 'defaults' : 'profile';
-      const kind = scope === 'defaults' ? 'defaults' : 'dns';
-      const {key} = applyEditForm(kind, req);
+      const {key} = applyEditForm('dns', req);
       return {key, notice: 'DNS применён — не забудьте сохранить'};
     }),
   );

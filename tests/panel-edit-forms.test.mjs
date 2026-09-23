@@ -1,17 +1,14 @@
 // A panel has ONE edit form element, and every «Применить» button on it applies
 // the WHOLE panel.
 //
-// The defect: "Значения по умолчанию" carries two routes — the general fields
-// (`/general`) and the DNS text (`/dns`). Each button applied only its own route,
-// and «Сохранить» was bound to a single route, so a DNS edit followed by
-// «Применить» (or by «Сохранить») was thrown away exactly as the previous save
-// bug did one level up. `profiles` was declared to have no edit form at all, so
-// the note field was discarded the same way.
-//
-// The last test is the important one: it renders EVERY panel and demands that
-// each form with input fields is either the edit form (`id="panel-form"`) or a
-// known action form, listed inside the test. A new form on any panel fails the
-// test until it has been classified.
+// Since version 2 no panel carries two edit routes any more: the defaults panel
+// and the profile note are gone, so `general`, `dns`, `links`, `output`,
+// `watchdog`, `proxy` and `route` each own exactly one form. The invariant is
+// still worth guarding, because the defect it closed was "the header «Сохранить»
+// silently applied only part of what the panel showed" — and the watchdog at the
+// bottom renders EVERY panel and demands that each form with input fields is
+// either the edit form (`id="panel-form"`) or a known action form, listed inside
+// the test. A new form on any panel fails the test until it has been classified.
 
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
@@ -21,18 +18,18 @@ import {describe, test} from 'node:test';
 
 import {PANEL_KINDS} from '../src/web/panel.mjs';
 import {startServer} from '../src/web/server.mjs';
-import {FI_TAG, makeTempDir, writeLinksFile, writeSettings} from './helpers.mjs';
+import {makeTempDir, writeLinksFile, writeSettings} from './helpers.mjs';
 
 /**
  * Starts the editor over a temporary project.
  *
- * @param {{overrides?: Record<string, unknown>, extra?: Record<string, unknown>}} [options]
+ * @param {{overrides?: Record<string, unknown>}} [options]
  * @returns {Promise<Record<string, unknown>>}
  */
 async function startEditor(options = {}) {
   const dir = makeTempDir();
   const linksFile = writeLinksFile(dir);
-  const settingsFile = writeSettings(dir, options.overrides ?? {}, options.extra ?? {});
+  const settingsFile = writeSettings(dir, options.overrides ?? {});
   const stateDir = path.join(dir, 'state');
 
   const {server, model, url} = await startServer({
@@ -92,7 +89,7 @@ function digest(file) {
   return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
-/** General fields of the shared settings form, as the browser sends them. */
+/** General fields of the settings form, as the browser sends them. */
 const GENERAL_FIELDS = Object.freeze({
   listen_ip: '10.95.2.1',
   urltest_url: 'https://example.org',
@@ -103,192 +100,74 @@ const GENERAL_FIELDS = Object.freeze({
   exclude_from_auto: '🇷🇺\n🇩🇪',
 });
 
-/** The DNS text of the defaults panel. */
+/** The DNS text of the dns panel. */
 const DNS_TEXT = '{"servers": [], "final": "direct"}';
 
-describe('one edit form per panel applies the whole panel', () => {
-  test('«Сохранить» on defaults applies both the general fields and the DNS text', async () => {
-    const editor = await startEditor({extra: {defaults: {listen_ip: '10.0.0.1'}}});
+describe('the general panel is the single settings form', () => {
+  test('«Сохранить» applies the general fields and writes the file', async () => {
+    const editor = await startEditor();
     try {
-      // Exactly what the browser sends: the fields of the edit form, and only
-      // them — no prior «Применить» request.
-      const response = await post(editor.base, '/save?panel=defaults', {
-        panel: 'defaults',
-        scope: 'defaults',
+      const response = await post(editor.base, '/save?panel=general', {
+        panel: 'general',
         ...GENERAL_FIELDS,
-        dns: DNS_TEXT,
       });
 
       assert.match(await response.text(), /правка формы применена и сохранена/i);
 
       const document = storedDocument(editor.settingsFile);
-      assert.equal(document.defaults.listen_ip, '10.95.2.1', 'the general fields reached the file');
-      assert.deepEqual(
-        document.defaults.dns,
-        {servers: [], final: 'direct'},
-        'the DNS text reached the file too',
-      );
-    } finally {
-      await editor.close();
-    }
-  });
-
-  test('«Применить» on defaults applies the DNS text as well', async () => {
-    const editor = await startEditor({extra: {defaults: {listen_ip: '10.0.0.1'}}});
-    try {
-      const response = await post(editor.base, '/general', {
-        scope: 'defaults',
-        ...GENERAL_FIELDS,
-        dns: DNS_TEXT,
+      assert.equal(document.listen_ip, '10.95.2.1');
+      assert.deepEqual(document.urltest, {
+        url: 'https://example.org',
+        interval: '5m',
+        tolerance: 42,
       });
-
-      assert.match(await response.text(), /Применено/);
-      assert.equal(editor.model.defaultsBody().listen_ip, '10.95.2.1');
-      assert.deepEqual(editor.model.defaultsBody().dns, {servers: [], final: 'direct'});
+      assert.deepEqual(document.log, {level: 'debug', timestamp: true});
     } finally {
       await editor.close();
     }
   });
 
-  test('«Применить DNS» on defaults applies the general fields as well', async () => {
-    const editor = await startEditor({extra: {defaults: {listen_ip: '10.0.0.1'}}});
+  test('without htmx the same save redirects and still applies', async () => {
+    const editor = await startEditor();
     try {
-      const response = await post(editor.base, '/dns', {
-        scope: 'defaults',
-        ...GENERAL_FIELDS,
-        dns: DNS_TEXT,
-      });
-
-      assert.match(await response.text(), /DNS применён/);
-      assert.equal(editor.model.defaultsBody().listen_ip, '10.95.2.1');
-      assert.deepEqual(editor.model.defaultsBody().dns, {servers: [], final: 'direct'});
-    } finally {
-      await editor.close();
-    }
-  });
-
-  test('a partial post of one route stays a partial edit of the panel', async () => {
-    const editor = await startEditor({extra: {defaults: {listen_ip: '10.0.0.1'}}});
-    try {
-      // A body without the `dns` field (a direct API client, not the form): the
-      // general route applies, the DNS route has nothing to do and is skipped.
-      const response = await post(editor.base, '/general', {scope: 'defaults', ...GENERAL_FIELDS});
-
-      assert.match(await response.text(), /Применено/);
-      assert.equal(editor.model.defaultsBody().listen_ip, '10.95.2.1');
-      assert.ok(!Object.hasOwn(editor.model.defaultsBody(), 'dns'));
-    } finally {
-      await editor.close();
-    }
-  });
-
-  test('without htmx the same save redirects and still applies both routes', async () => {
-    const editor = await startEditor({extra: {defaults: {listen_ip: '10.0.0.1'}}});
-    try {
-      const response = await post(
-        editor.base,
-        '/save?panel=defaults',
-        {panel: 'defaults', scope: 'defaults', ...GENERAL_FIELDS, dns: DNS_TEXT},
-        false,
-      );
+      const response = await post(editor.base, '/save?panel=general', {panel: 'general', ...GENERAL_FIELDS}, false);
 
       assert.equal(response.status, 303);
-      assert.equal(response.headers.get('location'), '/panel/defaults');
-
-      const document = storedDocument(editor.settingsFile);
-      assert.equal(document.defaults.listen_ip, '10.95.2.1');
-      assert.deepEqual(document.defaults.dns, {servers: [], final: 'direct'});
+      assert.equal(response.headers.get('location'), '/panel/general');
+      assert.equal(storedDocument(editor.settingsFile).listen_ip, '10.95.2.1');
     } finally {
       await editor.close();
     }
   });
 });
 
-describe('applying a list of routes is atomic', () => {
-  test('a broken DNS text refuses the whole panel and leaves the model untouched', async () => {
-    const editor = await startEditor({extra: {defaults: {listen_ip: '10.0.0.1'}}});
+describe('the dns panel keeps its own edit form', () => {
+  test('a broken DNS text refuses, writes nothing and leaves the model untouched', async () => {
+    const editor = await startEditor();
     try {
       const before = digest(editor.settingsFile);
 
-      const response = await post(editor.base, '/save?panel=defaults', {
-        panel: 'defaults',
-        scope: 'defaults',
-        ...GENERAL_FIELDS,
+      const response = await post(editor.base, '/save?panel=dns', {
+        panel: 'dns',
         dns: '{oops',
       });
       const html = await response.text();
 
       assert.match(html, /не валидный JSON/);
       assert.equal(digest(editor.settingsFile), before, 'webui.json is byte for byte the same');
-
-      // The general route ran first and had already written into the model. The
-      // rollback must have put it back, or the owner would see a failure while the
-      // in-memory document silently kept half of the edit.
-      assert.equal(editor.model.defaultsBody().listen_ip, '10.0.0.1', 'the model was rolled back');
       assert.equal(editor.model.dirty, false, 'a refused edit does not leave the model dirty');
-      assert.match(html, /value="10\.0\.0\.1"/, 'the redrawn panel shows the previous value');
     } finally {
       await editor.close();
     }
   });
 
-  test('a rejected first route never reaches the second one', async () => {
-    const editor = await startEditor({extra: {defaults: {listen_ip: '10.0.0.1'}}});
+  test('«Применить DNS» stores a JSON object', async () => {
+    const editor = await startEditor();
     try {
-      const before = digest(editor.settingsFile);
+      const response = await post(editor.base, '/dns', {dns: DNS_TEXT});
 
-      // `urltest_tolerance` is not an integer: the general route refuses before
-      // the DNS route is even tried.
-      const response = await post(editor.base, '/save?panel=defaults', {
-        panel: 'defaults',
-        scope: 'defaults',
-        ...GENERAL_FIELDS,
-        urltest_tolerance: 'abc',
-        dns: DNS_TEXT,
-      });
-
-      assert.match(await response.text(), /целым числом/);
-      assert.equal(digest(editor.settingsFile), before);
-      assert.ok(!Object.hasOwn(editor.model.defaultsBody(), 'dns'), 'the DNS route never ran');
-    } finally {
-      await editor.close();
-    }
-  });
-});
-
-describe('the profiles panel edits only the note', () => {
-  test('«Сохранить» writes the note of the active profile', async () => {
-    const editor = await startEditor({extra: {profileName: 'default'}});
-    try {
-      const response = await post(editor.base, '/save?panel=profiles', {
-        panel: 'profiles',
-        action: 'note',
-        note: 'заметка через сохранить',
-      });
-
-      assert.match(await response.text(), /Заметка|правка формы применена/i);
-      assert.equal(
-        storedDocument(editor.settingsFile).profiles.default.note,
-        'заметка через сохранить',
-      );
-    } finally {
-      await editor.close();
-    }
-  });
-
-  test('«Сохранить» refuses any action but note', async () => {
-    const editor = await startEditor({extra: {profileName: 'default'}});
-    try {
-      const before = digest(editor.settingsFile);
-
-      const response = await post(editor.base, '/save?panel=profiles', {
-        panel: 'profiles',
-        action: 'delete',
-      });
-
-      assert.match(await response.text(), /только заметку/);
-      assert.deepEqual(editor.model.profileNames(), ['default'], 'the profile is still there');
-      assert.equal(digest(editor.settingsFile), before, 'webui.json is untouched');
+      assert.match(await response.text(), /DNS применён/);
+      assert.deepEqual(editor.model.body().dns, {servers: [], final: 'direct'});
     } finally {
       await editor.close();
     }
@@ -296,51 +175,27 @@ describe('the profiles panel edits only the note', () => {
 });
 
 describe('the markup keeps one form element per panel', () => {
-  test('defaults binds the DNS field and its button to the one panel-form', async () => {
+  test('general binds the settings fields to the one panel-form', async () => {
     const editor = await startEditor();
     try {
-      const html = await (await fetch(`${editor.base}/panel/defaults`)).text();
+      const html = await (await fetch(`${editor.base}/panel/general`)).text();
 
-      assert.equal(
-        html.split('id="panel-form"').length - 1,
-        1,
-        'exactly one form element on the panel',
-      );
-      assert.match(
-        html,
-        /<textarea[^>]*name="dns"[^>]*form="panel-form"/,
-        'the DNS text belongs to the edit form through the form attribute',
-      );
-      assert.match(
-        html,
-        /<button[^>]*form="panel-form"[^>]*formaction="\/dns"/,
-        '«Применить DNS» submits the same form to /dns',
-      );
-      assert.match(html, />Применить<\/button>/, 'the general «Применить» is still there');
-      assert.match(html, /Применить DNS/, '«Применить DNS» is still there');
-      // No nested form: the DNS block is a plain <div>, the field joins the one
-      // form through the `form` attribute instead.
-      assert.match(
-        html,
-        /<h3>DNS в defaults<\/h3>\s*<div class="form">\s*<textarea[^>]*name="dns"[^>]*form="panel-form"/,
-        'the DNS block is not wrapped in a second form',
-      );
+      assert.equal(html.split('id="panel-form"').length - 1, 1, 'exactly one form element');
+      assert.match(html, /name="listen_ip"/);
+      assert.match(html, />Применить<\/button>/);
     } finally {
       await editor.close();
     }
   });
 
-  test('profiles marks its note form as the edit form', async () => {
+  test('dns binds its textarea to the one panel-form', async () => {
     const editor = await startEditor();
     try {
-      const html = await (await fetch(`${editor.base}/panel/profiles`)).text();
+      const html = await (await fetch(`${editor.base}/panel/dns`)).text();
 
-      assert.match(
-        html,
-        /<form id="panel-form"[^>]*>[\s\S]*?name="action" value="note"[\s\S]*?<\/form>/,
-        'the note form is the edit form',
-      );
       assert.equal(html.split('id="panel-form"').length - 1, 1);
+      assert.match(html, /<textarea[^>]*name="dns"/);
+      assert.match(html, /Применить DNS/);
     } finally {
       await editor.close();
     }
@@ -353,12 +208,6 @@ describe('the markup keeps one form element per panel', () => {
 
 /** Action forms that carry input fields and are allowed to be neither the edit form. */
 const EDITABLE_ACTION_FORMS = Object.freeze({
-  // The rename and create forms each have a text input; every other action form
-  // on the panel holds hidden fields only, and is therefore not inspected here.
-  profiles: [
-    {route: '/profiles', hidden: 'rename'},
-    {route: '/profiles', hidden: 'create'},
-  ],
   // The journal is a snapshot: its refresh form carries the unit and the level and
   // GETs the panel again. It is an action form, not an edit form — there is
   // nothing to save, so it must not be `id="panel-form"`.

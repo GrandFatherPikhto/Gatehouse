@@ -49,10 +49,11 @@ export const DEFAULT_LINKS = `${[
 ].join('\n')}\n`;
 
 /**
- * Minimal effective settings: 3 servers, 2 proxies (one with its own pool).
- * Reference: `DEFAULT_SETTINGS` in conftest.py.
+ * Minimal flat settings body (version 2): 3 servers, 2 proxies (one with its own
+ * pool). Reference: `DEFAULT_SETTINGS` in conftest.py, without the profile
+ * envelope that version 2 removed.
  */
-export const DEFAULT_PROFILE_SETTINGS = {
+export const DEFAULT_SETTINGS_BODY = {
   listen_ip: '127.0.0.1',
   links_file: 'links.txt',
   output_file: 'config.json',
@@ -93,24 +94,23 @@ export function writeLinksFile(dir, content = DEFAULT_LINKS) {
 }
 
 /**
- * Writes a webui.json with a single `default` profile, mirroring the
- * `write_settings` fixture of the reference (which wrote settings.yaml with the
- * same overrides). Paths inside stay relative to the directory of the file.
+ * Writes a flat `webui.json` (version 2), mirroring the `write_settings` fixture
+ * of the reference (which wrote settings.yaml with the same overrides). Paths
+ * inside stay relative to the directory of the file.
  *
  * @param {string} dir
- * @param {Record<string, unknown>} [overrides] Profile body overrides.
- * @param {{profileName?: string, defaults?: Record<string, unknown>}} [extra]
+ * @param {Record<string, unknown>} [overrides] Body overrides.
+ * @param {{defaults?: Record<string, unknown>}} [extra] `defaults` is merged
+ *   UNDER the overrides, which is how a test used to express a shared body; the
+ *   flat document has no such level, so it is just a lower-priority default.
  * @returns {string} Path of the written file.
  */
 export function writeSettings(dir, overrides = {}, extra = {}) {
-  const profileName = extra.profileName || 'default';
   const document = {
-    version: 1,
-    active: profileName,
-    defaults: extra.defaults || {},
-    profiles: {
-      [profileName]: {...DEFAULT_PROFILE_SETTINGS, ...overrides},
-    },
+    version: 2,
+    ...DEFAULT_SETTINGS_BODY,
+    ...(extra.defaults ?? {}),
+    ...overrides,
   };
   const file = path.join(dir, 'webui.json');
   fs.writeFileSync(file, `${JSON.stringify(document, null, 2)}\n`, 'utf8');
@@ -122,7 +122,7 @@ export function writeSettings(dir, overrides = {}, extra = {}) {
  * Reference: the `settings_file` fixture (settings.yaml next to links.txt).
  *
  * @param {Record<string, unknown>} [overrides]
- * @param {{profileName?: string, defaults?: Record<string, unknown>, links?: string}} [extra]
+ * @param {{defaults?: Record<string, unknown>, links?: string}} [extra]
  * @returns {{dir: string, settingsFile: string, linksFile: string}}
  */
 export function makeProject(overrides = {}, extra = {}) {

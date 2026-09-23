@@ -16,7 +16,6 @@ const USAGE = `Использование: node tools/generate.mjs [опции]
 
 Опции:
   --settings PATH             файл настроек (по умолчанию ${DEFAULT_SETTINGS_FILE})
-  --profile NAME              профиль вместо активного из webui.json
   --output PATH               куда писать config.json (переопределяет output_file)
   --links PATH                файл VLESS-ссылок (переопределяет links_file)
   --listen-ip IP              адрес прослушивания (переопределяет listen_ip)
@@ -35,7 +34,6 @@ const USAGE = `Использование: node tools/generate.mjs [опции]
 function parseArgs(argv) {
   const options = {
     settings: DEFAULT_SETTINGS_FILE,
-    profile: null,
     output: null,
     links: null,
     listenIp: null,
@@ -56,9 +54,6 @@ function parseArgs(argv) {
     switch (arg) {
       case '--settings':
         options.settings = value();
-        break;
-      case '--profile':
-        options.profile = value();
         break;
       case '--output':
         options.output = value();
@@ -143,7 +138,6 @@ export async function run(argv) {
       links: options.links,
       listenIp: options.listenIp,
       excludeFromAuto: options.excludeFromAuto,
-      profile: options.profile,
     });
 
     if (options.warningsFile) {

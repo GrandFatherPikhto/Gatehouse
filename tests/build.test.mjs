@@ -12,7 +12,7 @@ import {describe, test} from 'node:test';
 
 import {buildConfig, buildInbounds, buildPools, buildRules} from '../src/core/build.mjs';
 import {ConfigError} from '../src/core/errors.mjs';
-import {loadProfileSettings, stringifyConfig} from '../src/core/settings.mjs';
+import {loadEffectiveSettings, stringifyConfig} from '../src/core/settings.mjs';
 import {parseLinks} from '../src/core/vless.mjs';
 import {ALL_TAGS, FI_TAG, FIXTURES_DIR, NL_TAG, RU_TAG} from './helpers.mjs';
 import {validateProxies} from '../src/core/validate.mjs';
@@ -134,7 +134,7 @@ test('buildRules: an unknown outbound is a warning, not an error', () => {
 
 // Reference: test_build_config_structure_and_stats
 describe('buildConfig: structure and stats (test_build_config_structure_and_stats)', () => {
-  const settings = loadProfileSettings(FIXTURE_SETTINGS).settings;
+  const settings = loadEffectiveSettings(FIXTURE_SETTINGS).settings;
   const outbounds = parseLinks(FIXTURE_LINKS);
   const [config, stats] = buildConfig(settings, outbounds, '127.0.0.1');
 
@@ -169,7 +169,7 @@ describe('buildConfig: structure and stats (test_build_config_structure_and_stat
 
 // NEW: key order is the contract behind the byte-level comparison.
 describe('buildConfig: key order matches the reference (NEW)', () => {
-  const settings = loadProfileSettings(FIXTURE_SETTINGS).settings;
+  const settings = loadEffectiveSettings(FIXTURE_SETTINGS).settings;
   const [config] = buildConfig(settings, parseLinks(FIXTURE_LINKS), '127.0.0.1');
 
   test('config keys', () => {
@@ -237,7 +237,7 @@ describe('buildConfig: key order matches the reference (NEW)', () => {
 // commit, so the difference is visible in review.
 describe('buildConfig: byte-identical to the golden file (NEW)', () => {
   test('stringifyConfig reproduces tests/fixtures/golden/config.json', () => {
-    const settings = loadProfileSettings(FIXTURE_SETTINGS).settings;
+    const settings = loadEffectiveSettings(FIXTURE_SETTINGS).settings;
     const [config] = buildConfig(settings, parseLinks(FIXTURE_LINKS), '127.0.0.1');
     const golden = fs.readFileSync(GOLDEN_CONFIG, 'utf8');
 

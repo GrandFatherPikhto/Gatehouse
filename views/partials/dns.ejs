@@ -2,23 +2,12 @@
     16 kinds of DNS servers, the schema is fresh and still moving, and DNS is
     edited rarely. Only "a valid JSON object" is checked. %>
 <h2><%= panel.title %></h2>
-<p>
-  Значение: <span class="badge <%= panel.origin.className %>"><%= panel.origin.text %></span>
-</p>
 <p class="hint">
   Структурных форм здесь нет намеренно: секция dns уезжает в config.json как
   есть. Проверяется только то, что это валидный JSON-объект.
 </p>
 
 <form id="panel-form" class="form" hx-post="/dns" hx-target="#panel" hx-swap="innerHTML" method="post" action="/dns">
-  <input type="hidden" name="scope" value="profile">
   <textarea name="dns" rows="20" cols="80" spellcheck="false"><%= panel.json %></textarea>
   <button type="submit">Применить DNS</button>
-</form>
-
-<form hx-post="/general" hx-target="#panel" hx-swap="innerHTML" method="post" action="/general">
-  <input type="hidden" name="scope" value="profile">
-  <input type="hidden" name="action" value="reset">
-  <input type="hidden" name="field" value="dns">
-  <button type="submit" class="secondary">Вернуть к значению из defaults</button>
 </form>

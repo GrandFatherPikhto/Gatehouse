@@ -93,11 +93,66 @@ the real one.
 The sandbox data (`dev/root/`) is deliberately not in the repository — it carries
 keys and personal server lists. `dev/root.example/` holds anonymised samples:
 
+The sample set also carries a links file, and without it every server of every
+proxy is reported as missing — copy all three:
+
 ```bash
 mkdir -p dev/root/etc/sing-box
-cp dev/root.example/webui.json dev/root/webui.json
-cp dev/root.example/etc/sing-box/config.json dev/root/etc/sing-box/config.json
+cp dev/root.example/webui.json                dev/root/webui.json
+cp dev/root.example/etc/sing-box/config.json  dev/root/etc/sing-box/config.json
+cp dev/root.example/links.txt                 dev/root/links.txt
 ```
+
+### Working against the real data
+
+The samples are enough to start the editor, but they describe three synthetic
+servers. To develop against what the router actually runs, copy its files in.
+Note where they live: the settings are in `/etc/`, while `/var/lib/` holds only
+the snapshots and the server lists.
+
+```bash
+mkdir -p dev/root/sources/vpnd dev/root/etc/sing-box
+scp denis@10.95.2.1:/etc/gatehouse/webui.json          dev/root/
+scp denis@10.95.2.1:/etc/sing-box/config.json          dev/root/etc/sing-box/
+scp denis@10.95.2.1:/var/lib/gatehouse/sources/vpnd/links.txt  dev/root/sources/vpnd/
+```
+
+**Then rewrite the two paths inside the copied `webui.json`.** On the router they
+are absolute, and `links_file` / `output_file` are resolved against the directory
+of the settings file — so an absolute `output_file` makes the sandbox aim at the
+host's real `/etc/sing-box/config.json`, and an absolute `links_file` points at a
+directory that does not exist on a workstation:
+
+```json
+"links_file":  "sources/vpnd/links.txt",
+"output_file": "etc/sing-box/config.json"
+```
+
+Edit this **while the server is stopped**. It keeps the settings in memory and
+writes them back when you save, so a change made underneath a running instance
+is lost at the next save.
+
+### Checking the sandbox against the live config
+
+With the real data in place, the generator must reproduce the config the router
+is running, byte for byte. That is the strongest available check that a change to
+the model or the generator did not shift the output:
+
+```bash
+cp dev/root/etc/sing-box/config.json /tmp/live-config.json
+node tools/generate.mjs --settings dev/root/webui.json --quiet
+cmp /tmp/live-config.json dev/root/etc/sing-box/config.json && echo identical
+```
+
+This is a manual check, not part of `node --test`: `dev/root/` is not in the
+repository, so the suite has no data to run it against. The automated gate is the
+golden file built from the committed fixtures — see «Golden file acceptance».
+
+### One tab at a time
+
+The editor keeps the document in the server process, not in the browser. Two open
+tabs overwrite each other's edits. The dev server says so at startup; it is not a
+sandbox limitation but how the editor works.
 
 ## Usage
 

@@ -1,9 +1,8 @@
-<%# Shared form of "Общие" and "Значения по умолчанию": the same fields, only the
-    destination differs — the active profile or defaults. Both are written by
-    POST /general with a scope field. %>
+<%# Settings form of the "Общие" panel. Since version 2 there is one destination —
+    the document itself — so there is no scope field and no origin of a value to
+    show: a key is simply present or absent. %>
 <% const values = panel.values; %>
 <form id="panel-form" class="form" hx-post="/general" hx-target="#panel" hx-swap="innerHTML" method="post" action="/general">
-  <input type="hidden" name="scope" value="<%= scope %>">
 
   <fieldset>
     <legend>Сеть</legend>

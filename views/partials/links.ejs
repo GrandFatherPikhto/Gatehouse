@@ -1,6 +1,6 @@
-<%# Links file: the path (a profile key), how many servers were recognised, and
-    the warnings of the parser. A missing file is a normal state of a fresh
-    project, so it is reported, not thrown. %>
+<%# Links file: the path, how many servers were recognised, and the warnings of
+    the parser. A missing file is a normal state of a fresh project, so it is
+    reported, not thrown. %>
 <h2><%= panel.title %></h2>
 
 <form id="panel-form" class="form" hx-post="/links" hx-target="#panel" hx-swap="innerHTML" method="post" action="/links">
@@ -10,8 +10,7 @@
     <input type="text" id="links_file" name="links_file" value="<%= panel.info.file %>" size="60">
     <p class="hint">
       Относительный путь считается от каталога webui.json:
-      <code><%= panel.info.path %></code>. Файл принадлежит профилю, у разных
-      профилей он может быть своим.
+      <code><%= panel.info.path %></code>.
     </p>
   </fieldset>
   <button type="submit">Применить</button>

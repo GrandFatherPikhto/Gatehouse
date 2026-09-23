@@ -2,7 +2,8 @@
 //
 // The behavioural reference is generator/model.py of the Python project, so the
 // cases that come from there name it; the cases marked NEW cover what only
-// exists in the web editor (profiles, defaults, snapshots, the canonical format).
+// exists in the web editor (the flat version-2 document, the one-time migration
+// of the profile envelope, snapshots, the canonical format, the honest tree).
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -10,9 +11,9 @@ import path from 'node:path';
 import {describe, test} from 'node:test';
 
 import {ConfigError} from '../src/core/errors.mjs';
-import {loadProfileSettings} from '../src/core/settings.mjs';
-import {ProjectModel, formatStats} from '../src/model/project.mjs';
-import {staleKey} from '../src/model/stale.mjs';
+import {loadEffectiveSettings} from '../src/core/settings.mjs';
+import {DOCUMENT_VERSION, ProjectModel, formatStats, migrateLegacyDocument} from '../src/model/project.mjs';
+import {LABEL_NAMES_CAP, staleKey} from '../src/model/stale.mjs';
 import {canonicalJson, listSnapshots} from '../src/model/storage.mjs';
 import {
   ALL_TAGS,
@@ -39,38 +40,53 @@ function openDocument(document, options = {}) {
 }
 
 /**
- * A minimal two-profile document.
+ * A minimal flat document: one proxy, one route, no profile envelope.
  *
+ * @param {Record<string, unknown>} [overrides]
  * @returns {Record<string, unknown>}
  */
-function twoProfiles() {
+function flatDocument(overrides = {}) {
+  return {
+    version: DOCUMENT_VERSION,
+    listen_ip: '127.0.0.1',
+    links_file: 'links.txt',
+    output_file: 'config.json',
+    urltest: {url: 'https://gstatic.com', interval: '3m', tolerance: 50},
+    log: {level: 'info', timestamp: true},
+    dns: {servers: [], final: 'dns-local'},
+    proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
+    routes: {telegram: {outbound: 'auto-select', domains: ['t.me']}},
+    ...overrides,
+  };
+}
+
+/**
+ * A version-1 document with the profile envelope.
+ *
+ * @param {Record<string, unknown>} [overrides]
+ * @returns {Record<string, unknown>}
+ */
+function legacyDocument(overrides = {}) {
   return {
     version: 1,
-    active: 'first',
+    active: 'default',
     defaults: {},
     profiles: {
-      first: {
+      default: {
         listen_ip: '127.0.0.1',
         links_file: 'links.txt',
         output_file: 'config.json',
-        urltest: {url: 'https://gstatic.com', interval: '3m', tolerance: 50},
-        log: {level: 'info', timestamp: true},
         proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
         routes: {telegram: {outbound: 'auto-select', domains: ['t.me']}},
       },
-      second: {
-        listen_ip: '10.0.0.2',
-        links_file: 'links.txt',
-        output_file: 'config.json',
-        proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
-      },
     },
+    ...overrides,
   };
 }
 
 describe('canonical format and round-trip (NEW)', () => {
   test('an untouched canonical file is saved byte for byte', () => {
-    const {file, model} = openDocument(twoProfiles());
+    const {file, model} = openDocument(flatDocument());
     const before = fs.readFileSync(file);
 
     assert.equal(model.dirty, false);
@@ -82,17 +98,17 @@ describe('canonical format and round-trip (NEW)', () => {
   });
 
   test('the canonical file ends with a newline and uses two spaces', () => {
-    const {file, model} = openDocument(twoProfiles());
+    const {file, model} = openDocument(flatDocument());
     model.save();
 
     const text = fs.readFileSync(file, 'utf8');
     assert.ok(text.endsWith('\n'));
-    assert.ok(text.includes('\n  "active": "first"'));
-    assert.equal(text, canonicalJson(twoProfiles()));
+    assert.ok(text.includes('\n  "version": 2'));
+    assert.equal(text, canonicalJson(flatDocument()));
   });
 
   test('a foreign formatting is canonicalised, and the second save is a no-op', () => {
-    const document = twoProfiles();
+    const document = flatDocument();
     const dir = makeTempDir();
     const file = path.join(dir, 'webui.json');
     // Four-space indent, no trailing newline: what a hand edit looks like.
@@ -111,34 +127,22 @@ describe('canonical format and round-trip (NEW)', () => {
     assert.equal(fs.readFileSync(file, 'utf8'), canonical);
   });
 
-  test('a document without defaults keeps no defaults after a save', () => {
-    const document = twoProfiles();
-    delete document.defaults;
-
-    const {file, model} = openDocument(document);
-    model.save();
-
-    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-    assert.ok(!Object.hasOwn(saved, 'defaults'), 'reading must not create the section');
-    assert.equal(fs.readFileSync(file, 'utf8'), canonicalJson(document));
-  });
-
-  test('a document with a digit-only profile name is refused at load', () => {
-    const document = {version: 1, active: '2024', profiles: {'2024': {}}};
+  test('a document with a digit-only route name is refused at load', () => {
+    const document = flatDocument({routes: {'2024': {outbound: 'auto-select'}}});
     const dir = makeTempDir();
     const file = path.join(dir, 'webui.json');
     fs.writeFileSync(file, canonicalJson(document), 'utf8');
 
     assert.throws(
       () => new ProjectModel({path: file, stateDir: path.join(dir, 'state')}),
-      (error) => error instanceof ConfigError && /profiles/.test(error.message),
+      (error) => error instanceof ConfigError && /routes/.test(error.message),
     );
   });
 });
 
 describe('dirty flag and file operations (reference: model.new/open/save)', () => {
   test('an edit marks the document dirty, a save marks it clean again', () => {
-    const {model} = openDocument(twoProfiles());
+    const {model} = openDocument(flatDocument());
 
     model.applyGeneral({listen_ip: '10.95.2.1'});
     assert.equal(model.dirty, true);
@@ -148,25 +152,26 @@ describe('dirty flag and file operations (reference: model.new/open/save)', () =
   });
 
   test('reload drops unsaved changes', () => {
-    const {file, model} = openDocument(twoProfiles());
+    const {file, model} = openDocument(flatDocument());
     model.applyGeneral({listen_ip: '10.95.2.1'});
 
     model.reload();
 
     assert.equal(model.listenIp, '127.0.0.1');
     assert.equal(model.dirty, false);
-    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).profiles.first.listen_ip, '127.0.0.1');
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).listen_ip, '127.0.0.1');
   });
 
   test('a new project has the reference skeleton and no file', () => {
     const model = new ProjectModel({stateDir: makeTempDir()});
     const document = model.document;
 
-    assert.equal(document.active, 'default');
-    assert.deepEqual(document.defaults, {});
-    assert.equal(document.profiles.default.listen_ip, '127.0.0.1');
-    assert.equal(document.profiles.default.links_file, 'links.txt');
-    assert.deepEqual(document.profiles.default.proxies, []);
+    assert.equal(document.version, DOCUMENT_VERSION);
+    assert.equal(document.listen_ip, '127.0.0.1');
+    assert.equal(document.links_file, 'links.txt');
+    assert.deepEqual(document.proxies, []);
+    assert.ok(!Object.hasOwn(document, 'profiles'));
+    assert.ok(!Object.hasOwn(document, 'defaults'));
     assert.equal(model.path, null);
     assert.throws(() => model.save(), (error) => /не задан путь/.test(error.message));
   });
@@ -184,110 +189,104 @@ describe('dirty flag and file operations (reference: model.new/open/save)', () =
   });
 
   test('the document is validated before anything is written', () => {
-    const {file, model} = openDocument(twoProfiles());
+    const {file, model} = openDocument(flatDocument());
     const before = fs.readFileSync(file, 'utf8');
-    model.profileBody().proxies[0].type = 'socks5'; // not in PROXY_TYPES
+    model.body().proxies[0].type = 'socks5'; // not in PROXY_TYPES
 
     assert.throws(() => model.save(), (error) => error instanceof ConfigError);
     assert.equal(fs.readFileSync(file, 'utf8'), before, 'the broken edit never reaches the disk');
   });
 });
 
-describe('profiles (NEW)', () => {
-  test('create, rename, duplicate and remove keep the order', () => {
-    const {model} = openDocument(twoProfiles());
+describe('migration of the version-1 envelope (NEW)', () => {
+  test('a single profile is flattened silently and the file is rewritten', () => {
+    const legacy = legacyDocument();
+    const dir = makeTempDir();
+    const stateDir = path.join(dir, 'state');
+    const file = path.join(dir, 'webui.json');
+    fs.writeFileSync(file, canonicalJson(legacy), 'utf8');
 
-    model.createProfile('third');
-    assert.deepEqual(model.profileNames(), ['first', 'second', 'third']);
+    const model = new ProjectModel({path: file, stateDir});
 
-    model.renameProfile('third', 'renamed');
-    assert.deepEqual(model.profileNames(), ['first', 'second', 'renamed']);
-
-    const copy = model.duplicateProfile('second');
-    assert.equal(copy, 'second-copy');
-    assert.deepEqual(model.profileNames(), ['first', 'second', 'second-copy', 'renamed']);
-
-    model.removeProfile('renamed');
-    assert.deepEqual(model.profileNames(), ['first', 'second', 'second-copy']);
+    assert.equal(model.document.version, DOCUMENT_VERSION);
+    assert.ok(!Object.hasOwn(model.document, 'profiles'));
+    assert.ok(!Object.hasOwn(model.document, 'defaults'));
+    assert.ok(!Object.hasOwn(model.document, 'active'));
+    assert.deepEqual(model.document.proxies, [{tag: 'main-socks', type: 'socks', port: 54321}]);
+    assert.deepEqual(model.lastMigration.warnings, []);
+    assert.ok(model.lastMigration.snapshot !== null, 'the previous version was snapshotted');
+    assert.equal(
+      fs.readFileSync(model.lastMigration.snapshot, 'utf8'),
+      canonicalJson(legacy),
+      'the snapshot holds the old bytes',
+    );
+    assert.equal(fs.readFileSync(file, 'utf8'), canonicalJson(model.document));
   });
 
-  test('a duplicate keeps the ports as they are', () => {
-    const {model} = openDocument(twoProfiles());
+  test('a non-empty defaults is merged under the profile, with a warning per key', () => {
+    const legacy = legacyDocument({
+      defaults: {listen_ip: '10.95.2.1', log: {level: 'warn'}},
+      profiles: {
+        default: {
+          listen_ip: '10.0.0.2',
+          links_file: 'links.txt',
+          output_file: 'config.json',
+          proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
+        },
+      },
+    });
+    const dir = makeTempDir();
+    const file = path.join(dir, 'webui.json');
+    fs.writeFileSync(file, canonicalJson(legacy), 'utf8');
 
-    model.duplicateProfile('second', 'copy');
+    const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
 
-    const ports = (name) => model.profileBody(name).proxies.map((proxy) => proxy.port);
-    assert.deepEqual(ports('copy'), ports('second'));
-    assert.notEqual(model.profileBody('copy').proxies, model.profileBody('second').proxies);
+    assert.equal(model.document.listen_ip, '10.0.0.2', 'the profile wins');
+    assert.deepEqual(model.document.log, {level: 'warn'}, 'the unset key is taken from defaults');
+    assert.equal(model.lastMigration.warnings.length, 2);
+    assert.ok(model.lastMigration.warnings.some((warning) => /'listen_ip'/.test(warning)));
+    assert.ok(model.lastMigration.warnings.some((warning) => /перекрыт/.test(warning)));
+    assert.ok(model.lastMigration.warnings.some((warning) => /'log'/.test(warning)));
   });
 
-  test('the last profile cannot be removed', () => {
-    const {model} = openDocument(twoProfiles());
-    model.removeProfile('second');
+  test('two profiles are refused with their names, never guessed', () => {
+    const legacy = legacyDocument({
+      profiles: {first: {listen_ip: '127.0.0.1'}, second: {listen_ip: '10.0.0.2'}},
+    });
+    const dir = makeTempDir();
+    const file = path.join(dir, 'webui.json');
+    fs.writeFileSync(file, canonicalJson(legacy), 'utf8');
 
     assert.throws(
-      () => model.removeProfile('first'),
-      (error) => error instanceof ConfigError && /последний профиль/.test(error.message),
+      () => new ProjectModel({path: file, stateDir: path.join(dir, 'state')}),
+      (error) =>
+        error instanceof ConfigError &&
+        /несколько профилей/.test(error.message) &&
+        /first, second/.test(error.message),
     );
+    assert.equal(fs.readFileSync(file, 'utf8'), canonicalJson(legacy), 'the file is untouched');
   });
 
-  test('the active profile cannot be removed', () => {
-    const {model} = openDocument(twoProfiles());
+  test('a migrated file is schema-valid and re-opens without a second migration', () => {
+    const {file, model} = openDocument(legacyDocument());
 
+    const reopened = new ProjectModel({path: file, stateDir: path.join(makeTempDir(), 'state')});
+
+    assert.equal(reopened.lastMigration, null);
+    assert.deepEqual(reopened.document, model.document);
+  });
+
+  test('migrateLegacyDocument refuses a document without profiles', () => {
     assert.throws(
-      () => model.removeProfile('first'),
-      (error) => error instanceof ConfigError && /активный профиль 'first'/.test(error.message),
+      () => migrateLegacyDocument({version: 1, active: 'a', defaults: {}, profiles: {}}),
+      (error) => error instanceof ConfigError && /без профилей/.test(error.message),
     );
-  });
-
-  test('renaming the active profile follows active', () => {
-    const {model} = openDocument(twoProfiles());
-
-    model.renameProfile('first', 'primary');
-
-    assert.equal(model.activeProfileName(), 'primary');
-    assert.deepEqual(model.profileNames(), ['primary', 'second']);
-  });
-
-  test('switching active marks the document dirty', () => {
-    const {model} = openDocument(twoProfiles());
-
-    assert.equal(model.setActive('second'), true);
-    assert.equal(model.dirty, true);
-    assert.equal(model.listenIp, '10.0.0.2');
-    assert.equal(model.setActive('second'), false, 'no change, no dirty flag');
-  });
-
-  test('an unknown or digit-only name is refused', () => {
-    const {model} = openDocument(twoProfiles());
-
-    assert.throws(
-      () => model.setActive('nope'),
-      (error) => error instanceof ConfigError && /профиль 'nope' не найден/.test(error.message),
-    );
-    assert.throws(
-      () => model.createProfile('2024'),
-      (error) => error instanceof ConfigError && /только из цифр/.test(error.message),
-    );
-    assert.throws(
-      () => model.createProfile('first'),
-      (error) => error instanceof ConfigError && /уже есть/.test(error.message),
-    );
-  });
-
-  test('nextFreeProfileName counts up from the base', () => {
-    const {model} = openDocument(twoProfiles());
-
-    assert.equal(model.nextFreeProfileName('third'), 'third');
-    assert.equal(model.nextFreeProfileName('first'), 'first-2');
-    model.duplicateProfile('first', 'first-2');
-    assert.equal(model.nextFreeProfileName('first'), 'first-3');
   });
 });
 
 describe('proxies (reference: the proxy CRUD of model.py)', () => {
   test('a duplicate port is refused with the wording of the core', () => {
-    const {model} = openDocument(twoProfiles());
+    const {model} = openDocument(flatDocument());
 
     assert.throws(
       () => model.upsertProxy({tag: 'other', type: 'http', port: 54321}),
@@ -296,7 +295,7 @@ describe('proxies (reference: the proxy CRUD of model.py)', () => {
   });
 
   test('editing a proxy does not conflict with itself', () => {
-    const {model} = openDocument(twoProfiles());
+    const {model} = openDocument(flatDocument());
 
     const error = model.validateProxyCandidate(
       {tag: 'main-socks', type: 'mixed', port: 54321},
@@ -309,7 +308,7 @@ describe('proxies (reference: the proxy CRUD of model.py)', () => {
   });
 
   test('addProxy fills a free tag and port, servers and note are optional', () => {
-    const {model} = openDocument(twoProfiles());
+    const {model} = openDocument(flatDocument());
 
     const entry = model.addProxy();
 
@@ -318,7 +317,7 @@ describe('proxies (reference: the proxy CRUD of model.py)', () => {
   });
 
   test('servers and note are written only when they carry something', () => {
-    const {model} = openDocument(twoProfiles());
+    const {model} = openDocument(flatDocument());
 
     model.upsertProxy(
       {tag: 'apps-http', type: 'http', port: 54323, servers: [FI_TAG, ''], note: 'primary'},
@@ -333,7 +332,7 @@ describe('proxies (reference: the proxy CRUD of model.py)', () => {
   });
 
   test('rename and remove follow the reference rules', () => {
-    const {model} = openDocument(twoProfiles());
+    const {model} = openDocument(flatDocument());
 
     assert.equal(model.renameProxy('nope', 'main'), false, 'unknown source');
     assert.equal(model.renameProxy('main-socks', 'main-socks'), false, 'same name');
@@ -348,18 +347,27 @@ describe('proxies (reference: the proxy CRUD of model.py)', () => {
   });
 
   test('nextFreePort and nextFreeTag step over what is taken', () => {
-    const {model} = openDocument(twoProfiles());
+    const {model} = openDocument(flatDocument());
     model.upsertProxy({tag: 'a', type: 'socks', port: 54322});
 
     assert.equal(model.nextFreePort(), 54323);
     assert.equal(model.nextFreeTag('a'), 'a-2');
     assert.equal(model.nextFreeTag('b'), 'b');
   });
+
+  test('a pinned proxy may not end up with a pool', () => {
+    const {model} = openDocument(flatDocument());
+
+    assert.throws(
+      () => model.upsertProxy({tag: 'pinned', type: 'socks', port: 54324, servers: [FI_TAG, 'x'], pinned: true}),
+      (error) => error instanceof ConfigError && /зафиксирован выход/.test(error.message),
+    );
+  });
 });
 
 describe('routes (reference: the route CRUD of model.py)', () => {
   test('add, rename and remove keep the order of the other routes', () => {
-    const {model} = openDocument(twoProfiles());
+    const {model} = openDocument(flatDocument());
 
     model.addRoute({name: 'youtube', outbound: 'auto-select', domains: ['googlevideo.com']});
     model.upsertRoute('yandex', {outbound: 'auto-select', domains: ['yandex.ru']}, null);
@@ -372,7 +380,7 @@ describe('routes (reference: the route CRUD of model.py)', () => {
   });
 
   test('renaming through upsertRoute keeps the position', () => {
-    const {model} = openDocument(twoProfiles());
+    const {model} = openDocument(flatDocument());
     model.addRoute({name: 'second-route'});
 
     model.upsertRoute('renamed', {outbound: 'direct'}, 'second-route');
@@ -382,7 +390,7 @@ describe('routes (reference: the route CRUD of model.py)', () => {
   });
 
   test('an empty outbound falls back to auto-select, empty domains are dropped', () => {
-    const {model} = openDocument(twoProfiles());
+    const {model} = openDocument(flatDocument());
 
     model.addRoute({name: 'plain', outbound: '', domains: ['', 'example.com', '']});
 
@@ -390,7 +398,7 @@ describe('routes (reference: the route CRUD of model.py)', () => {
   });
 
   test('a digit-only route name and a duplicate are refused', () => {
-    const {model} = openDocument(twoProfiles());
+    const {model} = openDocument(flatDocument());
 
     assert.throws(
       () => model.addRoute({name: '1'}),
@@ -403,56 +411,9 @@ describe('routes (reference: the route CRUD of model.py)', () => {
   });
 });
 
-describe('general settings, defaults and inheritance (NEW)', () => {
-  test('a missing field is inherited from defaults and reported as such', () => {
-    const {model} = openDocument({
-      version: 1,
-      active: 'a',
-      defaults: {listen_ip: '10.95.2.1', urltest: {interval: '5m'}},
-      profiles: {a: {links_file: 'links.txt', output_file: 'config.json'}},
-    });
-
-    const values = model.generalValues();
-
-    assert.equal(values.listen_ip, '10.95.2.1');
-    assert.equal(values.origins.listen_ip, 'defaults');
-    assert.equal(model.fieldOrigin('exclude_from_auto').scope, 'absent');
-  });
-
-  test('a profile value wins and is reported as its own', () => {
-    const {model} = openDocument({
-      version: 1,
-      active: 'a',
-      defaults: {listen_ip: '10.95.2.1', urltest: {interval: '5m'}},
-      profiles: {a: {listen_ip: '10.0.0.2'}},
-    });
-
-    assert.equal(model.generalValues().listen_ip, '10.0.0.2');
-    assert.equal(model.generalValues().origins.listen_ip, 'profile');
-    // urltest is inherited as a whole: the merge is top level only.
-    assert.equal(model.generalValues().urltest.interval, '5m');
-    assert.equal(model.generalValues().origins.urltest, 'defaults');
-  });
-
-  test('resetting a field removes it from the profile and nothing else', () => {
-    const {model} = openDocument({
-      version: 1,
-      active: 'a',
-      defaults: {listen_ip: '10.95.2.1'},
-      profiles: {a: {listen_ip: '10.0.0.2'}},
-    });
-
-    assert.equal(model.resetProfileField('listen_ip'), true);
-    assert.equal(model.listenIp, '10.95.2.1');
-    assert.equal(model.resetProfileField('listen_ip'), false, 'nothing left to reset');
-    assert.throws(
-      () => model.resetProfileField('links_file'),
-      (error) => error instanceof ConfigError && /не общее/.test(error.message),
-    );
-  });
-
+describe('general settings (NEW)', () => {
   test('applyGeneral merges the nested blocks field by field', () => {
-    const {model} = openDocument(twoProfiles());
+    const {model} = openDocument(flatDocument());
 
     model.applyGeneral({
       listen_ip: '10.95.2.1',
@@ -461,70 +422,38 @@ describe('general settings, defaults and inheritance (NEW)', () => {
       exclude_from_auto: ['🇷🇺', '🇩🇪'],
     });
 
-    const profile = model.profileBody();
-    assert.equal(profile.listen_ip, '10.95.2.1');
-    assert.deepEqual(profile.urltest, {url: 'https://gstatic.com', interval: '5m', tolerance: 50});
-    assert.deepEqual(profile.log, {level: 'debug', timestamp: true});
-    assert.deepEqual(profile.exclude_from_auto, ['🇷🇺', '🇩🇪']);
+    const body = model.body();
+    assert.equal(body.listen_ip, '10.95.2.1');
+    assert.deepEqual(body.urltest, {url: 'https://gstatic.com', interval: '5m', tolerance: 50});
+    assert.deepEqual(body.log, {level: 'debug', timestamp: true});
+    assert.deepEqual(body.exclude_from_auto, ['🇷🇺', '🇩🇪']);
   });
 
-  test('applyDefaults writes only the shared keys', () => {
-    const {model} = openDocument({
-      version: 1,
-      active: 'a',
-      defaults: {proxies: [{tag: 'shared', type: 'socks', port: 55555}]},
-      profiles: {a: {}},
-    });
+  test('generalValues fills the built-in defaults for an unset field', () => {
+    const {model} = openDocument(flatDocument({listen_ip: undefined, log: undefined}));
 
-    model.applyDefaults({listen_ip: '10.95.2.1', exclude_from_auto: ['🇷🇺']});
+    const values = model.generalValues();
 
-    const defaults = model.defaultsBody();
-    assert.equal(defaults.listen_ip, '10.95.2.1');
-    assert.deepEqual(defaults.exclude_from_auto, ['🇷🇺']);
-    assert.deepEqual(
-      defaults.proxies,
-      [{tag: 'shared', type: 'socks', port: 55555}],
-      'a hand-written key the form does not know about stays untouched',
-    );
-    assert.deepEqual(Object.keys(defaults), ['proxies', 'listen_ip', 'exclude_from_auto']);
-  });
-
-  test('defaultsValues says which keys are set in defaults', () => {
-    const {model} = openDocument({
-      version: 1,
-      active: 'a',
-      defaults: {log: {level: 'warn'}},
-      profiles: {a: {}},
-    });
-
-    const values = model.defaultsValues();
-
-    assert.equal(values.log.level, 'warn');
-    assert.deepEqual(values.present.log, true);
-    assert.deepEqual(values.present.listen_ip, false);
-    assert.equal(values.listen_ip, '127.0.0.1', 'an unset field shows the built-in default');
+    assert.equal(values.listen_ip, '127.0.0.1');
+    assert.equal(values.log.level, 'info');
+    assert.equal(values.urltest.interval, '3m');
   });
 });
 
 describe('DNS as a JSON text field (NEW)', () => {
-  test('the textarea shows the effective section and stores an object', () => {
-    const {model} = openDocument({
-      version: 1,
-      active: 'a',
-      defaults: {dns: {servers: [{type: 'local', tag: 'dns-local'}], final: 'dns-local'}},
-      profiles: {a: {}},
-    });
+  test('the textarea shows the section and stores an object', () => {
+    const {model} = openDocument(
+      flatDocument({dns: {servers: [{type: 'local', tag: 'dns-local'}], final: 'dns-local'}}),
+    );
 
     assert.match(model.dnsJson(), /dns-local/);
-    assert.equal(model.fieldOrigin('dns').scope, 'defaults');
 
-    model.applyDns('{"servers": [], "final": "direct"}', 'profile');
-    assert.equal(model.fieldOrigin('dns').scope, 'profile');
-    assert.match(model.dnsJson('defaults'), /dns-local/, 'defaults are not touched');
+    model.applyDns('{"servers": [], "final": "direct"}');
+    assert.deepEqual(model.body().dns, {servers: [], final: 'direct'});
   });
 
   test('only a valid JSON object is accepted', () => {
-    const {model} = openDocument(twoProfiles());
+    const {model} = openDocument(flatDocument());
 
     assert.throws(
       () => model.applyDns('{not json'),
@@ -543,19 +472,12 @@ describe('DNS as a JSON text field (NEW)', () => {
 
 describe('stale references and the tree', () => {
   test('a proxy with a missing server and a route with a bad outbound are marked', () => {
-    const {dir, model} = openDocument({
-      version: 1,
-      active: 'a',
-      defaults: {},
-      profiles: {
-        a: {
-          links_file: 'links.txt',
-          output_file: 'config.json',
-          proxies: [{tag: 'main', type: 'socks', port: 54321, servers: ['🇩🇪 Germany - Berlin']}],
-          routes: {telegram: {outbound: 'pool-gone', domains: ['t.me']}},
-        },
-      },
-    });
+    const {dir, model} = openDocument(
+      flatDocument({
+        proxies: [{tag: 'main', type: 'socks', port: 54321, servers: ['🇩🇪 Germany - Berlin']}],
+        routes: {telegram: {outbound: 'pool-gone', domains: ['t.me']}},
+      }),
+    );
     writeLinksFile(dir);
 
     const tree = model.treeSpec();
@@ -569,18 +491,9 @@ describe('stale references and the tree', () => {
   });
 
   test('a route with an unknown outbound is a mark, not a save blocker', () => {
-    const {dir, model} = openDocument({
-      version: 1,
-      active: 'a',
-      defaults: {},
-      profiles: {
-        a: {
-          links_file: 'links.txt',
-          output_file: 'config.json',
-          routes: {broken: {outbound: 'nope-tag', domains: ['example.com']}},
-        },
-      },
-    });
+    const {dir, model} = openDocument(
+      flatDocument({routes: {broken: {outbound: 'nope-tag', domains: ['example.com']}}}),
+    );
     writeLinksFile(dir);
 
     const routes = model.treeSpec().children.find((child) => child.kind === 'routes');
@@ -591,43 +504,41 @@ describe('stale references and the tree', () => {
   });
 
   test('a missing links file marks the node instead of throwing', () => {
-    const {model} = openDocument(twoProfiles());
+    const {model} = openDocument(flatDocument({links_file: 'nowhere.txt'}));
 
     const info = model.linksInfo();
     assert.equal(info.exists, false);
-    assert.match(info.error, /файл ссылок/);
+    assert.equal(info.state, 'missing');
 
     const links = model.treeSpec().children.find((child) => child.kind === 'links');
     assert.equal(links.stale, true);
-    assert.equal(links.mark, '[!] файл не найден');
+    assert.match(links.mark, /^\[!\] файл ссылок не найден: /);
   });
 
-  test('the tree has the nodes of the task, with profiles and defaults', () => {
-    const {dir, model} = openDocument(twoProfiles());
+  test('the tree has the nodes of the task, flat since version 2', () => {
+    const {dir, model} = openDocument(flatDocument());
     writeLinksFile(dir);
 
     const kinds = model.treeSpec().children.map((child) => child.kind);
 
     assert.deepEqual(kinds, [
-      'profiles',
       'general',
-      'defaults',
       'links',
       'output',
       'proxies',
       'routes',
       'dns',
-      // Stage 3 added the host layer: check, restart, rollback, journal, tests.
       'system',
     ]);
-    assert.match(model.treeSpec().children[0].title, /активен: first/);
+    assert.ok(!kinds.includes('profiles'));
+    assert.ok(!kinds.includes('defaults'));
 
     const system = model.treeSpec().children.find((child) => child.kind === 'system');
     assert.deepEqual(system.children.map((child) => child.kind), ['journal', 'tests', 'watchdog']);
   });
 
   test('server tags come from the links file of the settings directory', () => {
-    const {dir, model} = openDocument(twoProfiles());
+    const {dir, model} = openDocument(flatDocument());
     writeLinksFile(dir);
 
     const {tags, error} = model.loadServerTags();
@@ -637,9 +548,88 @@ describe('stale references and the tree', () => {
   });
 });
 
+describe('honest tree labels: the cap and the four diagnoses (NEW)', () => {
+  test('twenty missing servers give three names, a count and a full tooltip', () => {
+    const missing = Array.from({length: 20}, (_, index) => `Server-${index + 1}`);
+    const {dir, model} = openDocument(
+      flatDocument({proxies: [{tag: 'main', type: 'socks', port: 54321, servers: missing}]}),
+    );
+    writeLinksFile(dir);
+
+    const proxyNode = model
+      .treeSpec()
+      .children.find((child) => child.kind === 'proxies')
+      .children[0];
+
+    assert.equal(LABEL_NAMES_CAP, 3);
+    assert.ok(proxyNode.mark.startsWith('[!] нет в списке серверов: 20 — '));
+    assert.equal(proxyNode.mark.match(/Server-\d+/g).length, 3, 'only three names in the label');
+    assert.ok(proxyNode.mark.endsWith('…'));
+    for (const name of missing) {
+      assert.ok(proxyNode.full.includes(name), 'the full list stays available');
+    }
+  });
+
+  test('a file that does not exist is diagnosed as missing', () => {
+    const {model} = openDocument(flatDocument({links_file: 'ghost.txt'}));
+    const links = model.treeSpec().children.find((child) => child.kind === 'links');
+    assert.match(links.mark, /файл ссылок не найден: /);
+  });
+
+  test('a path that cannot be read as a file is diagnosed as unreadable', () => {
+    const dir = makeTempDir();
+    fs.mkdirSync(path.join(dir, 'linksdir'));
+    const file = path.join(dir, 'webui.json');
+    fs.writeFileSync(file, canonicalJson(flatDocument({links_file: 'linksdir'})), 'utf8');
+    const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
+
+    assert.equal(model.linksInfo().state, 'unreadable');
+    const links = model.treeSpec().children.find((child) => child.kind === 'links');
+    assert.match(links.mark, /файл ссылок недоступен: /);
+  });
+
+  test('an empty links file is diagnosed as empty', () => {
+    const dir = makeTempDir();
+    fs.writeFileSync(path.join(dir, 'links.txt'), '', 'utf8');
+    const file = path.join(dir, 'webui.json');
+    fs.writeFileSync(file, canonicalJson(flatDocument()), 'utf8');
+    const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
+
+    assert.equal(model.linksInfo().state, 'empty');
+    const links = model.treeSpec().children.find((child) => child.kind === 'links');
+    assert.match(links.mark, /нет ни одной ссылки: /);
+  });
+
+  test('a read file that misses names keeps the per-proxy fourth message', () => {
+    const {dir, model} = openDocument(
+      flatDocument({
+        proxies: [
+          {
+            tag: 'main',
+            type: 'socks',
+            port: 54321,
+            servers: [ALL_TAGS[0], 'Gone-1', 'Gone-2'],
+          },
+        ],
+      }),
+    );
+    writeLinksFile(dir);
+
+    assert.equal(model.linksInfo().state, 'ok');
+    const links = model.treeSpec().children.find((child) => child.kind === 'links');
+    assert.equal(links.mark, '', 'a read file is not an error in itself');
+
+    const proxyNode = model
+      .treeSpec()
+      .children.find((child) => child.kind === 'proxies')
+      .children[0];
+    assert.match(proxyNode.mark, /нет в списке серверов: Gone-1, Gone-2/);
+  });
+});
+
 describe('snapshots and atomic writes (NEW)', () => {
   test('every save preserves the previous version and keeps the last ten', () => {
-    const {dir, file, stateDir, model} = openDocument(twoProfiles());
+    const {dir, file, stateDir, model} = openDocument(flatDocument());
     const before = fs.readFileSync(file, 'utf8');
 
     model.applyGeneral({listen_ip: '10.0.0.1'});
@@ -674,7 +664,7 @@ describe('snapshots and atomic writes (NEW)', () => {
   });
 
   test('the settings file is written with mode 0600', () => {
-    const {file, model} = openDocument(twoProfiles());
+    const {file, model} = openDocument(flatDocument());
 
     model.save();
 
@@ -683,33 +673,18 @@ describe('snapshots and atomic writes (NEW)', () => {
 });
 
 describe('parity with the core (NEW)', () => {
-  test('the effective settings match loadProfileSettings of the core', () => {
-    const document = {
-      version: 1,
-      active: 'reality',
-      defaults: {
-        listen_ip: '10.95.2.1',
-        urltest: {url: 'https://gstatic.com', interval: '3m', tolerance: 50},
-        note: 'shared notes',
-        dns: {servers: [], final: 'dns-local'},
-      },
-      profiles: {
-        reality: {
-          note: 'primary',
-          links_file: 'links.txt',
-          output_file: 'config.json',
-          exclude_from_auto: ['🇷🇺'],
-          proxies: [{tag: 'main', type: 'mixed', port: 54321, note: 'comment'}],
-          routes: {telegram: {outbound: 'auto-select', domains: ['t.me']}},
-        },
-      },
-    };
+  test('the effective settings match loadEffectiveSettings of the core', () => {
+    const document = flatDocument({
+      note: 'primary',
+      dns: {servers: [], final: 'dns-local'},
+      exclude_from_auto: ['🇷🇺'],
+      proxies: [{tag: 'main', type: 'mixed', port: 54321, note: 'comment'}],
+    });
     const {dir, file, model} = openDocument(document);
     writeLinksFile(dir);
 
-    const {settings, active} = loadProfileSettings(file);
+    const {settings} = loadEffectiveSettings(file);
 
-    assert.equal(active, 'reality');
     assert.deepEqual(model.effectiveSettings(), settings);
   });
 
@@ -729,7 +704,7 @@ describe('parity with the core (NEW)', () => {
 
     const text = formatStats('/tmp/config.json', stats, ['Предупреждение: тест']);
 
-    assert.match(text, /Конфиг сгенерирован: \/tmp\/config.json/);
+    assert.match(text, /Конфиг сгенерирован: \/tmp\/config\.json/);
     assert.match(text, /Серверов: 3, инбаундов: 2, пулов: 1/);
     assert.match(text, /\[SOCKS\] main-socks : port 54321 -> auto-select/);
     assert.match(text, /\[HTTP\] apps-http : port 54323 -> 🇫🇮 Finland - Helsinki 1/);
@@ -755,12 +730,12 @@ describe('parity with the core (NEW)', () => {
     writeLinksFile(dir);
     const model = new ProjectModel({stateDir});
     model.newProject(path.join(dir, 'webui.json'));
-    model.document.profiles.default.proxies = [{tag: 'main', type: 'socks', port: 54321}];
+    model.document.proxies = [{tag: 'main', type: 'socks', port: 54321}];
     model.save();
 
     const loaded = new ProjectModel({path: path.join(dir, 'webui.json'), stateDir});
 
     assert.deepEqual(loaded.document, model.document);
-    assert.equal(loaded.activeProfileName(), 'default');
+    assert.equal(loaded.document.version, DOCUMENT_VERSION);
   });
 });

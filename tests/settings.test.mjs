@@ -1,9 +1,10 @@
-// Settings layer tests: webui.json loading, ajv schema, profile merging and the
-// end-to-end generation.
+// Settings layer tests: webui.json loading, ajv schema and the end-to-end
+// generation.
 //
 // Cases ported from tests/test_sing_box_manager.py carry the name of the
 // original Python test; cases marked NEW cover what only exists in the port
-// (webui.json with profiles, the ajv schema, note fields, the stale fixture).
+// (webui.json as a flat version-2 document, the ajv schema, note fields, the
+// stale fixture, the refusal of the version-1 envelope).
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -14,7 +15,7 @@ import {ConfigError, PROXY_TYPES} from '../src/core/errors.mjs';
 import {
   SCHEMA,
   generateConfigFile,
-  loadProfileSettings,
+  loadEffectiveSettings,
   loadSettings,
   resolvePath,
   stringifyConfig,
@@ -72,7 +73,7 @@ test('generateConfigFile: relative paths resolve from the settings directory', (
 });
 
 // Reference: test_generate_config_file_cli_overrides
-test('generateConfigFile: CLI overrides win over the profile', () => {
+test('generateConfigFile: CLI overrides win over the file', () => {
   const dir = makeTempDir();
   const otherLinks = path.join(dir, 'other-links.txt');
   fs.writeFileSync(
@@ -138,21 +139,47 @@ test('generateConfigFile: warnings are collected, not printed', () => {
   assert.ok(warnings.some((warning) => /неизвестный outbound 'nope-tag'/.test(warning)));
 });
 
-// NEW: the acceptance criterion of the task — ajv rejects an unknown profile.
-test('schema: ajv rejects an unknown profile in active', () => {
-  assert.throws(
-    () => validateSettings({version: 1, active: 'nope', profiles: {reality: {}}}, 'webui.json'),
-    (error) =>
-      error instanceof ConfigError &&
-      /профиль 'nope' не найден/.test(error.message) &&
-      /доступны: reality/.test(error.message),
-  );
+// NEW: the version-1 envelope is refused by the core, not migrated. The editor is
+// the only thing allowed to rewrite the file, so the CLI path can never generate
+// from a half-migrated document.
+describe('schema: the version-1 envelope is refused (NEW)', () => {
+  test('a profiles/active document is refused with a message naming the editor', () => {
+    assert.throws(
+      () => validateSettings({version: 1, active: 'nope', profiles: {reality: {}}}, 'webui.json'),
+      (error) =>
+        error instanceof ConfigError &&
+        /старого формата/.test(error.message) &&
+        /редакторе GateHouse/.test(error.message),
+    );
+  });
+
+  test('a bare defaults object is refused too', () => {
+    assert.throws(
+      () => validateSettings({version: 2, defaults: {listen_ip: '127.0.0.1'}}, 'webui.json'),
+      (error) => error instanceof ConfigError && /старого формата/.test(error.message),
+    );
+  });
+
+  test('loadSettings of a legacy file mentions the editor as well', () => {
+    const dir = makeTempDir();
+    const settingsFile = path.join(dir, 'webui.json');
+    fs.writeFileSync(
+      settingsFile,
+      JSON.stringify({version: 1, active: 'a', defaults: {}, profiles: {a: {}}}),
+      'utf8',
+    );
+
+    assert.throws(
+      () => loadSettings(settingsFile),
+      (error) => error instanceof ConfigError && /редакторе GateHouse/.test(error.message),
+    );
+  });
 });
 
 // NEW: the version is pinned by the schema.
 test('schema: ajv rejects an unknown version', () => {
   assert.throws(
-    () => validateSettings({version: 2, active: 'a', profiles: {a: {}}}, 'webui.json'),
+    () => validateSettings({version: 3}, 'webui.json'),
     (error) => error instanceof ConfigError && /version/.test(error.message),
   );
 });
@@ -160,18 +187,18 @@ test('schema: ajv rejects an unknown version', () => {
 // NEW: unknown keys are typos and must not slip through.
 test('schema: ajv rejects unknown keys', () => {
   assert.throws(
-    () => validateSettings({version: 1, active: 'a', profiles: {a: {proxys: []}}}, 'webui.json'),
-    (error) => error instanceof ConfigError && /не соответствуют схеме/.test(error.message),
+    () => validateSettings({version: 2, proxies: [{tag: 'main', type: 'socks', port: 54321, proxys: []}]}, 'webui.json'),
+    (error) => error instanceof ConfigError && /proxies\/0/.test(error.message),
   );
   assert.throws(
-    () => validateSettings({version: 1, active: 'a', profiles: {a: {}}, extra: 1}, 'webui.json'),
+    () => validateSettings({version: 2, extra: 1}, 'webui.json'),
     (error) => error instanceof ConfigError && /не соответствуют схеме/.test(error.message),
   );
 });
 
-// NEW: the schema requires at least one profile and the required keys.
+// NEW: required top-level keys are enforced.
 test('schema: required top-level keys are enforced', () => {
-  for (const bad of [{}, {version: 1}, {version: 1, active: 'a'}, {active: 'a', profiles: {a: {}}}]) {
+  for (const bad of [{}, {listen_ip: '127.0.0.1'}, {version: 3}]) {
     assert.throws(
       () => validateSettings(bad, 'webui.json'),
       (error) => error instanceof ConfigError,
@@ -182,19 +209,11 @@ test('schema: required top-level keys are enforced', () => {
 
 // NEW: a proxy type outside PROXY_TYPES is rejected by the schema as well.
 test('schema: proxy type enum matches the reference types', () => {
-  const enumValues = SCHEMA.definitions.profile.properties.proxies.items.properties.type.enum;
+  const enumValues = SCHEMA.properties.proxies.items.properties.type.enum;
 
   assert.deepEqual(enumValues, [...PROXY_TYPES]);
   assert.throws(
-    () =>
-      validateSettings(
-        {
-          version: 1,
-          active: 'a',
-          profiles: {a: {proxies: [{tag: 'main', type: 'socks5', port: 54321}]}},
-        },
-        'webui.json',
-      ),
+    () => validateSettings({version: 2, proxies: [{tag: 'main', type: 'socks5', port: 54321}]}, 'webui.json'),
     (error) => error instanceof ConfigError && /proxies\/0\/type/.test(error.message),
   );
 });
@@ -212,140 +231,36 @@ test('schema: an empty proxies list is left to validateProxies', () => {
   );
 });
 
-// NEW: JavaScript reorders integer-like object keys, so a profile or a route
-// called "2024" would silently move to the front of the file on the next save:
-// key order would be lost in the data structure itself, before any serialiser
-// runs. The schema refuses names made of digits only, which keeps the round-trip
-// promise and the byte match with the reference achievable.
-describe('schema: digit-only names are rejected (NEW)', () => {
-  test('a profile called 2024 is rejected', () => {
-    assert.throws(
-      () => validateSettings({version: 1, active: '2024', profiles: {'2024': {}}}, 'webui.json'),
-      (error) => error instanceof ConfigError && /profiles/.test(error.message),
-    );
-  });
-
-  test('a profile called 2024-reality is accepted', () => {
-    assert.doesNotThrow(() =>
-      validateSettings(
-        {version: 1, active: '2024-reality', profiles: {'2024-reality': {}}},
-        'webui.json',
-      ),
-    );
-  });
-
+// NEW: JavaScript reorders integer-like object keys, so a route called "2024"
+// would silently move to the front of the file on the next save: key order would
+// be lost in the data structure itself, before any serialiser runs. The schema
+// refuses names made of digits only, which keeps the round-trip promise and the
+// byte match with the reference achievable.
+describe('schema: digit-only route names are rejected (NEW)', () => {
   test('a route called 1 is rejected', () => {
     assert.throws(
-      () =>
-        validateSettings(
-          {version: 1, active: 'a', profiles: {a: {routes: {'1': {outbound: 'auto-select'}}}}},
-          'webui.json',
-        ),
+      () => validateSettings({version: 2, routes: {'1': {outbound: 'auto-select'}}}, 'webui.json'),
       (error) => error instanceof ConfigError && /routes/.test(error.message),
     );
   });
 
   test('a route called 2024-telegram is accepted', () => {
     assert.doesNotThrow(() =>
-      validateSettings(
-        {
-          version: 1,
-          active: 'a',
-          profiles: {a: {routes: {'2024-telegram': {outbound: 'auto-select'}}}},
-        },
-        'webui.json',
-      ),
-    );
-  });
-});
-
-// NEW: defaults are overridden by the active profile, top level only.
-describe('profiles: defaults merge (NEW)', () => {
-  test('a same-named key of the profile wins', () => {
-    const dir = makeTempDir();
-    const settingsFile = writeSettings(
-      dir,
-      {listen_ip: '10.95.2.1'},
-      {defaults: {listen_ip: '127.0.0.1', links_file: 'links.txt', output_file: 'config.json'}},
-    );
-
-    const {settings} = loadProfileSettings(settingsFile);
-
-    assert.equal(settings.listen_ip, '10.95.2.1'); // profile wins
-    assert.equal(settings.links_file, 'links.txt'); // taken from defaults
-    assert.equal(settings.output_file, 'config.json');
-  });
-
-  test('nested objects are replaced as a whole, as in the reference', () => {
-    const dir = makeTempDir();
-    writeLinksFile(dir);
-    const settingsFile = writeSettings(
-      dir,
-      {urltest: {interval: '5m'}},
-      {defaults: {urltest: {url: 'https://gstatic.com', interval: '3m', tolerance: 50}}},
-    );
-
-    const {settings} = loadProfileSettings(settingsFile);
-
-    // The profile key wins as a whole: url and tolerance are gone from the merged
-    // object and urltestBlock fills them back with the documented defaults.
-    assert.deepEqual(settings.urltest, {interval: '5m'});
-
-    const {config} = generateConfigFile(settingsFile, {output: path.join(dir, 'config.json')});
-    assert.deepEqual(config.outbounds[0], {
-      type: 'urltest',
-      tag: 'auto-select',
-      outbounds: ['🇫🇮 Finland - Helsinki 1', '🇳🇱 Netherlands - Amsterdam'],
-      url: 'https://gstatic.com',
-      interval: '5m',
-      tolerance: 50,
-    });
-  });
-
-  test('the profile name from the CLI wins over active', () => {
-    const dir = makeTempDir();
-    const document = {
-      version: 1,
-      active: 'first',
-      defaults: {},
-      profiles: {
-        first: {note: 'first', listen_ip: '127.0.0.1'},
-        second: {listen_ip: '10.0.0.2', links_file: 'links.txt'},
-      },
-    };
-    const settingsFile = path.join(dir, 'webui.json');
-    fs.writeFileSync(settingsFile, JSON.stringify(document, null, 2), 'utf8');
-
-    const {settings, active} = loadProfileSettings(settingsFile, {profile: 'second'});
-
-    assert.equal(active, 'second');
-    assert.equal(settings.listen_ip, '10.0.0.2');
-  });
-
-  test('a missing profile name from the CLI throws', () => {
-    const {settingsFile} = makeProject();
-
-    assert.throws(
-      () => loadProfileSettings(settingsFile, {profile: 'nope'}),
-      (error) => error instanceof ConfigError && /профиль 'nope' не найден/.test(error.message),
+      validateSettings({version: 2, routes: {'2024-telegram': {outbound: 'auto-select'}}}, 'webui.json'),
     );
   });
 });
 
 // NEW: note fields are comments for humans; they never reach config.json.
-test('profiles: note fields are ignored', () => {
+test('note fields are ignored', () => {
   const dir = makeTempDir();
   writeLinksFile(dir);
-  const settingsFile = writeSettings(
-    dir,
-    {
-      note: 'Reality transport',
-      proxies: [{tag: 'main-socks', type: 'socks', port: 54321, note: 'primary proxy'}],
-    },
-    {defaults: {note: 'shared notes'}},
-  );
+  const settingsFile = writeSettings(dir, {
+    note: 'Reality transport',
+    proxies: [{tag: 'main-socks', type: 'socks', port: 54321, note: 'primary proxy'}],
+  });
 
-  const {settings} = loadProfileSettings(settingsFile);
+  const {settings} = loadEffectiveSettings(settingsFile);
   const {config} = generateConfigFile(settingsFile, {
     output: path.join(dir, 'config.json'),
   });
@@ -360,7 +275,7 @@ test('profiles: note fields are ignored', () => {
 test('loadSettings: invalid JSON throws ConfigError', () => {
   const dir = makeTempDir();
   const settingsFile = path.join(dir, 'webui.json');
-  fs.writeFileSync(settingsFile, '{"version": 1,', 'utf8');
+  fs.writeFileSync(settingsFile, '{"version": 2,', 'utf8');
 
   assert.throws(
     () => loadSettings(settingsFile),
@@ -372,7 +287,7 @@ test('loadSettings: invalid JSON throws ConfigError', () => {
 // reference wording — this is the fixture that used to break the comparison.
 test('stale fixture: an unknown server is a hard error listing the available ones', () => {
   const document = JSON.parse(fs.readFileSync(STALE_FIXTURE, 'utf8'));
-  assert.ok(document.profiles[document.active], 'active profile must exist in the fixture');
+  assert.equal(document.version, 2, 'the fixture is a flat version-2 document');
   assert.ok(
     JSON.stringify(document).includes('🇩🇪 Germany - Berlin'),
     'the fixture is expected to keep the stale tag',
@@ -395,9 +310,9 @@ test('stale fixture: an unknown server is a hard error listing the available one
 // NEW: the committed fixture pair must stay mutually consistent.
 test('fixtures: the committed settings.json is schema-valid and complete', () => {
   const document = loadSettings(FIXTURE_SETTINGS);
-  const {settings, settingsDir} = loadProfileSettings(FIXTURE_SETTINGS);
+  const {settings, settingsDir} = loadEffectiveSettings(FIXTURE_SETTINGS);
 
-  assert.equal(document.active, 'default');
+  assert.equal(document.version, 2);
   assert.equal(settingsDir, FIXTURES_DIR);
   assert.equal(settings.links_file, 'links.txt');
   assert.equal(settings.proxies.length, 2);

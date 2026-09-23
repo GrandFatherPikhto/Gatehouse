@@ -4,11 +4,16 @@
 // `generate_config_file` of the reference
 // /home/yevstigneyevda/Projects/Python/SingBoxTools/sing_box_manager.py
 //
-// The reference kept everything in one flat YAML file. Here the settings live in
-// `webui.json`: `defaults` holds the shared body, `profiles` holds named
-// variants and `active` picks one. After merging, the core receives exactly the
-// flat shape the reference expected, which is what keeps the generated
-// `config.json` byte-identical.
+// The reference kept everything in one flat YAML file. `webui.json` version 1
+// wrapped that flat body in a `defaults` + `profiles` + `active` envelope; since
+// version 2 the document is flat again, so the core receives exactly the shape
+// the reference expected. That is what keeps the generated `config.json`
+// byte-identical to the reference output.
+//
+// The profile envelope is gone but not forgotten: a version-1 file is refused
+// here with a message naming the editor, which is the only thing that migrates
+// it (see `ProjectModel.open`). Refusing instead of half-merging means the CLI
+// path can never write a `config.json` from an unmigrated document.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,7 +21,7 @@ import path from 'node:path';
 import Ajv from 'ajv';
 
 import {API_SECRET_VAR, buildConfig} from './build.mjs';
-import {ConfigError, DEFAULT_SETTINGS_FILE, isMapping, pythonRepr} from './errors.mjs';
+import {ConfigError, DEFAULT_SETTINGS_FILE, isMapping} from './errors.mjs';
 import {parseLinks} from './vless.mjs';
 
 const SCHEMA_URL = new URL('../schemas/webui.schema.json', import.meta.url);
@@ -24,16 +29,26 @@ const SCHEMA = JSON.parse(fs.readFileSync(SCHEMA_URL, 'utf8'));
 
 const ajv = new Ajv({allErrors: true});
 
-// JSON Schema cannot express "active must be a key of profiles", so the check
-// lives in a custom keyword and stays part of ajv validation.
-ajv.addKeyword({
-  keyword: 'profileMustExist',
-  errors: false,
-  compile: () => (data) =>
-    isMapping(data) && isMapping(data.profiles) && Object.hasOwn(data.profiles, data.active),
-});
-
 const validateAgainstSchema = ajv.compile(SCHEMA);
+
+/**
+ * Top-level keys that only exist in the version-1 (profile-level) document.
+ * Their presence is what makes a file legacy, not its `version`: a hand-edited
+ * file may carry a stale version number, while the shape is what really breaks
+ * the flat loader.
+ */
+export const LEGACY_KEYS = Object.freeze(['profiles', 'defaults', 'active']);
+
+/**
+ * True for a version-1 document with the profile envelope. The editor uses the
+ * same predicate to decide whether a file has to be migrated.
+ *
+ * @param {unknown} data
+ * @returns {boolean}
+ */
+export function isLegacyDocument(data) {
+  return isMapping(data) && LEGACY_KEYS.some((key) => Object.hasOwn(data, key));
+}
 
 /**
  * Validates a parsed webui.json. Throws ConfigError listing every problem.
@@ -42,16 +57,20 @@ const validateAgainstSchema = ajv.compile(SCHEMA);
  * @param {string} source File name used in the message.
  */
 export function validateSettings(data, source = DEFAULT_SETTINGS_FILE) {
+  if (isLegacyDocument(data)) {
+    throw new ConfigError(
+      `${source}: это webui.json старого формата (version 1, с profiles/defaults). ` +
+        'Откройте файл один раз в редакторе GateHouse: он развернёт единственный профиль, ' +
+        'поднимет version до 2 и сохранит снимок прежней версии. ' +
+        'Генератор по такому файлу не работает, чтобы не мигрировать его наполовину.',
+    );
+  }
+
   if (validateAgainstSchema(data)) return;
 
-  const problems = (validateAgainstSchema.errors || []).map((error) => {
-    if (error.keyword === 'profileMustExist') {
-      const profiles = isMapping(data) && isMapping(data.profiles) ? Object.keys(data.profiles) : [];
-      return `active: профиль ${pythonRepr(isMapping(data) ? data.active : undefined)} не найден в profiles ` +
-        `(доступны: ${profiles.join(', ') || '(нет)'})`;
-    }
-    return `${error.instancePath || '/'}: ${error.message}`;
-  });
+  const problems = (validateAgainstSchema.errors || []).map(
+    (error) => `${error.instancePath || '/'}: ${error.message}`,
+  );
   throw new ConfigError(
     `${source}: настройки не соответствуют схеме webui.json:\n  - ${problems.join('\n  - ')}`,
   );
@@ -87,32 +106,28 @@ export function loadSettings(settingsPath) {
 }
 
 /**
- * Loads the settings and flattens the active profile into the shape the core
- * expects: `defaults` first, then the profile on top (top level only, so nested
- * `log`/`dns`/`urltest` objects are replaced as a whole).
+ * Loads the settings and strips what the core must not see: `version` is a
+ * document-format marker, `note` fields are comments for humans. Returns the
+ * flat body the reference expected, plus the directory relative paths resolve
+ * against.
  *
- * `note` fields are comments for humans and never reach `config.json`.
+ * Replaces `loadProfileSettings` of the version-1 code: with the profile level
+ * gone there is nothing to merge, only noise to drop.
  *
  * @param {string} settingsPath
- * @param {{profile?: string|null}} [options] Profile override (CLI `--profile`).
- * @returns {{settings: Record<string, unknown>, settingsDir: string, active: string, raw: Record<string, unknown>}}
+ * @returns {{settings: Record<string, unknown>, settingsDir: string, raw: Record<string, unknown>}}
  */
-export function loadProfileSettings(settingsPath, options = {}) {
-  const data = loadSettings(settingsPath);
-  const active = options.profile || data.active;
-  const profileData = isMapping(data.profiles) ? data.profiles[active] : undefined;
+export function loadEffectiveSettings(settingsPath) {
+  const raw = loadSettings(settingsPath);
+  const settings = {};
 
-  if (!isMapping(profileData)) {
-    const available = Object.keys(isMapping(data.profiles) ? data.profiles : {}).join(', ');
-    throw new ConfigError(
-      `профиль '${active}' не найден в ${settingsPath} (доступны: ${available || '(нет)'})`,
-    );
+  for (const [key, value] of Object.entries(raw)) {
+    if (key === 'version' || key === 'note') continue;
+    settings[key] = value;
   }
 
-  const merged = {...(data.defaults || {}), ...profileData};
-  delete merged.note;
-  if (Array.isArray(merged.proxies)) {
-    merged.proxies = merged.proxies.map((proxy) => {
+  if (Array.isArray(settings.proxies)) {
+    settings.proxies = settings.proxies.map((proxy) => {
       if (!isMapping(proxy) || !Object.hasOwn(proxy, 'note')) return proxy;
       const {note, ...rest} = proxy;
       return rest;
@@ -120,10 +135,9 @@ export function loadProfileSettings(settingsPath, options = {}) {
   }
 
   return {
-    settings: merged,
+    settings,
     settingsDir: path.dirname(path.resolve(settingsPath)),
-    active,
-    raw: data,
+    raw,
   };
 }
 
@@ -168,16 +182,16 @@ export function writeJson(filePath, config) {
 }
 
 /**
- * Builds and writes config.json for the active profile.
+ * Builds and writes config.json.
  * Reference: `generate_config_file` — same override order, same error cases.
  *
  * @param {string} settingsPath
- * @param {{output?: string, links?: string, listenIp?: string, excludeFromAuto?: unknown[], profile?: string, warnings?: string[]}} [options]
+ * @param {{output?: string, links?: string, listenIp?: string, excludeFromAuto?: unknown[], warnings?: string[], apiSecret?: string}} [options]
  * @returns {{outputFile: string, stats: Record<string, unknown>, warnings: string[], config: Record<string, unknown>}}
  */
 export function generateConfigFile(settingsPath, options = {}) {
   const warnings = options.warnings || [];
-  const {settings, settingsDir} = loadProfileSettings(settingsPath, options);
+  const {settings, settingsDir} = loadEffectiveSettings(settingsPath);
 
   const linksFile = resolvePath(settingsDir, options.links || settings.links_file || 'links.txt');
   const outputFile = resolvePath(
@@ -207,3 +221,4 @@ export function generateConfigFile(settingsPath, options = {}) {
 }
 
 export {SCHEMA, DEFAULT_SETTINGS_FILE};
+

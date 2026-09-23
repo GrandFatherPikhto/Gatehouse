@@ -1,9 +1,7 @@
 <%# Dispatcher: one include per panel kind. Keeping the switch here means the
     route handlers never build markup and never pick a template. %>
 <% switch (panel.kind) {
-     case 'profiles': %><%- include('profiles', {panel}) %><% break;
      case 'general': %><%- include('general', {panel}) %><% break;
-     case 'defaults': %><%- include('defaults', {panel}) %><% break;
      case 'links': %><%- include('links', {panel}) %><% break;
      case 'output': %><%- include('output', {panel}) %><% break;
      case 'proxies': %><%- include('proxies', {panel}) %><% break;

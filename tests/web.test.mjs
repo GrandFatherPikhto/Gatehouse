@@ -162,8 +162,8 @@ describe('pages and static files', () => {
       assert.equal(response.status, 200);
 
       const html = await response.text();
-      assert.match(html, /Профили \(активен: default\)/);
-      assert.match(html, /Значения по умолчанию/);
+      assert.match(html, /Общие/);
+      assert.match(html, /Файл ссылок: links.txt/);
       assert.match(html, /href="\/static\/app.css"/);
       // No CDN: the bundle must be referenced on our own host.
       assert.match(html, /src="\/static\/vendor\/htmx\.min\.js"/);
@@ -239,7 +239,7 @@ describe('pages and static files', () => {
       assert.equal(unknown.status, 200);
       assert.match(html, /неизвестный раздел/);
       assert.match(html, /nonsense/);
-      assert.match(html, /Профили \(активен/, 'it falls back to a panel that exists');
+      assert.match(html, /Общие/, 'it falls back to a panel that exists');
 
       const missing = await fetch(`${editor.base}/panel/${encodeURIComponent('proxy:ghost')}`);
       const missingHtml = await missing.text();
@@ -255,11 +255,10 @@ describe('pages and static files', () => {
 });
 
 describe('editing forms', () => {
-  test('the general form writes into the active profile and marks it dirty', async () => {
+  test('the general form writes into the document and marks it dirty', async () => {
     const editor = await startEditor();
     try {
       const response = await post(editor.base, '/general', {
-        scope: 'profile',
         listen_ip: '10.95.2.1',
         urltest_url: 'https://gstatic.com',
         urltest_interval: '5m',
@@ -275,33 +274,9 @@ describe('editing forms', () => {
       assert.match(html, /есть несохранённые правки/);
 
       assert.equal(editor.model.listenIp, '10.95.2.1');
-      assert.deepEqual(editor.model.profileBody().urltest.interval, '5m');
-      assert.deepEqual(editor.model.profileBody().log, {level: 'debug', timestamp: true});
-      assert.deepEqual(editor.model.profileBody().exclude_from_auto, ['🇷🇺', '🇩🇪']);
-    } finally {
-      await editor.close();
-    }
-  });
-
-  test('the same form can write into defaults, and the profile keeps overriding', async () => {
-    const editor = await startEditor({overrides: {listen_ip: '127.0.0.1'}});
-    try {
-      await post(editor.base, '/general', {
-        scope: 'defaults',
-        listen_ip: '10.95.2.1',
-        urltest_url: 'https://gstatic.com',
-        urltest_interval: '3m',
-        urltest_tolerance: '50',
-        log_level: 'info',
-      });
-
-      assert.equal(editor.model.defaultsBody().listen_ip, '10.95.2.1');
-      assert.equal(editor.model.listenIp, '127.0.0.1', 'the profile still wins');
-
-      const response = await post(editor.base, '/general', {scope: 'profile', action: 'reset', field: 'listen_ip'});
-
-      assert.match(await response.text(), /снова действует значение по умолчанию/);
-      assert.equal(editor.model.listenIp, '10.95.2.1');
+      assert.deepEqual(editor.model.body().urltest.interval, '5m');
+      assert.deepEqual(editor.model.body().log, {level: 'debug', timestamp: true});
+      assert.deepEqual(editor.model.body().exclude_from_auto, ['🇷🇺', '🇩🇪']);
     } finally {
       await editor.close();
     }
@@ -331,18 +306,15 @@ describe('editing forms', () => {
   test('a non-JSON DNS text is refused, a JSON object is stored', async () => {
     const editor = await startEditor();
     try {
-      const bad = await post(editor.base, '/dns', {scope: 'profile', dns: '{oops'});
+      const bad = await post(editor.base, '/dns', {dns: '{oops'});
       assert.match(await bad.text(), /не валидный JSON/);
 
-      const list = await post(editor.base, '/dns', {scope: 'profile', dns: '[]'});
+      const list = await post(editor.base, '/dns', {dns: '[]'});
       assert.match(await list.text(), /ожидается JSON-объект/);
 
-      const good = await post(editor.base, '/dns', {
-        scope: 'profile',
-        dns: '{"servers": [], "final": "direct"}',
-      });
+      const good = await post(editor.base, '/dns', {dns: '{"servers": [], "final": "direct"}'});
       assert.match(await good.text(), /DNS применён/);
-      assert.deepEqual(editor.model.profileBody().dns, {servers: [], final: 'direct'});
+      assert.deepEqual(editor.model.body().dns, {servers: [], final: 'direct'});
     } finally {
       await editor.close();
     }
@@ -405,20 +377,6 @@ describe('editing forms', () => {
     }
   });
 
-  test('the active profile cannot be removed from the UI', async () => {
-    const editor = await startEditor();
-    try {
-      const response = await post(editor.base, '/profiles', {action: 'remove', name: 'default'});
-      const html = await response.text();
-
-      assert.match(html, /нельзя удалить последний профиль/);
-      assert.match(html, /default/);
-      assert.deepEqual(editor.model.profileNames(), ['default']);
-    } finally {
-      await editor.close();
-    }
-  });
-
   test('a form post without htmx redirects back to the panel', async () => {
     const editor = await startEditor();
     try {
@@ -426,7 +384,6 @@ describe('editing forms', () => {
         editor.base,
         '/general',
         {
-          scope: 'profile',
           listen_ip: '10.95.2.1',
           urltest_url: 'https://gstatic.com',
           urltest_interval: '3m',
@@ -480,7 +437,6 @@ describe('saving and generating from the UI', () => {
     const editor = await startEditor();
     try {
       await post(editor.base, '/general', {
-        scope: 'profile',
         listen_ip: '10.95.2.1',
         urltest_url: 'https://gstatic.com',
         urltest_interval: '3m',
@@ -803,13 +759,13 @@ describe('environment of the server', () => {
     });
     try {
       assert.equal(model.path, missing);
-      assert.deepEqual(model.profileNames(), ['default']);
+      assert.equal(model.document.version, 2);
 
       const response = await fetch(url);
       const html = await response.text();
       assert.equal(response.status, 200);
       assert.match(html, /webui\.json/);
-      assert.match(html, /Профили \(активен: default\)/);
+      assert.match(html, /Общие/);
       assert.match(html, /файл ещё не создан/, 'nothing was written to disk yet');
       assert.ok(!fs.existsSync(missing), 'a fresh document is not saved until asked');
     } finally {
