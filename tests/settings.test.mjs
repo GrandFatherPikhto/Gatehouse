@@ -116,12 +116,13 @@ test('generateConfigFile: a bad listen_ip throws', () => {
 });
 
 // Reference: test_generate_config_file_missing_links
-test('generateConfigFile: no readable source throws', () => {
-  const {settingsFile} = makeProject({sources: ['nowhere']});
+test('generateConfigFile: no enabled provider throws', () => {
+  const {settingsFile} = makeProject({providers: {nowhere: {enabled: true}}});
 
   assert.throws(
     () => generateConfigFile(settingsFile),
-    (error) => error instanceof ConfigError && /источник/.test(error.message),
+    (error) =>
+      error instanceof ConfigError && /включённого провайдера со ссылками/.test(error.message),
   );
 });
 
@@ -314,9 +315,7 @@ test('fixtures: the committed settings.json is schema-valid and complete', () =>
 
   assert.equal(document.version, 2);
   assert.equal(settingsDir, FIXTURES_DIR);
-  assert.deepEqual(settings.sources, [
-    {kind: 'links', name: 'vpnd', path: 'sources/vpnd/links.txt'},
-  ]);
+  assert.deepEqual(settings.providers, {vpnd: {enabled: true}});
   assert.equal(settings.proxies.length, 2);
   assert.deepEqual(settings.exclude_from_auto, ['🇷🇺']);
 });

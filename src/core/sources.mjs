@@ -1,33 +1,33 @@
-// Sources: explicit origins instead of provider folders.
+// Providers: discovered by FOLDER, never declared by a path.
 //
-// `webui.json` lists sources as objects (see techdocs/architecture.md §7.2):
+// The root is `GATEHOUSE_PROVIDERS` (default `/var/lib/gatehouse/providers`).
+// Every sub-folder of it is a provider, and the FOLDER NAME is the provider
+// identifier. `webui.json` carries a `providers` map keyed by that identifier:
 //
-//   {kind: 'links',   name: 'vpnd',       path: '/var/lib/gatehouse/sources/vpnd/links.txt'}
-//   {kind: 'tunnels', name: 'hidemyname', path: '/var/lib/gatehouse/sources/hidemyname'}
+//   "providers": {"vpnd": {"enabled": true, "label": "Directly"}}
 //
-//   * kind 'links'   — ONE file with VLESS links, turned into sing-box outbounds;
-//   * kind 'tunnels' — a DIRECTORY of AmneziaWG / WireGuard `*.conf`, listed in the
-//     panel only and NEVER turned into outbounds.
+// What a folder may hold:
 //
-// `path` is stored exactly as the owner typed it. A relative path resolves against
-// the directory of `webui.json` (`baseDir`), an absolute one is used as is — the
-// same rule `output_file` and `amnezia_dir` follow, so the file survives a move
-// between the router and the desktop sandbox.
+//   * `links.txt` — VLESS links turned into sing-box outbounds (Sing-Box);
+//   * `*.conf`    — AmneziaWG / WireGuard configs, LISTED, never outbounds;
+//   * both        — one provider with two parts.
 //
-// A LEGACY entry is a bare string: the name of a folder under the sources root
-// that may hold `links.txt`, `*.conf`, or both. It is still accepted so a document
-// written by an older build keeps working; the editor converts those entries into
-// objects on open. The reader itself stays filesystem-only, with no system calls.
+// Three rules shape this module:
 //
-// Two rules decide the shape of this module:
+//   * the folder name is the IDENTITY. It goes into server tags, into
+//     `tunnels[].provider`, into the panel key `provider:<id>` and into
+//     `config.json`. A human-readable `label` is SHOWN only and never reaches the
+//     document or the generated config — renaming it must not move a byte of
+//     `config.json`;
+//   * a provider with no record in the map is FOUND and DISABLED. Its servers
+//     are absent from the merged outbounds until the owner ticks it, so a new
+//     folder on disk never changes `config.json` behind the owner's back;
+//   * nothing is watched: the folders are re-read on every call, so a new one
+//     appears by itself and no cache can go stale.
 //
-//   * tunnels are LISTED, never turned into outbounds. The inter-provider
-//     switching hypothesis is not verified on the live router yet, so the code
-//     must not be able to leak a tunnel into `config.json` (task §9);
-//   * with exactly one source and no name collisions the outbounds keep their
-//     tags untouched, so the generated `config.json` cannot move because of this
-//     part. A provider label appears ONLY when two providers hand out the same
-//     name, and then it is appended to that name.
+// Nothing here is silent: a folder that could not be read is reported with the
+// reason (no access, empty, no valid link, a name unfit for an identifier) and a
+// record whose folder is gone is reported rather than dropped.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -35,102 +35,126 @@ import path from 'node:path';
 import {ConfigError, isMapping} from './errors.mjs';
 import {decodeUtf8Ignore, parseLinks, parseVless, pythonStrip} from './vless.mjs';
 
-/** Default sub-directory of the settings directory that holds the providers. */
-export const DEFAULT_SOURCES_DIRNAME = 'sources';
+/** Default root of the provider folders. */
+export const DEFAULT_PROVIDERS_ROOT = '/var/lib/gatehouse/providers';
 
-/** File name a legacy provider folder carries the VLESS links in. */
+/** File a provider folder carries its VLESS links in. */
 export const LINKS_FILENAME = 'links.txt';
 
 /** Extension of a tunnel config (AmneziaWG / WireGuard). */
 export const TUNNEL_EXTENSION = '.conf';
 
-/** Character that separates a colliding tag from its provider label. */
+/** Character that separates a colliding tag from its provider identifier. */
 export const PROVIDER_LABEL_SEPARATOR = ' · ';
 
-/** Kinds a source object may carry in the document. */
-export const SOURCE_KINDS = Object.freeze(['links', 'tunnels']);
-
 /**
- * Internal kind of a bare-string entry: a provider FOLDER under the sources root.
- * It is never written back to the document — `open` converts it to an object —
- * but the reader understands it, which is what keeps an old file readable.
+ * What a provider identifier (a folder name) may look like: `[A-Za-z0-9_.-]`,
+ * not starting with `.` (hidden) or `-` (a command-line look). The identifier is
+ * a systemd instance name and a route key component, so the set is deliberately
+ * small and checked before the folder is read.
  */
-export const LEGACY_KIND = 'legacy';
+export const PROVIDER_ID_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
 
 /**
- * Resolves the sources root: `GATEHOUSE_SOURCES` when set, otherwise
- * `<directory of webui.json>/sources`. It is the base of a LEGACY folder entry
- * and the label the tree shows; an explicit source ignores it.
+ * Resolves the providers root. The order is deliberate:
  *
- * @param {string} settingsDir
+ *   1. `GATEHOUSE_PROVIDERS` — the one root the owner names, and the only one the
+ *      router ever uses (the unit sets it);
+ *   2. a `providers/` folder NEXT TO `webui.json`, when it really exists — the
+ *      sandbox and the tests keep their data together with the settings, and this
+ *      mirrors the old `<settingsDir>/sources` rule;
+ *   3. the build default `/var/lib/gatehouse/providers`.
+ *
+ * The variable is read from the process environment because the core and the CLI
+ * must agree; the web layer may still override it per instance.
+ *
+ * @param {string} [settingsDir] Directory of `webui.json`, for rule 2.
  * @param {Record<string, string|undefined>} [env]
  * @returns {string}
  */
-export function resolveSourcesRoot(settingsDir, env = process.env) {
-  const configured = env.GATEHOUSE_SOURCES;
+export function resolveProvidersRoot(settingsDir = process.cwd(), env = process.env) {
+  const configured = env.GATEHOUSE_PROVIDERS;
   if (typeof configured === 'string' && configured.length > 0) return configured;
-  return path.join(settingsDir, DEFAULT_SOURCES_DIRNAME);
-}
-
-/**
- * Normalises the `sources` field of the document into a list of source specs,
- * dropping blanks and malformed entries. A single item is accepted the way
- * `asList` of the core accepts one.
- *
- * A bare string becomes a legacy folder entry; an object must carry a known
- * `kind`, a non-empty `name` and a non-empty `path`.
- *
- * @param {unknown} value
- * @returns {Array<{kind: string, name: string, path: string}>}
- */
-export function sourceSpecs(value) {
-  const list = value === null || value === undefined ? [] : Array.isArray(value) ? value : [value];
-  const specs = [];
-  for (const item of list) {
-    if (typeof item === 'string') {
-      const name = item.trim();
-      if (name.length > 0) specs.push({kind: LEGACY_KIND, name, path: name});
-      continue;
-    }
-    if (!isMapping(item)) continue;
-    const kind = typeof item.kind === 'string' ? item.kind : '';
-    if (!SOURCE_KINDS.includes(kind)) {
-      throw new ConfigError(
-        `источник '${String(item.name ?? '')}': неизвестный тип '${kind}' ` +
-          `(ожидается ${SOURCE_KINDS.join('|')})`,
-      );
-    }
-    const name = typeof item.name === 'string' ? item.name.trim() : '';
-    const target = typeof item.path === 'string' ? item.path.trim() : '';
-    if (name.length === 0) throw new ConfigError('у источника не задано имя (name)');
-    if (target.length === 0) throw new ConfigError(`у источника '${name}' не задан путь (path)`);
-    specs.push({kind, name, path: target});
+  const beside = path.join(settingsDir, 'providers');
+  try {
+    if (fs.statSync(beside).isDirectory()) return beside;
+  } catch {
+    // no folder next to the settings: fall through to the build default
   }
-  return specs;
+  return DEFAULT_PROVIDERS_ROOT;
 }
 
 /**
- * Names of the sources, in document order. Kept for callers that only need the
- * provider labels (stale diagnostics, the tree).
+ * Maps a filesystem error to the states shared by every read here: a missing
+ * path, a path the process may not touch, and everything else.
  *
- * @param {unknown} value
- * @returns {string[]}
+ * @param {NodeJS.ErrnoException} error
+ * @returns {'missing'|'denied'|'error'}
  */
-export function sourceNames(value) {
-  return sourceSpecs(value).map((spec) => spec.name);
+function errorState(error) {
+  if (error.code === 'ENOENT') return 'missing';
+  if (error.code === 'EACCES' || error.code === 'EPERM') return 'denied';
+  return 'error';
 }
 
 /**
- * Resolves the target a spec points at. A legacy folder is joined to the sources
- * root; an explicit path is joined to the settings directory when relative.
+ * Reads the root directory: does it exist, may it be listed, what does it hold.
  *
- * @param {{kind: string, path: string}} spec
- * @param {{root: string, baseDir: string}} context
- * @returns {string}
+ * @param {string} root
+ * @returns {{state: 'ok'|'missing'|'denied'|'error', names: string[],
+ *   owner: string|null, mode: string|null, error: string|null, message: string|null}}
  */
-function resolveTarget(spec, context) {
-  if (spec.kind === LEGACY_KIND) return path.join(context.root, spec.path);
-  return path.isAbsolute(spec.path) ? spec.path : path.join(context.baseDir, spec.path);
+function readRoot(root) {
+  let stat;
+  try {
+    stat = fs.statSync(root);
+  } catch (error) {
+    const state = errorState(error);
+    return {
+      state,
+      names: [],
+      owner: null,
+      mode: null,
+      error: error.message,
+      message:
+        state === 'missing'
+          ? `корень провайдеров не найден: ${root}`
+          : `нет доступа к корню провайдеров ${root}: ${error.message}`,
+    };
+  }
+
+  const owner = `${stat.uid}:${stat.gid}`;
+  const mode = `0${(stat.mode & 0o777).toString(8)}`;
+  if (!stat.isDirectory()) {
+    return {
+      state: 'error',
+      names: [],
+      owner,
+      mode,
+      error: 'ENOTDIR',
+      message: `корень провайдеров не каталог: ${root}`,
+    };
+  }
+
+  let names;
+  try {
+    names = fs.readdirSync(root);
+  } catch (error) {
+    const state = errorState(error);
+    return {
+      state,
+      names: [],
+      owner,
+      mode,
+      error: error.message,
+      message:
+        state === 'denied'
+          ? `нет доступа к корню провайдеров ${root} (владелец ${owner}, права ${mode})`
+          : `не удалось прочитать корень провайдеров ${root}: ${error.message}`,
+    };
+  }
+
+  return {state: 'ok', names, owner, mode, error: null, message: null};
 }
 
 /**
@@ -158,46 +182,23 @@ function rawTags(filePath) {
 }
 
 /**
- * Latest modification time in a list of files, as an ISO string, or `null` when
- * there is nothing to stat. An unreadable file contributes nothing rather than
- * throwing: the panel reports the source, not each stat error.
- *
- * @param {string[]} files
- * @returns {string|null}
- */
-function latestMtime(files) {
-  let latest = 0;
-  for (const file of files) {
-    try {
-      latest = Math.max(latest, fs.statSync(file).mtimeMs);
-    } catch {
-      // ignore: the source is reported as unreadable elsewhere
-    }
-  }
-  return latest === 0 ? null : new Date(latest).toISOString();
-}
-
-/**
- * Reads the links of one `kind: 'links'` source (or the `links.txt` of a legacy
- * folder).
+ * Reads the `links.txt` of one provider.
  *
  * @param {string} filePath
- * @param {string} name
+ * @param {string} id
  * @param {string[]} warnings
  * @returns {{outbounds: Array<Record<string, unknown>>, state: string, error: string|null}}
  */
-function readLinks(filePath, name, warnings) {
-  if (!fs.existsSync(filePath)) {
-    return {outbounds: [], state: 'missing', error: `файл ссылок не найден: ${filePath}`};
-  }
-
-  // Reject an unreadable links file the way the old single-file reader did: a
-  // directory in place of the file, a permission problem.
+function readLinks(filePath, id, warnings) {
   try {
     fs.accessSync(filePath, fs.constants.R_OK);
     if (fs.statSync(filePath).isDirectory()) throw new Error('EISDIR');
   } catch {
-    return {outbounds: [], state: 'unreadable', error: `файл ссылок ${filePath} недоступен для чтения`};
+    return {
+      outbounds: [],
+      state: 'unreadable',
+      error: `файл ссылок ${filePath} недоступен для чтения`,
+    };
   }
 
   const duplicates = new Map();
@@ -207,7 +208,7 @@ function readLinks(filePath, name, warnings) {
   for (const [tag, count] of duplicates) {
     if (count > 1) {
       warnings.push(
-        `Предупреждение: в источнике '${name}' ${count} ссылки с именем '${tag}': ` +
+        `Предупреждение: у провайдера '${id}' ${count} ссылки с именем '${tag}': ` +
           'переименованы, но это ошибка в файле провайдера',
       );
     }
@@ -223,183 +224,257 @@ function readLinks(filePath, name, warnings) {
 }
 
 /**
- * Reads the `*.conf` list of one `kind: 'tunnels'` source directory.
+ * One provider folder, classified by what it holds.
  *
- * @param {string} dir
- * @returns {{entries: string[], state: string, error: string|null}}
+ * @param {string} id Folder name, already validated.
+ * @param {string} dir Absolute folder path.
+ * @param {string[]} warnings
+ * @returns {Record<string, unknown>}
  */
-function readTunnels(dir) {
-  if (!fs.existsSync(dir)) {
-    return {entries: [], state: 'missing', error: `каталог туннелей не найден: ${dir}`};
+function readProviderFolder(id, dir, warnings) {
+  const base = {id, name: id, path: dir, type: 'folder', discovered: true};
+
+  let stat;
+  try {
+    stat = fs.statSync(dir);
+  } catch (error) {
+    return {
+      ...base,
+      exists: false,
+      kind: 'missing',
+      count: 0,
+      tags: [],
+      entries: [],
+      outbounds: [],
+      state: 'missing',
+      owner: null,
+      mode: null,
+      error: `папка провайдера не найдена: ${dir}`,
+    };
   }
+
+  const owner = `${stat.uid}:${stat.gid}`;
+  const mode = `0${(stat.mode & 0o777).toString(8)}`;
 
   let names;
   try {
-    if (!fs.statSync(dir).isDirectory()) throw new Error('ENOTDIR');
     names = fs.readdirSync(dir);
-  } catch {
-    return {entries: [], state: 'unreadable', error: `каталог туннелей ${dir} недоступен для чтения`};
-  }
-
-  const entries = names.filter((entry) => entry.endsWith(TUNNEL_EXTENSION)).sort();
-  if (entries.length === 0) {
-    return {entries: [], state: 'empty', error: `в каталоге '${dir}' нет конфигов туннелей (*${TUNNEL_EXTENSION})`};
-  }
-  return {entries, state: 'ok', error: null};
-}
-
-/**
- * Reads one source spec.
- *
- * A legacy folder is inspected to decide what it holds: `links.txt` makes it a
- * links source, `*.conf` a tunnels source, both a `mixed` one.
- *
- * @param {{kind: string, name: string, path: string}} spec
- * @param {{root: string, baseDir: string}} context
- * @param {string[]} warnings
- * @returns {{provider: Record<string, unknown>, outbounds: Array<Record<string, unknown>>}}
- */
-function readSource(spec, context, warnings) {
-  const target = resolveTarget(spec, context);
-
-  if (spec.kind === 'tunnels') {
-    const {entries, state, error} = readTunnels(target);
+  } catch (error) {
+    const state = errorState(error) === 'denied' ? 'denied' : 'unreadable';
     return {
-      provider: {
-        name: spec.name,
-        kind: 'tunnels',
-        storedPath: spec.path,
-        path: target,
-        type: 'directory',
-        exists: fs.existsSync(target),
-        count: entries.length,
-        mtime: latestMtime(entries.map((entry) => path.join(target, entry))),
-        state,
-        error,
-        entries,
-        tags: [],
-      },
+      ...base,
+      exists: true,
+      kind: 'unreadable',
+      count: 0,
+      tags: [],
+      entries: [],
       outbounds: [],
+      state,
+      owner,
+      mode,
+      error:
+        state === 'denied'
+          ? `нет доступа к папке ${dir} (владелец ${owner}, права ${mode})`
+          : `не удалось прочитать папку ${dir}: ${error.message}`,
     };
   }
 
-  if (spec.kind === 'links') {
-    const {outbounds, state, error} = readLinks(target, spec.name, warnings);
-    return {
-      provider: {
-        name: spec.name,
-        kind: 'links',
-        storedPath: spec.path,
-        path: target,
-        type: 'file',
-        exists: fs.existsSync(target),
-        count: outbounds.length,
-        mtime: latestMtime([target]),
-        state,
-        error,
-        entries: [],
-        tags: outbounds.map((outbound) => outbound.tag),
-      },
-      outbounds,
-    };
-  }
-
-  // Legacy: a folder under the sources root, inspected for both kinds of content.
-  const dir = target;
-  const base = {
-    name: spec.name,
-    storedPath: spec.path,
-    path: dir,
-    type: 'folder',
-  };
-
-  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
-    return {
-      provider: {
-        ...base,
-        kind: 'missing',
-        exists: false,
-        count: 0,
-        mtime: null,
-        state: 'missing',
-        error: `папка источника ${spec.name} не найдена: ${dir}`,
-        entries: [],
-        tags: [],
-      },
-      outbounds: [],
-    };
-  }
-
+  const entries = names.filter((name) => name.endsWith(TUNNEL_EXTENSION)).sort();
   const linksPath = path.join(dir, LINKS_FILENAME);
-  const hasLinks = fs.existsSync(linksPath);
-  const tunnels = readTunnels(dir);
-  const entries = tunnels.entries;
+
+  // A directory named `links.txt` is not a links file: it is ignored, and the
+  // folder then holds only what it holds.
+  let hasLinks = false;
+  try {
+    hasLinks = fs.existsSync(linksPath) && fs.statSync(linksPath).isFile();
+  } catch {
+    hasLinks = false;
+  }
 
   let outbounds = [];
   let linksState = 'ok';
   let linksError = null;
   if (hasLinks) {
-    const read = readLinks(linksPath, spec.name, warnings);
+    const read = readLinks(linksPath, id, warnings);
     outbounds = read.outbounds;
     linksState = read.state;
     linksError = read.error;
   }
 
-  const kind = hasLinks ? (entries.length > 0 ? 'mixed' : 'links') : 'tunnels';
-  let state = linksState;
-  let error = linksError;
   if (!hasLinks && entries.length === 0) {
-    state = 'empty';
-    error = `в источнике '${spec.name}' нет ни файла ссылок, ни конфигов туннелей`;
+    return {
+      ...base,
+      exists: true,
+      kind: 'empty',
+      count: 0,
+      tags: [],
+      entries: [],
+      outbounds: [],
+      state: 'empty',
+      owner,
+      mode,
+      error: `нет ни ${LINKS_FILENAME}, ни конфигов туннелей (*${TUNNEL_EXTENSION})`,
+    };
   }
 
+  const kind = hasLinks ? (entries.length > 0 ? 'mixed' : 'links') : 'tunnels';
   return {
-    provider: {
-      ...base,
-      kind,
-      exists: true,
-      count: kind === 'tunnels' ? entries.length : outbounds.length,
-      mtime: latestMtime([...(hasLinks ? [linksPath] : []), ...entries.map((entry) => path.join(dir, entry))]),
-      state,
-      error,
-      entries,
-      tags: outbounds.map((outbound) => outbound.tag),
-    },
+    ...base,
+    exists: true,
+    kind,
+    count: kind === 'tunnels' ? entries.length : outbounds.length,
+    tags: outbounds.map((outbound) => outbound.tag),
+    entries,
     outbounds,
+    state: hasLinks ? linksState : 'ok',
+    owner,
+    mode,
+    error: hasLinks ? linksError : null,
   };
 }
 
 /**
- * Reads every configured source and merges the links into one outbound list.
+ * Turns one document record into the provider fields it contributes.
  *
- * The label rule is the whole point of the merge: a tag that appears in more
- * than one provider is suffixed with ` · <provider>`, so the owner can tell the
- * two apart; a tag that appears once keeps its name byte for byte, which is what
- * keeps a single-source project's `config.json` identical.
- *
- * @param {unknown} sources `sources` field of the document.
- * @param {{root: string, baseDir?: string}|string} context Sources root and the
- *   directory a relative `path` resolves against. A bare string is accepted as
- *   the root AND the base, which keeps older callers working.
- * @param {string[]} [warnings]
- * @returns {{root: string, providers: Array<Record<string, unknown>>,
- *   outbounds: Array<Record<string, unknown>>, tags: string[]}}
+ * @param {unknown} record
+ * @returns {{record: Record<string, unknown>, enabled: boolean, label: string|null}}
  */
-export function readSources(sources, context, warnings = []) {
-  const resolved =
-    typeof context === 'string'
-      ? {root: context, baseDir: context}
-      : {root: context.root, baseDir: context.baseDir ?? context.root};
+function recordView(record) {
+  const map = isMapping(record) ? record : {};
+  return {
+    record: map,
+    enabled: map.enabled === true,
+    label: typeof map.label === 'string' && map.label.length > 0 ? map.label : null,
+  };
+}
 
-  const specs = sourceSpecs(sources);
+/**
+ * Discovers every provider under `root` and merges the links of the ENABLED ones.
+ *
+ * `providers` carries the folders that were read (a links file and/or tunnel
+ * configs); `unread` carries everything that could not be read, with the reason —
+ * a stray file in the root, a folder whose name fits no identifier, a folder the
+ * process may not read, an empty folder, a links file without a single valid link,
+ * and a record whose folder is gone (which the owner may «forget»).
+ *
+ * `outbounds` and `tags` come from the ENABLED providers only. A tag that two
+ * enabled providers share is suffixed with ` · <id>`; a unique tag keeps its name
+ * byte for byte, which is what keeps a one-provider project's `config.json`
+ * identical.
+ *
+ * @param {unknown} records `providers` field of the document (id -> record).
+ * @param {string} root Absolute providers root.
+ * @param {string[]} [warnings]
+ * @returns {{root: string, rootState: {state: string, owner: string|null,
+ *   mode: string|null, message: string|null}, providers: Array<Record<string, unknown>>,
+ *   unread: Array<Record<string, unknown>>, outbounds: Array<Record<string, unknown>>,
+ *   tags: string[], warnings: string[]}}
+ */
+export function readProviders(records, root, warnings = []) {
+  const map = isMapping(records) ? records : {};
+  const rootState = readRoot(root);
+
+  if (rootState.state !== 'ok') {
+    return {
+      root,
+      rootState: {
+        state: rootState.state,
+        owner: rootState.owner,
+        mode: rootState.mode,
+        message: rootState.message,
+      },
+      providers: [],
+      unread: [],
+      outbounds: [],
+      tags: [],
+      warnings,
+    };
+  }
+
   const providers = [];
-  /** @type {Array<{provider: string, outbound: Record<string, unknown>}>} */
-  const collected = [];
+  const unread = [];
 
-  for (const spec of specs) {
-    const {provider, outbounds} = readSource(spec, resolved, warnings);
-    providers.push(provider);
-    for (const outbound of outbounds) collected.push({provider: spec.name, outbound});
+  for (const name of [...rootState.names].sort()) {
+    if (name.startsWith('.')) continue; // hidden entries are skipped silently
+    const full = path.join(root, name);
+
+    let stat;
+    try {
+      stat = fs.statSync(full);
+    } catch {
+      continue;
+    }
+
+    if (!stat.isDirectory()) {
+      unread.push({
+        id: name,
+        name,
+        path: full,
+        type: 'file',
+        discovered: true,
+        exists: true,
+        forget: false,
+        state: 'stray',
+        error: `лежит вне папки провайдера, не читается: ${full}`,
+      });
+      continue;
+    }
+
+    if (!PROVIDER_ID_PATTERN.test(name)) {
+      unread.push({
+        id: name,
+        name,
+        path: full,
+        type: 'folder',
+        discovered: true,
+        exists: true,
+        forget: false,
+        state: 'badname',
+        error: `не подходит для идентификатора: имя папки '${name}'`,
+      });
+      continue;
+    }
+
+    const view = recordView(map[name]);
+    const provider = {
+      ...readProviderFolder(name, full, warnings),
+      record: view.record,
+      enabled: view.enabled,
+      label: view.label,
+      forget: false,
+    };
+    if (provider.state === 'ok') providers.push(provider);
+    else unread.push(provider);
+  }
+
+  // A record whose folder is gone is NOT dropped silently: it is reported, and
+  // «forget» is the only way to remove it.
+  for (const [id, record] of Object.entries(map)) {
+    if (providers.some((provider) => provider.id === id)) continue;
+    if (unread.some((entry) => entry.id === id && entry.discovered)) continue;
+    const view = recordView(record);
+    unread.push({
+      id,
+      name: id,
+      path: path.join(root, id),
+      type: 'folder',
+      discovered: false,
+      exists: false,
+      forget: true,
+      state: 'missing',
+      enabled: view.enabled,
+      label: view.label,
+      record: view.record,
+      error: `папки больше нет: ${path.join(root, id)}`,
+    });
+  }
+
+  const collected = [];
+  for (const provider of providers) {
+    if (!provider.enabled) continue;
+    for (const outbound of provider.outbounds) {
+      collected.push({provider: provider.id, outbound});
+    }
   }
 
   const seen = new Map();
@@ -417,9 +492,28 @@ export function readSources(sources, context, warnings = []) {
   });
 
   return {
-    root: resolved.root,
+    root,
+    rootState: {
+      state: 'ok',
+      owner: rootState.owner,
+      mode: rootState.mode,
+      message: null,
+    },
     providers,
+    unread,
     outbounds,
     tags: outbounds.map((outbound) => outbound.tag),
+    warnings,
   };
+}
+
+/**
+ * True when a provider identifier is acceptable. Kept next to the reader so the
+ * model and the tests never spell the rule twice.
+ *
+ * @param {unknown} id
+ * @returns {boolean}
+ */
+export function isProviderId(id) {
+  return typeof id === 'string' && PROVIDER_ID_PATTERN.test(id);
 }

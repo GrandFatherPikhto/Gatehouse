@@ -58,6 +58,24 @@ describe('the tunnel directory is one, and the unit reads it', () => {
     assert.equal(fromUnit[1], DEFAULT_AMNEZIA_DIR);
   });
 
+  test('the polkit unit agrees on the tunnel directory and ReadWritePaths', () => {
+    const main = fs.readFileSync(deploy('gatehouse.service'), 'utf8');
+    const polkit = fs.readFileSync(deploy('gatehouse.service.polkit'), 'utf8');
+
+    const dirOf = (text) => /Environment=GATEHOUSE_AMNEZIA_DIR=(\S+)/.exec(text)?.[1];
+    assert.equal(dirOf(polkit), dirOf(main));
+    assert.equal(dirOf(polkit), DEFAULT_AMNEZIA_DIR);
+
+    const pathsOf = (text) =>
+      /ReadWritePaths=(.+)/.exec(text)?.[1].trim().split(/\s+/).sort();
+    assert.deepEqual(pathsOf(polkit), pathsOf(main));
+
+    // Neither unit may open the hand-written amnezia directory: GateHouse tunnels
+    // live in `/etc/gatehouse/tunnels` and nothing here touches the owner's own.
+    assert.doesNotMatch(polkit, /\/etc\/amnezia/);
+    assert.doesNotMatch(main, /\/etc\/amnezia/);
+  });
+
   test('the template uses %i, has no PartOf and no ExecReload', () => {
     // Comments explain the choices and mention `%I`, so they are stripped first.
     const unit = stripComments(fs.readFileSync(deploy('gatehouse-tunnel@.service'), 'utf8'));

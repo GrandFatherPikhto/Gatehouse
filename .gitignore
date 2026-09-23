@@ -19,9 +19,9 @@ webui.json
 *.txt
 # ...except the synthetic test fixture: without it the suite cannot run
 # from a clean clone (this exact problem already bit the Python project).
-!tests/fixtures/sources/vpnd/links.txt
+!tests/fixtures/providers/vpnd/links.txt
 # ...and the sandbox sample, which is synthetic and safe to commit.
-!dev/root.example/sources/vpnd/links.txt
+!dev/root.example/providers/vpnd/links.txt
 
 # Runtime state of the web editor: snapshots of webui.json taken before every
 # save. The location is configurable (GATEHOUSE_STATE_DIR); this is the

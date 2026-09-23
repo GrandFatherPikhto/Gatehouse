@@ -97,6 +97,7 @@ const CONFIG_SNAPSHOT_KEEP = 10;
 const ROUTE_FIELDS = Object.freeze({
   '/proxy': ['tag', 'type', 'port'],
   '/route': ['name', 'outbound'],
+  '/provider': ['id'],
   '/dns': ['dns'],
   '/output': ['output_file'],
   '/general': [
@@ -175,10 +176,25 @@ export function createApp(options = {}) {
       // Directory of the tunnel configs: `GATEHOUSE_AMNEZIA_DIR`, else the build
       // constant. There is no document value to override it any more.
       amneziaDir: system.amneziaDir,
+      // Root the provider folders are discovered under. Only an EXPLICIT
+      // `GATEHOUSE_PROVIDERS` is handed in; without it the model keeps its own
+      // resolution (a `providers/` folder next to webui.json, else the default),
+      // so the sandbox and the tests can keep their data beside the settings.
+      providersDir:
+        typeof systemEnv.GATEHOUSE_PROVIDERS === 'string' &&
+        systemEnv.GATEHOUSE_PROVIDERS.length > 0
+          ? systemEnv.GATEHOUSE_PROVIDERS
+          : undefined,
     });
   // `startServer` injects a model built before the environment was read; give it
-  // the tunnel directory as well.
+  // the tunnel directory and, when named, the providers root as well.
   model.setDefaultAmneziaDir(system.amneziaDir);
+  if (
+    typeof systemEnv.GATEHOUSE_PROVIDERS === 'string' &&
+    systemEnv.GATEHOUSE_PROVIDERS.length > 0
+  ) {
+    model.setProvidersDir(systemEnv.GATEHOUSE_PROVIDERS);
+  }
 
   // Runtime state of the host layer. It lives on the app, not in a module global,
   // so two editors in one process (the tests start many) cannot see each other's
@@ -451,7 +467,7 @@ export function createApp(options = {}) {
     // the notice channel that already exists — one line, no new UI, and nothing is
     // rewritten behind the owner's back. The sources-migration line lives by the
     // same rule: the file still carries the bare folder names until a save.
-    for (const line of [model.removedNotice, model.sourcesMigrationNotice]) {
+    for (const line of [model.removedNotice, model.providersMigrationNotice]) {
       if (line === null) continue;
       const previous = withNotices.notice;
       withNotices = {
@@ -671,6 +687,12 @@ export function createApp(options = {}) {
         const candidate = forms.parseRouteForm(body);
         model.upsertRoute(candidate.name, candidate, current.length > 0 ? current : null);
         return {applied: true, key: panelKey('route', candidate.name)};
+      }
+      case '/provider': {
+        const id = String(body.id ?? '').trim();
+        model.setProviderLabel(id, String(body.label ?? ''));
+        model.setProviderEnabled(id, forms.checkbox(body.enabled));
+        return {applied: true, key: panelKey('provider', id)};
       }
       case '/dns':
         model.applyDns(String(body.dns ?? ''));
@@ -955,42 +977,54 @@ export function createApp(options = {}) {
   );
 
   // ------------------------------------------------------------------
-  // Sources and output
+  // Providers, discovered by folder
   // ------------------------------------------------------------------
+  //
+  // There is NO form that takes a path: providers are found under
+  // GATEHOUSE_PROVIDERS and the browser never names a path. What the browser may
+  // do is flip the «включён» flag, rename a provider on its own panel, and
+  // «forget» a record whose folder is gone. The old `/providers` POST is gone, so
+  // a request carrying `path` hits the 404 catch-all like any other stale route.
 
-  // The panel edits the LIST, not a text field: a folder is added from the ones
-  // that really exist under the sources root, or removed by the button on its own
-  // row. The folders are re-read on every render, so there is no "refresh" action.
-  // No action touches the files themselves.
   app.post(
-    '/providers',
-    mutation('providers', (req) => {
-      const action = String(req.body.action ?? '').trim();
-      const name = String(req.body.name ?? '').trim();
+    '/provider',
+    mutation(
+      (req) => panelKey('provider', String(req.body.id ?? '').trim()),
+      (req) => {
+        applyEditForm('provider', req);
+        const id = String(req.body.id ?? '').trim();
+        return {
+          key: panelKey('provider', id),
+          notice: 'Настройки провайдера применены — не забудьте сохранить',
+        };
+      },
+    ),
+  );
 
-      switch (action) {
-        case 'add': {
-          // The kind decides what the path has to be, and the model refuses a path
-          // that does not exist or is not what the kind claims: a links source must
-          // be a readable file, a tunnels source a directory.
-          const kind = String(req.body.kind ?? '').trim();
-          const target = String(req.body.path ?? '').trim();
-          model.addSource(name, target, kind);
-          const label = kind === 'tunnels' ? 'Каталог туннелей' : 'Файл ссылок';
-          return {
-            key: 'providers',
-            notice: `${label} '${target}' добавлен как провайдер '${name}' — не забудьте сохранить`,
-          };
-        }
-        case 'remove':
-          model.removeSource(name);
-          return {
-            key: 'providers',
-            notice: `Источник '${name}' убран из списка — файл на диске не тронут, не забудьте сохранить`,
-          };
-        default:
-          throw new ConfigError(`неизвестное действие '${action}'`);
-      }
+  app.post(
+    '/provider/enabled',
+    mutation('providers', (req) => {
+      const id = String(req.body.id ?? '').trim();
+      const enabled = forms.checkbox(req.body.enabled);
+      model.setProviderEnabled(id, enabled);
+      return {
+        key: 'providers',
+        notice: `Провайдер '${id}' ${enabled ? 'включён' : 'выключен'} — не забудьте сохранить`,
+      };
+    }),
+  );
+
+  app.post(
+    '/provider/forget',
+    mutation('providers', (req) => {
+      const id = String(req.body.id ?? '').trim();
+      model.forgetProvider(id);
+      return {
+        key: 'providers',
+        notice:
+          `Запись о провайдере '${id}' убрана: папки на диске это не касается. ` +
+          'Не забудьте сохранить.',
+      };
     }),
   );
 
@@ -1355,7 +1389,7 @@ export function createApp(options = {}) {
       return;
     }
 
-    const info = model.sourcesInfo();
+    const info = model.providersInfo();
     if (info.error !== null) {
       writeEvent(res, 'refused', {message: info.error});
       res.end();

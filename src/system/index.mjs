@@ -183,6 +183,7 @@ export function systemConfig(env = process.env, overrides = {}) {
     sudo: read('GATEHOUSE_SUDO', DEFAULT_SUDO_PATH),
     unit: read('GATEHOUSE_UNIT', DEFAULT_UNIT),
     amneziaDir: read('GATEHOUSE_AMNEZIA_DIR', DEFAULT_AMNEZIA_DIR),
+    providersDir: read('GATEHOUSE_PROVIDERS', '/var/lib/gatehouse/providers'),
     sudoers: read('GATEHOUSE_SUDOERS', DEFAULT_SUDOERS_PATH),
     testUrl: read('GATEHOUSE_TEST_URL', DEFAULT_TEST_URL),
     configPath: read('GATEHOUSE_CONFIG', DEFAULT_CONFIG_PATH),

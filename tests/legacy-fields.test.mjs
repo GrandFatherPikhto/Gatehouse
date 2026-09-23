@@ -34,14 +34,14 @@ const DROPPED = ['watchdog', 'clash_api', 'proxies[1].watch', 'proxies[1].watch_
 /**
  * A copy of the golden fixture project with the fields of the removed Watchdog
  * added, exactly as they sit in the owner's file. The copy is needed because the
- * fixture itself must stay untouched: `sources/vpnd` moves with it, so relative
- * paths keep resolving.
+ * fixture itself must stay untouched: `providers/vpnd` moves with it, so the
+ * provider root keeps resolving.
  *
  * @returns {{dir: string, file: string, document: Record<string, unknown>}}
  */
 function fixtureProject() {
   const dir = makeTempDir();
-  fs.cpSync(path.join(FIXTURES_DIR, 'sources'), path.join(dir, 'sources'), {recursive: true});
+  fs.cpSync(path.join(FIXTURES_DIR, 'providers'), path.join(dir, 'providers'), {recursive: true});
 
   const document = JSON.parse(fs.readFileSync(FIXTURE_SETTINGS, 'utf8'));
   document.watchdog = {enabled: true, interval_seconds: 600, restart_enabled: false};
@@ -119,7 +119,7 @@ describe('the fields of the removed Watchdog are dropped in one shared place (NE
 
   test('the message names every field and says what to do', () => {
     const message = removedSettingsMessage(DROPPED);
-    assert.match(message, /убраны устаревшие поля Сторожа: watchdog, clash_api/);
+    assert.match(message, /убраны устаревшие поля: watchdog, clash_api/);
     assert.match(message, /proxies\[1\]\.watch_url/);
     assert.match(message, /сохраните/);
   });
@@ -144,7 +144,7 @@ describe('the editor loads the live file and does not rewrite it (NEW)', () => {
       const base = url.replace(/\/$/, '');
       const page = await (await fetch(`${base}/`)).text();
 
-      assert.match(page, /убраны устаревшие поля Сторожа: watchdog, clash_api/);
+      assert.match(page, /убраны устаревшие поля: watchdog, clash_api/);
       assert.match(page, /сохраните/);
       assert.equal(
         fs.readFileSync(project.file, 'utf8'),
@@ -199,7 +199,7 @@ describe('the editor loads the live file and does not rewrite it (NEW)', () => {
 
     try {
       const page = await (await fetch(`${url.replace(/\/$/, '')}/`)).text();
-      assert.doesNotMatch(page, /устаревшие поля Сторожа/);
+      assert.doesNotMatch(page, /устаревшие поля/);
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
@@ -215,7 +215,7 @@ describe('the CLI reports the same thing and does not fall over (NEW)', () => {
 
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Готово!/);
-    assert.match(result.stderr, /убраны устаревшие поля Сторожа: watchdog, clash_api/);
+    assert.match(result.stderr, /убраны устаревшие поля: watchdog, clash_api/);
     assert.match(result.stderr, /proxies\[1\]\.watch_url/);
     assert.ok(fs.existsSync(output), 'the config is still written');
   });

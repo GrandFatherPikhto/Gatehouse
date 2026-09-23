@@ -49,7 +49,7 @@ function flatDocument(overrides = {}) {
   return {
     version: DOCUMENT_VERSION,
     listen_ip: '127.0.0.1',
-    sources: ['vpnd'],
+    providers: {vpnd: {enabled: true}},
     output_file: 'config.json',
     urltest: {url: 'https://gstatic.com', interval: '3m', tolerance: 50},
     log: {level: 'info', timestamp: true},
@@ -74,7 +74,7 @@ function legacyDocument(overrides = {}) {
     profiles: {
       default: {
         listen_ip: '127.0.0.1',
-        sources: ['vpnd'],
+        providers: {vpnd: {enabled: true}},
         output_file: 'config.json',
         proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
         routes: {telegram: {outbound: 'auto-select', domains: ['t.me']}},
@@ -168,7 +168,7 @@ describe('dirty flag and file operations (reference: model.new/open/save)', () =
 
     assert.equal(document.version, DOCUMENT_VERSION);
     assert.equal(document.listen_ip, '127.0.0.1');
-    assert.deepEqual(document.sources, []);
+    assert.deepEqual(document.providers, {});
     assert.deepEqual(document.proxies, []);
     assert.ok(!Object.hasOwn(document, 'profiles'));
     assert.ok(!Object.hasOwn(document, 'defaults'));
@@ -229,7 +229,7 @@ describe('migration of the version-1 envelope (NEW)', () => {
       profiles: {
         default: {
           listen_ip: '10.0.0.2',
-          sources: ['vpnd'],
+          providers: {vpnd: {enabled: true}},
           output_file: 'config.json',
           proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
         },
@@ -276,24 +276,36 @@ describe('migration of the version-1 envelope (NEW)', () => {
     assert.deepEqual(reopened.document, model.document);
   });
 
-  test('a links_file becomes a single source', () => {
+  test('a version-1 links_file enables every folder that holds links', () => {
     const legacy = {
-      version: 2,
-      listen_ip: '127.0.0.1',
-      links_file: 'sources/vpnd/links.txt',
-      output_file: 'config.json',
-      proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
-      routes: {},
+      version: 1,
+      active: 'default',
+      defaults: {},
+      profiles: {
+        default: {
+          listen_ip: '127.0.0.1',
+          links_file: 'sources/vpnd/links.txt',
+          output_file: 'config.json',
+          proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
+          routes: {},
+        },
+      },
     };
     const dir = makeTempDir();
+    writeLinksFile(dir);
     const file = path.join(dir, 'webui.json');
     fs.writeFileSync(file, canonicalJson(legacy), 'utf8');
 
     const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
 
-    assert.deepEqual(model.document.sources, ['vpnd']);
+    assert.deepEqual(model.document.providers, {vpnd: {enabled: true}});
     assert.ok(!Object.hasOwn(model.document, 'links_file'));
     assert.ok(model.lastMigration.warnings.some((warning) => /links_file/.test(warning)));
+    assert.ok(
+      model.lastMigration.warnings.some((warning) =>
+        /включены найденные провайдеры: vpnd/.test(warning),
+      ),
+    );
   });
 
   test('migrateLegacyDocument refuses a document without profiles', () => {
@@ -523,15 +535,17 @@ describe('stale references and the tree', () => {
     assert.doesNotThrow(() => model.save(), 'a stale reference is not a save error');
   });
 
-  test('a missing provider folder marks its node instead of throwing', () => {
-    const {model} = openDocument(flatDocument({sources: ['ghost']}));
+  test('a provider record without a folder is reported, not thrown', () => {
+    const {dir, model} = openDocument(flatDocument({providers: {ghost: {enabled: true}}}));
+    fs.mkdirSync(path.join(dir, 'providers'), {recursive: true});
 
-    assert.equal(model.sourcesInfo().providers[0].state, 'missing');
+    const info = model.providersInfo();
+    assert.deepEqual(info.providers, []);
+    assert.equal(info.unread[0].id, 'ghost');
+    assert.equal(info.unread[0].state, 'missing');
 
-    const providers = model.treeSpec().children.find((child) => child.kind === 'providers');
-    const provider = providers.children[0];
-    assert.equal(provider.stale, true);
-    assert.match(provider.mark, /^\[!\] папка не найдена: /);
+    assert.doesNotThrow(() => model.treeSpec());
+    assert.doesNotThrow(() => model.save());
   });
 
   test('the tree has the nodes of the task, flat since version 2', () => {
@@ -608,23 +622,43 @@ describe('honest tree labels: the cap and the provider diagnoses (NEW)', () => {
     }
   });
 
-  test('a source folder that does not exist is diagnosed as missing', () => {
-    const {model} = openDocument(flatDocument({sources: ['ghost']}));
+  test('a found but disabled provider is a tree node marked выключен', () => {
+    const {dir, model} = openDocument(flatDocument({providers: {vpnd: {enabled: false}}}));
+    writeLinksFile(dir);
 
-    assert.equal(model.sourcesInfo().providers[0].state, 'missing');
-    const provider = providerNode(model, 'ghost');
-    assert.equal(provider.stale, true);
-    assert.match(provider.mark, /^\[!\] папка не найдена: /);
+    assert.equal(model.providersInfo().providers[0].state, 'ok');
+    const provider = providerNode(model, 'vpnd');
+    assert.equal(provider.stale, false, 'a read folder is not an error in itself');
+    assert.match(provider.mark, /\[выключен\]/);
   });
 
-  test('a links path that is a directory is diagnosed as unreadable', () => {
+  test('a provider record whose folder is gone is unread, not a tree node', () => {
+    const {dir, model} = openDocument(flatDocument({providers: {ghost: {enabled: true}}}));
+    fs.mkdirSync(path.join(dir, 'providers'), {recursive: true});
+
+    const info = model.providersInfo();
+    assert.deepEqual(info.providers, []);
+    assert.equal(info.unread[0].id, 'ghost');
+    assert.equal(info.unread[0].state, 'missing');
+    assert.equal(info.unread[0].forget, true);
+
+    const providers = model.treeSpec().children.find((child) => child.kind === 'providers');
+    assert.equal(providers.stale, true);
+    assert.match(providers.mark, /не прочиталось: 1/);
+    assert.deepEqual(providers.children, []);
+  });
+
+  test('a links.txt that is a directory leaves the folder empty, not readable', () => {
     const dir = makeTempDir();
-    fs.mkdirSync(path.join(dir, 'sources', 'vpnd', 'links.txt'), {recursive: true});
+    fs.mkdirSync(path.join(dir, 'providers', 'vpnd', 'links.txt'), {recursive: true});
     const file = path.join(dir, 'webui.json');
     fs.writeFileSync(file, canonicalJson(flatDocument()), 'utf8');
     const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
 
-    assert.match(providerNode(model, 'vpnd').mark, /папка недоступна: /);
+    const info = model.providersInfo();
+    assert.deepEqual(info.providers, []);
+    assert.equal(info.unread[0].id, 'vpnd');
+    assert.equal(info.unread[0].state, 'empty');
   });
 
   test('an empty links file is diagnosed as empty', () => {
@@ -634,14 +668,17 @@ describe('honest tree labels: the cap and the provider diagnoses (NEW)', () => {
     fs.writeFileSync(file, canonicalJson(flatDocument()), 'utf8');
     const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
 
-    assert.match(providerNode(model, 'vpnd').mark, /пусто: /);
+    const info = model.providersInfo();
+    assert.deepEqual(info.providers, []);
+    assert.equal(info.unread[0].state, 'empty');
+    assert.match(info.unread[0].error, /валидных VLESS-ссылок/);
   });
 
-  test('no configured source marks the providers node', () => {
-    const {model} = openDocument(flatDocument({sources: []}));
+  test('no found provider marks the providers node', () => {
+    const {model} = openDocument(flatDocument({providers: {}}));
     const providers = model.treeSpec().children.find((child) => child.kind === 'providers');
     assert.equal(providers.stale, true);
-    assert.match(providers.mark, /источники не заданы/);
+    assert.match(providers.mark, /провайдеры не найдены/);
   });
 
   test('a read folder that misses names keeps the per-proxy fourth message', () => {
@@ -659,7 +696,7 @@ describe('honest tree labels: the cap and the provider diagnoses (NEW)', () => {
     );
     writeLinksFile(dir);
 
-    assert.equal(model.sourcesInfo().providers[0].state, 'ok');
+    assert.equal(model.providersInfo().providers[0].state, 'ok');
     const providers = model.treeSpec().children.find((child) => child.kind === 'providers');
     assert.equal(providers.stale, false, 'a read folder is not an error in itself');
 
@@ -784,8 +821,8 @@ describe('parity with the core (NEW)', () => {
   });
 });
 
-describe('explicit sources: {kind, name, path} (NEW)', () => {
-  test('a legacy folder entry is converted to an explicit source on open', () => {
+describe('migration of the sources field into providers (NEW)', () => {
+  test('string entries enable exactly those provider folders', () => {
     const dir = makeTempDir();
     writeLinksFile(dir);
     const file = path.join(dir, 'webui.json');
@@ -793,67 +830,67 @@ describe('explicit sources: {kind, name, path} (NEW)', () => {
 
     const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
 
-    assert.deepEqual(model.document.sources, [
-      {kind: 'links', name: 'vpnd', path: path.join(dir, 'sources', 'vpnd', 'links.txt')},
-    ]);
-    assert.match(model.sourcesMigrationNotice, /переведён в новый формат/);
-    assert.equal(model.sourcesInfo().providers[0].kind, 'links');
+    assert.ok(!Object.hasOwn(model.document, 'sources'), 'the field is gone from the document');
+    assert.deepEqual(model.document.providers, {vpnd: {enabled: true}});
+    assert.match(model.providersMigrationNotice, /поле sources заменено на providers/);
+    assert.equal(model.providersInfo().providers[0].kind, 'links');
+    assert.doesNotThrow(() => model.save(), 'the migrated document passes the schema');
   });
 
-  test('a folder holding links and tunnels splits into two sources', () => {
+  test('an entry whose stored path is outside the root is not silently accepted', () => {
     const dir = makeTempDir();
     writeLinksFile(dir);
-    fs.writeFileSync(path.join(dir, 'sources', 'vpnd', 'de.conf'), 'x', 'utf8');
     const file = path.join(dir, 'webui.json');
-    fs.writeFileSync(file, canonicalJson(flatDocument({sources: ['vpnd']})), 'utf8');
-
-    const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
-
-    assert.deepEqual(
-      model.document.sources.map((source) => [source.kind, source.name]),
-      [
-        ['links', 'vpnd'],
-        ['tunnels', 'vpnd'],
-      ],
+    fs.writeFileSync(
+      file,
+      canonicalJson(
+        flatDocument({
+          sources: [
+            {kind: 'links', name: 'vpnd', path: path.join(dir, 'sources', 'vpnd', 'links.txt')},
+          ],
+        }),
+      ),
+      'utf8',
     );
+
+    const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
+
+    assert.deepEqual(model.document.providers, {vpnd: {enabled: true}});
+    assert.match(model.providersMigrationNotice, /перенесите/);
   });
 
-  test('addSource validates the origin, refuses a duplicate and leaves the file alone', () => {
+  test('enabling, naming and forgetting a provider go through the record', () => {
     const dir = makeTempDir();
     const links = writeLinksFile(dir);
-    const tunnels = path.join(dir, 'sources', 'hidemyname');
+    const tunnels = path.join(dir, 'providers', 'hidemyname');
     fs.mkdirSync(tunnels, {recursive: true});
     fs.writeFileSync(path.join(tunnels, 'de.conf'), 'x', 'utf8');
     const file = path.join(dir, 'webui.json');
-    fs.writeFileSync(file, canonicalJson(flatDocument({sources: []})), 'utf8');
+    fs.writeFileSync(file, canonicalJson(flatDocument({providers: {}})), 'utf8');
     const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
 
-    model.addSource('vpnd', links, 'links');
-    assert.deepEqual(model.sources(), [{kind: 'links', name: 'vpnd', path: links}]);
+    model.setProviderEnabled('vpnd', true);
+    assert.deepEqual(model.getProvider('vpnd'), {enabled: true});
+    assert.ok(fs.existsSync(links), "the owner's links file is untouched");
 
+    model.setProviderLabel('vpnd', 'Directly');
+    assert.deepEqual(model.getProvider('vpnd'), {enabled: true, label: 'Directly'});
     assert.throws(
-      () => model.addSource('vpnd', tunnels, 'tunnels'),
-      (error) => error instanceof ConfigError && /уже указан/.test(error.message),
+      () => model.setProviderLabel('vpnd', 'a\u0000b'),
+      (error) => error instanceof ConfigError && /управляющих символов/.test(error.message),
     );
     assert.throws(
-      () => model.addSource('ghost', path.join(dir, 'nope.txt'), 'links'),
-      (error) => error instanceof ConfigError && /не найден или это не файл/.test(error.message),
-    );
-    assert.throws(
-      () => model.addSource('bad', links, 'tunnels'),
-      (error) => error instanceof ConfigError && /не найден или это не каталог/.test(error.message),
-    );
-    assert.throws(
-      () => model.addSource('bad-kind', links, 'nope'),
-      (error) => error instanceof ConfigError && /неизвестный тип источника/.test(error.message),
+      () => model.setProviderEnabled('bad name', true),
+      (error) => error instanceof ConfigError && /не подходит для идентификатора/.test(error.message),
     );
 
-    model.addSource('hidemyname', tunnels, 'tunnels');
-    assert.equal(model.tunnelSourceDir('hidemyname'), tunnels);
-    assert.equal(model.sources().length, 2);
-
-    model.removeSource('vpnd');
-    assert.equal(model.sources().length, 1);
-    assert.ok(fs.existsSync(links), 'the owner\'s links file is untouched');
+    // A record whose folder is gone may be forgotten; a folder on disk may not.
+    assert.throws(
+      () => model.forgetProvider('vpnd'),
+      (error) => error instanceof ConfigError && /найден на диске/.test(error.message),
+    );
+    model.setProviderEnabled('ghost', true);
+    model.forgetProvider('ghost');
+    assert.equal(model.getProvider('ghost'), null);
   });
 });

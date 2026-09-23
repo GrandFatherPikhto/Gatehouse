@@ -1,7 +1,10 @@
-// The providers panel edits the source LIST: a source is an explicit origin —
-// a links FILE for Sing-Box or a tunnels DIRECTORY for Amnezia — picked by hand.
-// The tool reads the origin and never writes to it: removing an entry means
-// "do not read it", not "delete the owner's files".
+// The providers panel (NEW): providers are DISCOVERED by folder under
+// GATEHOUSE_PROVIDERS, never named by a path in the browser.
+//
+// The panel lists what was found, lets the owner tick «включён», renames a
+// provider on its own panel, and shows what could not be read with the reason.
+// The tool reads the folders and never writes into them; a record whose folder is
+// gone is «forgotten», which only drops the entry from `webui.json`.
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -9,36 +12,54 @@ import path from 'node:path';
 import {describe, test} from 'node:test';
 
 import {startServer} from '../src/web/server.mjs';
-import {FI_TAG, makeTempDir, writeLinksFile, writeSettings} from './helpers.mjs';
+import {FI_TAG, makeTempDir, vlessLink, writeLinksFile, writeSettings} from './helpers.mjs';
+
+/** A second links provider, disabled by default, used to prove the tick matters. */
+const GERMANY_TAG = '🇩🇪 Germany - Berlin';
 
 /**
- * Starts the editor over a project that lists ONE explicit links source and has
- * a second folder (`hidemyname`) with a tunnel config, not listed yet.
+ * Starts the editor over a project with three discovered folders:
  *
+ *   * `vpnd`      — links.txt (the default three servers), ENABLED;
+ *   * `second`    — links.txt with one server, found but disabled (no record);
+ *   * `hidemyname`— a `*.conf`, found but disabled.
+ *
+ * @param {Record<string, unknown>} [overrides] `providers` map overrides.
  * @returns {Promise<Record<string, unknown>>}
  */
-async function startEditor() {
+async function startEditor(overrides = {}) {
   const dir = makeTempDir();
   writeLinksFile(dir);
-  const tunnelDir = path.join(dir, 'sources', 'hidemyname');
+
+  const secondDir = path.join(dir, 'providers', 'second');
+  fs.mkdirSync(secondDir, {recursive: true});
+  fs.writeFileSync(
+    path.join(secondDir, 'links.txt'),
+    `${vlessLink('uuid-7', 'solo.example.com', GERMANY_TAG, 'security=tls')}\n`,
+    'utf8',
+  );
+
+  const tunnelDir = path.join(dir, 'providers', 'hidemyname');
   fs.mkdirSync(tunnelDir, {recursive: true});
   fs.writeFileSync(path.join(tunnelDir, 'de.conf'), 'x', 'utf8');
+
   const settingsFile = writeSettings(dir, {
-    sources: [{kind: 'links', name: 'vpnd', path: 'sources/vpnd/links.txt'}],
+    providers: {vpnd: {enabled: true}},
+    ...overrides,
   });
-  const stateDir = path.join(dir, 'state');
 
   const {server, model, url} = await startServer({
     env: {
       GATEHOUSE_SETTINGS: settingsFile,
       GATEHOUSE_HOST: '127.0.0.1',
       GATEHOUSE_PORT: '0',
-      GATEHOUSE_STATE_DIR: stateDir,
+      GATEHOUSE_STATE_DIR: path.join(dir, 'state'),
     },
   });
 
   return {
     dir,
+    secondDir,
     tunnelDir,
     settingsFile,
     model,
@@ -50,195 +71,206 @@ async function startEditor() {
 }
 
 /**
- * POSTs an action form the way htmx does it.
+ * POSTs a form the way htmx does it.
  *
  * @param {string} base
- * @param {Record<string, unknown>} fields
+ * @param {string} route
+ * @param {Record<string, unknown>} [fields]
  * @returns {Promise<Response>}
  */
-async function postProviders(base, fields) {
+async function post(base, route, fields = {}) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(fields)) params.append(key, String(value));
-  return fetch(`${base}/providers`, {
+  return fetch(`${base}${route}`, {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded', 'HX-Request': 'true'},
     body: params,
   });
 }
 
-describe('the providers panel edits explicit sources (NEW)', () => {
-  test('the add control is a type + path form, not a folder combobox', async () => {
+/** The markup of one panel. */
+async function panel(editor, key) {
+  return (await fetch(`${editor.base}/panel/${encodeURIComponent(key)}`)).text();
+}
+
+describe('the providers panel lists what was discovered (NEW)', () => {
+  test('the found folders are listed and there is no path field anywhere', async () => {
     const editor = await startEditor();
     try {
-      const html = await (await fetch(`${editor.base}/panel/providers`)).text();
+      const html = await panel(editor, 'providers');
 
-      assert.match(html, /name="kind" value="links"/, 'the links kind is offered');
-      assert.match(html, /name="kind" value="tunnels"/, 'the tunnels kind is offered');
-      assert.match(html, /name="path"/, 'the path is typed by hand');
-      assert.match(html, /name="name"/, 'the provider name is typed by hand');
-      assert.doesNotMatch(html, /<select[^>]*name="name"/, 'the old folder combobox is gone');
-      assert.match(html, /name="action" value="remove"/);
-      assert.match(html, /provider%3Avpnd/, 'the provider name links to its contents');
-      assert.match(html, /Sing-Box/, 'a links source is labelled by what it feeds');
+      assert.match(html, /Найденные провайдеры/);
+      assert.match(html, /provider%3Avpnd/, 'a found provider links to its own panel');
+      assert.match(html, /provider%3Asecond/, 'a folder without a record is still listed');
+      assert.match(html, /provider%3Ahidemyname/);
+      assert.match(html, /Sing-Box/, 'a links folder is labelled by what it feeds');
+      assert.match(html, /Amnezia/, 'a *.conf folder is labelled Amnezia');
+      assert.match(html, /hx-post="\/provider\/enabled"/, 'the tick is an action form');
+
+      // The browser never names a path or a kind: the old add form is gone.
+      assert.doesNotMatch(html, /name="path"/);
+      assert.doesNotMatch(html, /name="kind"/);
+      assert.doesNotMatch(html, /name="action"\s+value="add"/);
+
       // The servers of a provider belong to ITS panel, not to the summary list.
-      assert.doesNotMatch(html, /Выходы \(/);
       assert.doesNotMatch(html, new RegExp(FI_TAG.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     } finally {
       await editor.close();
     }
   });
 
-  test('adding a tunnels directory creates a provider panel without touching the disk', async () => {
+  test('the tick flips a provider and says so', async () => {
     const editor = await startEditor();
     try {
-      const response = await postProviders(editor.base, {
-        action: 'add',
-        kind: 'tunnels',
-        name: 'hidemyname',
-        path: editor.tunnelDir,
-      });
+      const on = await post(editor.base, '/provider/enabled', {id: 'second', enabled: '1'});
+      assert.match(await on.text(), /Провайдер[^<]*second[^<]*включён/);
+      assert.deepEqual(editor.model.getProvider('second'), {enabled: true});
 
-      const body = await response.text();
-      assert.match(body, /Каталог туннелей/);
-      assert.match(body, /hidemyname/);
-      assert.deepEqual(editor.model.sources(), [
-        {kind: 'links', name: 'vpnd', path: 'sources/vpnd/links.txt'},
-        {kind: 'tunnels', name: 'hidemyname', path: editor.tunnelDir},
-      ]);
-      assert.ok(fs.existsSync(path.join(editor.tunnelDir, 'de.conf')));
-
-      const html = await (
-        await fetch(`${editor.base}/panel/${encodeURIComponent('provider:hidemyname')}`)
-      ).text();
-      assert.match(html, /Источник: hidemyname/);
-      assert.match(html, /Amnezia/);
-      assert.match(html, /Конфиги туннелей \(1\)/);
-      assert.match(html, /tunnel%3Ahidemyname%2Fde\.conf/);
+      const off = await post(editor.base, '/provider/enabled', {id: 'second'});
+      assert.match(await off.text(), /Провайдер[^<]*second[^<]*выключен/);
+      assert.deepEqual(editor.model.getProvider('second'), {enabled: false});
     } finally {
       await editor.close();
     }
   });
 
-  test('adding a links file shows the servers that file hands out', async () => {
+  test('a disabled provider keeps its servers out of the config until it is ticked', async () => {
     const editor = await startEditor();
     try {
-      const other = path.join(editor.dir, 'other.txt');
-      fs.writeFileSync(
-        other,
-        'vless://uuid-7@solo.example.com:443?security=tls#%F0%9F%87%A9%F0%9F%87%AA%20Germany%20-%20Berlin\n',
-        'utf8',
-      );
-      const response = await postProviders(editor.base, {
+      assert.equal(editor.model.generate().stats.servers, 3, 'only the ticked vpnd contributes');
+
+      await post(editor.base, '/provider/enabled', {id: 'second', enabled: '1'});
+      await post(editor.base, '/save', {panel: 'providers'});
+
+      assert.equal(editor.model.generate().stats.servers, 4, 'the ticked folder joins in');
+    } finally {
+      await editor.close();
+    }
+  });
+});
+
+describe('the provider panel edits the name and the tick (NEW)', () => {
+  test('the human name is saved through the panel form', async () => {
+    const editor = await startEditor();
+    try {
+      const saved = await post(editor.base, '/provider', {
+        id: 'vpnd',
+        label: 'Directly',
+        enabled: '1',
+      });
+      assert.match(await saved.text(), /Настройки провайдера применены/);
+      assert.deepEqual(editor.model.getProvider('vpnd'), {enabled: true, label: 'Directly'});
+
+      const html = await panel(editor, 'provider:vpnd');
+      assert.match(html, /name="label"/);
+      assert.match(html, /value="Directly"/);
+      assert.match(html, /name="enabled"/);
+      assert.doesNotMatch(html, /name="path"/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('renaming a provider does not move a byte of config.json', async () => {
+    const editor = await startEditor();
+    try {
+      const first = editor.model.generate();
+      const before = fs.readFileSync(first.outputFile);
+
+      await post(editor.base, '/provider', {id: 'vpnd', label: 'Directly', enabled: '1'});
+      await post(editor.base, '/save', {panel: 'provider'});
+      const second = editor.model.generate();
+
+      assert.deepEqual(fs.readFileSync(second.outputFile), before, 'the config is byte-identical');
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('a label with markup is escaped in the panel', async () => {
+    const editor = await startEditor();
+    try {
+      editor.model.setProviderLabel('vpnd', '<script>alert(1)</script>');
+
+      const html = await panel(editor, 'provider:vpnd');
+      assert.match(html, /\u0026lt;script\u0026gt;/, 'the label is escaped');
+      assert.doesNotMatch(html, /<script>alert/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('a disabled provider offers no «включить» rows', async () => {
+    const editor = await startEditor();
+    try {
+      const html = await panel(editor, 'provider:hidemyname');
+
+      assert.match(html, /Amnezia/);
+      assert.match(html, /Конфиги туннелей \(1\)/);
+      assert.match(html, /Провайдер выключен/);
+      assert.doesNotMatch(html, /action="\/tunnels"/, 'a disabled provider offers no rows');
+    } finally {
+      await editor.close();
+    }
+  });
+});
+
+describe('what could not be read (NEW)', () => {
+  test('a record whose folder is gone is listed and «Забыть» removes the record', async () => {
+    const editor = await startEditor({providers: {vpnd: {enabled: true}, ghost: {enabled: true}}});
+    try {
+      const html = await panel(editor, 'providers');
+      assert.match(html, /Не прочиталось/);
+      assert.match(html, /ghost/);
+      assert.match(html, /папки нет/);
+      assert.match(html, /hx-post="\/provider\/forget"/);
+
+      const forgotten = await post(editor.base, '/provider/forget', {id: 'ghost'});
+      assert.match(await forgotten.text(), /Запись о провайдере[^<]*ghost[^<]*убрана/);
+      assert.equal(editor.model.getProvider('ghost'), null);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('a folder that is on disk cannot be forgotten', async () => {
+    const editor = await startEditor();
+    try {
+      const response = await post(editor.base, '/provider/forget', {id: 'vpnd'});
+      assert.match(await response.text(), /найден на диске/);
+      assert.ok(editor.model.getProvider('vpnd') !== null);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('an unusable folder name is listed with its reason', async () => {
+    const editor = await startEditor();
+    try {
+      fs.mkdirSync(path.join(editor.dir, 'providers', '-bad'), {recursive: true});
+
+      const html = await panel(editor, 'providers');
+      assert.match(html, /имя папки не подходит/);
+      assert.match(html, /-bad/);
+    } finally {
+      await editor.close();
+    }
+  });
+});
+
+describe('the path-taking route is gone (NEW)', () => {
+  test('a POST to /providers with a path is a 404 and changes nothing', async () => {
+    const editor = await startEditor();
+    try {
+      const response = await post(editor.base, '/providers', {
         action: 'add',
         kind: 'links',
         name: 'other',
-        path: other,
+        path: path.join(editor.dir, 'other.txt'),
       });
 
-      assert.match(await response.text(), /Файл ссылок/);
-
-      const html = await (
-        await fetch(`${editor.base}/panel/${encodeURIComponent('provider:other')}`)
-      ).text();
-      assert.match(html, /Источник: other/);
-      assert.match(html, /Серверы \(1\)/);
-      assert.match(html, /Germany - Berlin/);
-    } finally {
-      await editor.close();
-    }
-  });
-
-  test('a path that does not exist is refused and nothing is added', async () => {
-    const editor = await startEditor();
-    try {
-      const response = await postProviders(editor.base, {
-        action: 'add',
-        kind: 'links',
-        name: 'ghost',
-        path: path.join(editor.dir, 'nope', 'links.txt'),
-      });
-
-      assert.match(await response.text(), /не найден или это не файл/);
-      assert.deepEqual(editor.model.sources(), [
-        {kind: 'links', name: 'vpnd', path: 'sources/vpnd/links.txt'},
-      ]);
-    } finally {
-      await editor.close();
-    }
-  });
-
-  test('a directory given as a links file is refused', async () => {
-    const editor = await startEditor();
-    try {
-      const response = await postProviders(editor.base, {
-        action: 'add',
-        kind: 'links',
-        name: 'wrong',
-        path: editor.tunnelDir,
-      });
-
-      assert.match(await response.text(), /не найден или это не файл/);
-      assert.equal(editor.model.sources().length, 1);
-    } finally {
-      await editor.close();
-    }
-  });
-
-  test('a duplicate provider name is refused with a reason', async () => {
-    const editor = await startEditor();
-    try {
-      const response = await postProviders(editor.base, {
-        action: 'add',
-        kind: 'tunnels',
-        name: 'vpnd',
-        path: editor.tunnelDir,
-      });
-
-      assert.match(await response.text(), /уже указан/);
-      assert.equal(editor.model.sources().length, 1);
-    } finally {
-      await editor.close();
-    }
-  });
-
-  test('removing a source drops the entry and leaves the file on disk', async () => {
-    const editor = await startEditor();
-    try {
-      const response = await postProviders(editor.base, {action: 'remove', name: 'vpnd'});
-
-      assert.match(await response.text(), /файл на диске не тронут/);
-      assert.deepEqual(editor.model.sources(), []);
-      assert.ok(
-        fs.existsSync(path.join(editor.dir, 'sources', 'vpnd', 'links.txt')),
-        "the owner's links file is still there",
-      );
-    } finally {
-      await editor.close();
-    }
-  });
-
-  test('the added source is written to webui.json by the header save', async () => {
-    const editor = await startEditor();
-    try {
-      await postProviders(editor.base, {
-        action: 'add',
-        kind: 'tunnels',
-        name: 'hidemyname',
-        path: editor.tunnelDir,
-      });
-
-      const saved = await fetch(`${editor.base}/save`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded', 'HX-Request': 'true'},
-        body: new URLSearchParams({panel: 'providers'}),
-      });
-      assert.match(await saved.text(), /Сохранено/);
-
-      const document = JSON.parse(fs.readFileSync(editor.settingsFile, 'utf8'));
-      assert.deepEqual(document.sources, [
-        {kind: 'links', name: 'vpnd', path: 'sources/vpnd/links.txt'},
-        {kind: 'tunnels', name: 'hidemyname', path: editor.tunnelDir},
-      ]);
+      assert.equal(response.status, 404);
+      assert.deepEqual(editor.model.providerIds(), ['vpnd']);
     } finally {
       await editor.close();
     }

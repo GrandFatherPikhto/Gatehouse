@@ -2,7 +2,7 @@
 //
 // The golden pair is synthetic on purpose: the real provider files under
 // `dev/root/` carry the owner's PublicKey, Endpoint and obfuscation settings,
-// and nothing from `sources/` may enter the repository (task §6.4). The
+// and nothing from a `providers/` root may enter the repository (task §6.4). The
 // transformation does not depend on the values, so the proof is the same.
 //
 // The strongest assertion here is the byte-for-byte one: the diff of the golden

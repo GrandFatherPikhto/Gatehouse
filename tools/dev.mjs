@@ -25,8 +25,9 @@ const EXAMPLE = path.join(ROOT, 'dev', 'root.example');
 
 const SETTINGS = path.join(SANDBOX, 'webui.json');
 const CONFIG = path.join(SANDBOX, 'etc', 'sing-box', 'config.json');
-// Provider folder of the sample project; the reader looks under <settingsDir>/sources.
-const LINKS = path.join(SANDBOX, 'sources', 'vpnd', 'links.txt');
+// Providers root of the sandbox; every sub-folder of it is a provider.
+const PROVIDERS = path.join(SANDBOX, 'providers');
+const LINKS = path.join(PROVIDERS, 'vpnd', 'links.txt');
 // Where `gatehouse-tunnel@<name>` reads `<name>.conf`. In the sandbox the editor
 // writes the normalised tunnel configs here, never into the router's /etc.
 const AMNEZIA = path.join(SANDBOX, 'etc', 'gatehouse', 'tunnels');
@@ -45,7 +46,7 @@ if (missing.length > 0) {
       `  mkdir -p ${rel(path.dirname(CONFIG))} ${rel(path.dirname(LINKS))}\n` +
       `  cp ${rel(path.join(EXAMPLE, 'webui.json'))} ${rel(SETTINGS)}\n` +
       `  cp ${rel(path.join(EXAMPLE, 'etc/sing-box/config.json'))} ${rel(CONFIG)}\n` +
-      `  cp ${rel(path.join(EXAMPLE, 'sources/vpnd/links.txt'))} ${rel(LINKS)}\n` +
+      `  cp ${rel(path.join(EXAMPLE, 'providers/vpnd/links.txt'))} ${rel(LINKS)}\n` +
       'После этого замените образцы боевыми копиями, если нужно.\n',
   );
   process.exit(1);
@@ -66,6 +67,7 @@ Object.assign(process.env, {
   GATEHOUSE_CONFIG: CONFIG,
   GATEHOUSE_SETTINGS: SETTINGS,
   GATEHOUSE_STATE_DIR: path.join(SANDBOX, 'state'),
+  GATEHOUSE_PROVIDERS: PROVIDERS,
   GATEHOUSE_AMNEZIA_DIR: AMNEZIA,
   GATEHOUSE_SUDOERS: SUDOERS,
   GATEHOUSE_HOST: '127.0.0.1',

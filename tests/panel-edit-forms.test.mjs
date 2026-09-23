@@ -2,8 +2,8 @@
 // the WHOLE panel.
 //
 // Since version 2 no panel carries two edit routes any more: the defaults panel
-// and the profile note are gone, so `general`, `dns`, `links`, `output`,
-// `watchdog`, `proxy` and `route` each own exactly one form. The invariant is
+// and the profile note are gone, so `singbox`, `provider`, `proxy` and `route`
+// each own exactly one form. The invariant is
 // still worth guarding, because the defect it closed was "the header «Сохранить»
 // silently applied only part of what the panel showed" — and the watchdog at the
 // bottom renders EVERY panel and demands that each form with input fields is
@@ -205,13 +205,11 @@ const EDITABLE_ACTION_FORMS = Object.freeze({
   // policy-routing checkbox posts to its own route and rewrites the file of a
   // marked tunnel. There is no apply, so it is an action form too.
   tunnel: [{route: '/tunnel/policy', hidden: null}],
-  // The providers panel edits the LIST through action forms, not through one edit
-  // form: "add" carries the folder picker, "remove" sits on each row. There is
-  // nothing to "apply", so neither is `id="panel-form"`.
-  providers: [
-    {route: '/providers', hidden: 'add'},
-    {route: '/providers', hidden: 'remove'},
-  ],
+  // The providers panel is a discovered LIST, not a form: the «включён» checkbox
+  // of every row posts to its own route (and redraws the whole panel), and an
+  // unread record carries a «Забыть» button. There is nothing to «apply» on the
+  // panel as a whole, so neither is `id="panel-form"`.
+  providers: [{route: '/provider/enabled', hidden: null}],
 });
 
 /**
@@ -261,7 +259,7 @@ function formHiddenAction(form) {
 function keyFor(kind, model) {
   if (kind === 'proxy') return `proxy:${model.proxyTags()[0]}`;
   if (kind === 'route') return `route:${model.routeNames()[0]}`;
-  if (kind === 'provider') return `provider:${model.sourcesInfo().providers[0].name}`;
+  if (kind === 'provider') return `provider:${model.providersInfo().providers[0].id}`;
   return kind;
 }
 

@@ -1,9 +1,9 @@
-// Sources: several provider folders instead of one links file.
+// Discovery of provider folders.
 //
-// The two invariants of part 3 are checked here directly on the reader:
-//   * a provider label appears ONLY on a name collision between providers, so a
-//     single-source project keeps its tags byte for byte (the golden gate);
-//   * tunnel configs are listed and NEVER become outbounds.
+// The rule under test: `GATEHOUSE_PROVIDERS` names ONE root, every sub-folder of
+// it is a provider, the folder name IS the identifier, and a provider with no
+// record in `webui.json` is found but DISABLED. Nothing is watched: the folders
+// are re-read on every call, so a new one appears by itself.
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -11,223 +11,142 @@ import path from 'node:path';
 import {describe, test} from 'node:test';
 
 import {
+  DEFAULT_PROVIDERS_ROOT,
   PROVIDER_LABEL_SEPARATOR,
-  readSources,
-  resolveSourcesRoot,
-  sourceNames,
-  sourceSpecs,
+  isProviderId,
+  readProviders,
+  resolveProvidersRoot,
 } from '../src/core/sources.mjs';
-import {ConfigError} from '../src/core/errors.mjs';
-import {FI_UUID, NL_UUID, makeTempDir, vlessLink} from './helpers.mjs';
+import {DEFAULT_LINKS, FI_TAG, makeTempDir, vlessLink} from './helpers.mjs';
 
-const AT_TAG = '🇦🇹 Austria - Vienna';
-
-/**
- * Writes one provider folder.
- *
- * @param {string} dir
- * @param {string} name
- * @param {{links?: string, tunnels?: string[]}} [content]
- * @returns {string}
- */
-function writeProvider(dir, name, content = {}) {
-  const providerDir = path.join(dir, 'sources', name);
-  fs.mkdirSync(providerDir, {recursive: true});
-  if (content.links) fs.writeFileSync(path.join(providerDir, 'links.txt'), content.links, 'utf8');
-  for (const tunnel of content.tunnels ?? []) {
-    fs.writeFileSync(path.join(providerDir, tunnel), 'x', 'utf8');
-  }
-  return providerDir;
-}
-
-describe('resolveSourcesRoot and sourceNames (NEW)', () => {
-  test('the root defaults to <settingsDir>/sources', () => {
-    assert.equal(resolveSourcesRoot('/etc/gatehouse', {}), path.join('/etc/gatehouse', 'sources'));
-  });
-
-  test('GATEHOUSE_SOURCES wins', () => {
+describe('resolveProvidersRoot', () => {
+  test('GATEHOUSE_PROVIDERS wins', () => {
     assert.equal(
-      resolveSourcesRoot('/etc/gatehouse', {GATEHOUSE_SOURCES: '/var/lib/gatehouse/sources'}),
-      '/var/lib/gatehouse/sources',
+      resolveProvidersRoot('/etc/gatehouse', {GATEHOUSE_PROVIDERS: '/srv/providers'}),
+      '/srv/providers',
     );
   });
 
-  test('sourceNames drops blanks and accepts a single string', () => {
-    assert.deepEqual(sourceNames(['vpnd', '', '  hidemyname ']), ['vpnd', 'hidemyname']);
-    assert.deepEqual(sourceNames('vpnd'), ['vpnd']);
-    assert.deepEqual(sourceNames(undefined), []);
+  test('a providers/ folder next to webui.json is used when the variable is absent', () => {
+    const dir = makeTempDir();
+    const beside = path.join(dir, 'providers');
+    fs.mkdirSync(beside);
+    assert.equal(resolveProvidersRoot(dir, {}), beside);
+  });
+
+  test('without the variable and without a neighbouring folder the default is used', () => {
+    assert.equal(resolveProvidersRoot(makeTempDir(), {}), DEFAULT_PROVIDERS_ROOT);
   });
 });
 
-describe('merging providers (NEW)', () => {
-  test('a single source keeps the tags untouched — the golden gate', () => {
-    const dir = makeTempDir();
-    writeProvider(dir, 'vpnd', {
-      links: `${vlessLink(FI_UUID, 'fi.example.com', AT_TAG, 'security=tls')}\n`,
-    });
+describe('isProviderId', () => {
+  test('accepts letters, digits, dot, dash and underscore, but not a leading . or -', () => {
+    for (const id of ['vpnd', 'hide.myname', 'a_b-c', 'a1']) assert.equal(isProviderId(id), true);
+    for (const id of ['.hidden', '-dash', 'bad name', '', 'a/b']) {
+      assert.equal(isProviderId(id), false, `${id} must be refused`);
+    }
+  });
+});
 
-    const read = readSources(['vpnd'], path.join(dir, 'sources'));
+/**
+ * Root with every kind of entry the reader has to tell apart.
+ *
+ * @returns {string}
+ */
+function buildDiscoveryRoot() {
+  const dir = makeTempDir();
+  const root = path.join(dir, 'providers');
+  fs.mkdirSync(path.join(root, 'vpnd'), {recursive: true});
+  fs.writeFileSync(path.join(root, 'vpnd', 'links.txt'), DEFAULT_LINKS);
 
-    assert.deepEqual(read.tags, [AT_TAG]);
-    assert.ok(!read.tags[0].includes(PROVIDER_LABEL_SEPARATOR));
+  fs.mkdirSync(path.join(root, 'amnezia'));
+  fs.writeFileSync(path.join(root, 'amnezia', 'one.conf'), 'x');
+  fs.writeFileSync(path.join(root, 'amnezia', 'two.conf'), 'x');
+
+  fs.mkdirSync(path.join(root, 'mix'));
+  fs.writeFileSync(path.join(root, 'mix', 'links.txt'), DEFAULT_LINKS);
+  fs.writeFileSync(path.join(root, 'mix', 'three.conf'), 'x');
+
+  fs.mkdirSync(path.join(root, 'empty'));
+  fs.mkdirSync(path.join(root, 'bad name'));
+  fs.mkdirSync(path.join(root, '.hidden'));
+  fs.writeFileSync(path.join(root, 'stray.txt'), 'x');
+  return root;
+}
+
+describe('discovery of provider folders', () => {
+  test('reads every folder, skips hidden entries and reports the rest with a reason', () => {
+    const root = buildDiscoveryRoot();
+    const read = readProviders({}, root);
+
+    assert.deepEqual(
+      read.providers.map((provider) => provider.id).sort(),
+      ['amnezia', 'mix', 'vpnd'],
+    );
+    assert.equal(read.providers.every((provider) => provider.enabled === false), true);
+
+    const byId = Object.fromEntries(read.unread.map((entry) => [entry.id, entry]));
+    assert.equal(byId['empty'].state, 'empty');
+    assert.equal(byId['bad name'].state, 'badname');
+    assert.equal(byId['stray.txt'].state, 'stray');
+    assert.equal(Object.hasOwn(byId, '.hidden'), false, 'hidden entries are skipped silently');
   });
 
-  test('distinct names from different providers are not labelled', () => {
-    const dir = makeTempDir();
-    writeProvider(dir, 'vpnd', {
-      links: `${vlessLink(FI_UUID, 'fi.example.com', AT_TAG, 'security=tls')}\n`,
-    });
-    writeProvider(dir, 'hidemyname', {
-      links: `${vlessLink(NL_UUID, 'nl.example.com', '🇳🇱 Netherlands - Amsterdam', 'security=tls')}\n`,
-    });
+  test('classifies links, tunnels and mixed folders, counting what they hold', () => {
+    const root = buildDiscoveryRoot();
+    const read = readProviders({}, root);
+    const byId = Object.fromEntries(read.providers.map((provider) => [provider.id, provider]));
 
-    const read = readSources(['vpnd', 'hidemyname'], path.join(dir, 'sources'));
-
-    assert.deepEqual(read.tags, [AT_TAG, '🇳🇱 Netherlands - Amsterdam']);
+    assert.equal(byId.vpnd.kind, 'links');
+    assert.equal(byId.vpnd.count, 3);
+    assert.equal(byId.amnezia.kind, 'tunnels');
+    assert.equal(byId.amnezia.count, 2);
+    assert.deepEqual(byId.amnezia.entries, ['one.conf', 'two.conf']);
+    assert.equal(byId.mix.kind, 'mixed');
+    assert.equal(byId.mix.count, 3);
   });
 
-  test('the same name from two providers is suffixed with the provider', () => {
+  test('only ENABLED providers contribute outbounds and tags', () => {
+    const root = buildDiscoveryRoot();
+    const none = readProviders({}, root);
+    assert.equal(none.outbounds.length, 0);
+    assert.deepEqual(none.tags, []);
+
+    const read = readProviders({vpnd: {enabled: true}}, root);
+    assert.equal(read.tags.length, 3);
+    assert.equal(read.tags.includes(FI_TAG), true);
+  });
+
+  test('a record whose folder is gone is reported, and may be forgotten', () => {
+    const root = buildDiscoveryRoot();
+    const read = readProviders({ghost: {enabled: true}}, root);
+    const ghost = read.unread.find((entry) => entry.id === 'ghost');
+    assert.ok(ghost, 'the missing record is listed');
+    assert.equal(ghost.state, 'missing');
+    assert.equal(ghost.forget, true);
+  });
+
+  test('a tag two enabled providers share is suffixed with the identifier', () => {
     const dir = makeTempDir();
-    writeProvider(dir, 'vpnd', {
-      links: `${vlessLink(FI_UUID, 'fi.example.com', AT_TAG, 'security=tls')}\n`,
-    });
-    writeProvider(dir, 'hidemyname', {
-      links: `${vlessLink(NL_UUID, 'at.example.com', AT_TAG, 'security=tls')}\n`,
-    });
+    const root = path.join(dir, 'providers');
+    const shared = `${vlessLink('11111111-1111-1111-1111-111111111111', 'a.example.com', FI_TAG)}\n`;
+    const other = `${vlessLink('22222222-2222-2222-2222-222222222222', 'b.example.com', FI_TAG)}\n`;
+    for (const [id, text] of [['one', shared], ['two', other]]) {
+      fs.mkdirSync(path.join(root, id), {recursive: true});
+      fs.writeFileSync(path.join(root, id, 'links.txt'), text);
+    }
 
-    const read = readSources(['vpnd', 'hidemyname'], path.join(dir, 'sources'));
-
-    assert.deepEqual(read.tags, [
-      `${AT_TAG}${PROVIDER_LABEL_SEPARATOR}vpnd`,
-      `${AT_TAG}${PROVIDER_LABEL_SEPARATOR}hidemyname`,
+    const read = readProviders({one: {enabled: true}, two: {enabled: true}}, root);
+    assert.deepEqual(read.tags.sort(), [
+      `${FI_TAG}${PROVIDER_LABEL_SEPARATOR}one`,
+      `${FI_TAG}${PROVIDER_LABEL_SEPARATOR}two`,
     ]);
   });
 
-  test('a repeated name inside one provider warns and is still usable', () => {
-    const dir = makeTempDir();
-    writeProvider(dir, 'vpnd', {
-      links:
-        `${vlessLink(FI_UUID, 'fi.example.com', AT_TAG, 'security=tls')}\n` +
-        `${vlessLink(NL_UUID, 'at2.example.com', AT_TAG, 'security=tls')}\n`,
-    });
-    const warnings = [];
-
-    const read = readSources(['vpnd'], path.join(dir, 'sources'), warnings);
-
-    assert.equal(read.tags.length, 2);
-    assert.ok(warnings.some((warning) => /2 ссылки с именем/.test(warning)));
-    assert.ok(read.tags.every((tag) => !tag.includes(PROVIDER_LABEL_SEPARATOR)));
-  });
-});
-
-describe('tunnels are listed, never emitted (NEW)', () => {
-  test('a folder with only .conf files contributes no outbounds', () => {
-    const dir = makeTempDir();
-    writeProvider(dir, 'hidemyname', {tunnels: ['AustriaGrazS4.conf', 'AustriaViennaS6.conf']});
-
-    const read = readSources(['hidemyname'], path.join(dir, 'sources'));
-
-    assert.deepEqual(read.tags, []);
-    assert.deepEqual(read.outbounds, []);
-
-    const [provider] = read.providers;
-    assert.equal(provider.kind, 'tunnels');
-    assert.equal(provider.count, 2);
-    assert.deepEqual(provider.entries, ['AustriaGrazS4.conf', 'AustriaViennaS6.conf']);
-  });
-
-  test('a mixed folder emits its links and lists its tunnels', () => {
-    const dir = makeTempDir();
-    writeProvider(dir, 'amnezia', {
-      links: `${vlessLink(FI_UUID, 'fi.example.com', AT_TAG, 'security=tls')}\n`,
-      tunnels: ['de.conf'],
-    });
-
-    const read = readSources(['amnezia'], path.join(dir, 'sources'));
-
-    assert.deepEqual(read.tags, [AT_TAG]);
-    const [provider] = read.providers;
-    assert.equal(provider.kind, 'mixed');
-    assert.equal(provider.count, 1);
-    assert.deepEqual(provider.entries, ['de.conf']);
-    assert.ok(typeof provider.mtime === 'string', 'the folder carries a modification time');
-  });
-
-  test('a missing folder is reported, not thrown', () => {
-    const dir = makeTempDir();
-
-    const read = readSources(['ghost'], path.join(dir, 'sources'));
-
-    assert.deepEqual(read.tags, []);
-    assert.equal(read.providers[0].state, 'missing');
-    assert.match(read.providers[0].error, /не найдена/);
-  });
-});
-
-describe('explicit sources: {kind, name, path} (NEW)', () => {
-  test('sourceSpecs normalises objects, keeps strings as legacy and refuses a bad kind', () => {
-    assert.deepEqual(
-      sourceSpecs([{kind: 'links', name: ' vpnd ', path: ' a.txt '}]),
-      [{kind: 'links', name: 'vpnd', path: 'a.txt'}],
-    );
-    assert.deepEqual(sourceSpecs('vpnd'), [{kind: 'legacy', name: 'vpnd', path: 'vpnd'}]);
-    assert.throws(
-      () => sourceSpecs([{kind: 'nope', name: 'x', path: 'y'}]),
-      (error) => error instanceof ConfigError && /неизвестный тип/.test(error.message),
-    );
-    assert.throws(
-      () => sourceSpecs([{kind: 'links', name: 'x', path: ''}]),
-      (error) => error instanceof ConfigError && /не задан путь/.test(error.message),
-    );
-  });
-
-  test('a links source is one file, resolved from the settings directory', () => {
-    const dir = makeTempDir();
-    writeProvider(dir, 'vpnd', {
-      links: `${vlessLink(FI_UUID, 'fi.example.com', AT_TAG, 'security=tls')}\n`,
-    });
-
-    const read = readSources(
-      [{kind: 'links', name: 'vpnd', path: 'sources/vpnd/links.txt'}],
-      {root: path.join(dir, 'sources'), baseDir: dir},
-    );
-
-    assert.ok(fs.existsSync(path.join(dir, 'sources', 'vpnd', 'links.txt')));
-    assert.deepEqual(read.tags, [AT_TAG]);
-    assert.equal(read.providers[0].kind, 'links');
-    assert.equal(read.providers[0].type, 'file');
-    assert.equal(read.providers[0].state, 'ok');
-  });
-
-  test('a tunnels source is a directory, and contributes no outbounds', () => {
-    const dir = makeTempDir();
-    const tunnelDir = writeProvider(dir, 'hidemyname', {
-      tunnels: ['AustriaGrazS4.conf', 'AustriaViennaS6.conf'],
-    });
-
-    const read = readSources([{kind: 'tunnels', name: 'hidemyname', path: tunnelDir}], {
-      root: path.join(dir, 'sources'),
-      baseDir: dir,
-    });
-
-    assert.deepEqual(read.tags, []);
-    assert.deepEqual(read.outbounds, []);
-    const [provider] = read.providers;
-    assert.equal(provider.kind, 'tunnels');
-    assert.equal(provider.type, 'directory');
-    assert.deepEqual(provider.entries, ['AustriaGrazS4.conf', 'AustriaViennaS6.conf']);
-  });
-
-  test('a links path that does not exist is a missing source, not a throw', () => {
-    const dir = makeTempDir();
-
-    const read = readSources([{kind: 'links', name: 'vpnd', path: 'gone.txt'}], {
-      root: path.join(dir, 'sources'),
-      baseDir: dir,
-    });
-
-    assert.deepEqual(read.tags, []);
-    assert.equal(read.providers[0].state, 'missing');
-    assert.match(read.providers[0].error, /файл ссылок не найден/);
+  test('an absent root is one sentence, and no lists', () => {
+    const read = readProviders({}, path.join(makeTempDir(), 'gone'));
+    assert.equal(read.providers.length, 0);
+    assert.equal(read.unread.length, 0);
+    assert.match(read.rootState.message, /корень провайдеров не найден/);
   });
 });

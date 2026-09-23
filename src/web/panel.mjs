@@ -56,6 +56,32 @@ export function sourceKindLabel(kind) {
 }
 
 /**
+ * Human word for a provider that could NOT be read, for the «Не прочиталось»
+ * list. The state, not the number, decides the word.
+ *
+ * @param {unknown} state
+ * @returns {string}
+ */
+export function unreadStateLabel(state) {
+  switch (state) {
+    case 'stray':
+      return 'файл вне папки провайдера';
+    case 'badname':
+      return 'имя папки не подходит';
+    case 'denied':
+      return 'нет доступа';
+    case 'unreadable':
+      return 'не читается';
+    case 'empty':
+      return 'пусто';
+    case 'missing':
+      return 'папки нет';
+    default:
+      return 'не читается';
+  }
+}
+
+/**
  * Routes of the edit form of a panel, in application order. A panel has ONE form
  * element (`id="panel-form"`) and every «Применить» button on the panel sends it
  * whole, so a panel may legitimately have several routes.
@@ -68,6 +94,10 @@ export function sourceKindLabel(kind) {
 const EDIT_FORMS = Object.freeze({
   proxy: ['/proxy'],
   route: ['/route'],
+  // One panel, one form: the human-readable name and the «включён» flag of a
+  // provider, saved like any other setting. The `.conf` rows keep their own
+  // `/tunnels` action buttons and are deliberately NOT part of the edit form.
+  provider: ['/provider'],
   // One panel, three sections: the form of «Настройки Sing-Box» applies them in
   // this order, and a refusal anywhere rolls the whole panel back.
   singbox: ['/general', '/dns', '/output'],
@@ -151,7 +181,7 @@ export function panelUrl(key) {
  * @returns {string[]}
  */
 export function knownOutbounds(model) {
-  const tags = model.sourcesInfo().tags;
+  const tags = model.providersInfo().tags;
   const proxies = model.proxies().filter((proxy) => isMapping(proxy));
   const pools = proxies
     .filter((proxy) => !isMapping(proxy.tunnel))
@@ -233,41 +263,55 @@ export function buildPanel(model, key, extra = {}) {
       };
 
     case 'providers': {
-      const info = model.sourcesInfo();
+      const info = model.providersInfo();
       return {
         ...base,
         title: 'Провайдеры',
         // The kind label is a presentation decision, added here and not in the
         // model: the reader reports `links`/`tunnels`, the panel says what they
-        // feed (Sing-Box / Amnezia).
+        // feed (Sing-Box / Amnezia). The display name is the human-readable label
+        // when there is one, the folder name otherwise.
         info: {
           ...info,
           providers: info.providers.map((provider) => ({
             ...provider,
+            displayName:
+              typeof provider.label === 'string' && provider.label.length > 0
+                ? provider.label
+                : provider.id,
             kindLabel: sourceKindLabel(provider.kind),
           })),
+          unread: info.unread.map((entry) => ({
+            ...entry,
+            displayName:
+              typeof entry.label === 'string' && entry.label.length > 0
+                ? entry.label
+                : entry.id,
+            stateLabel: unreadStateLabel(entry.state),
+          })),
         },
-        // A relative path resolves against the settings directory, so the form
-        // shows where a bare path would land. The sources root is where a legacy
-        // folder entry used to live.
-        baseDir: model.settingsDir,
-        sourcesRoot: model.resolvedSourcesRoot(),
       };
     }
 
     case 'provider': {
-      const info = model.sourcesInfo();
-      const provider = info.providers.find((item) => item.name === name) ?? null;
-      if (provider === null) throw new ConfigError(`источник '${name}' не подключён`);
+      const info = model.providersInfo();
+      const provider = info.providers.find((item) => item.id === name) ?? null;
+      if (provider === null) throw new ConfigError(`провайдер '${name}' не найден`);
+      const label =
+        typeof provider.label === 'string' && provider.label.length > 0 ? provider.label : name;
       return {
         ...base,
-        title: `Источник: ${name}`,
+        title: `Провайдер: ${label}`,
         provider,
+        providerId: String(provider.id),
+        displayName: label,
+        enabled: provider.enabled === true,
         // What the origin FEEDS: Sing-Box for a links file, Amnezia for a tunnel
         // directory. It is a label of the panel, not of the folder.
         kindLabel: sourceKindLabel(provider.kind),
         // One row per `.conf`: the «включить» mark and the two editable names.
-        tunnelRows: model.providerTunnelRows(name),
+        // Only an ENABLED provider offers them — a disabled one says so instead.
+        tunnelRows: provider.enabled === true ? model.providerTunnelRows(name) : [],
       };
     }
 
@@ -275,12 +319,12 @@ export function buildPanel(model, key, extra = {}) {
       return {...base, title: 'Прокси', tags: model.proxyTags()};
 
     case 'routes':
-      return {...base, title: 'Маршруты', names: model.routeNames()};
+      return {...base, title: 'Маршруты Sing-Box', names: model.routeNames()};
 
     case 'proxy': {
       const proxy = model.getProxy(name);
       if (proxy === null) throw new ConfigError(`прокси '${name}' не найден`);
-      const info = model.sourcesInfo();
+      const info = model.providersInfo();
       return {
         ...base,
         title: `Прокси: ${name}`,
@@ -311,7 +355,7 @@ export function buildPanel(model, key, extra = {}) {
       // The child comes from the panel KEY; an unknown or absent one means the
       // first child, so `/panel/system` and a stale bookmark never render nothing.
       const tab = SYSTEM_TABS.includes(name) ? name : SYSTEM_TABS[0];
-      const info = model.sourcesInfo();
+      const info = model.providersInfo();
 
       // ONE panel object carries the fields of both children: each child is a
       // partial included by the container, and both read from here. The tree draws

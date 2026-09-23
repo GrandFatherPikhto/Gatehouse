@@ -22,10 +22,12 @@ const PROVIDER_CONF = path.join(FIXTURES_DIR, 'tunnel', 'provider.conf');
 async function startEditor() {
   const dir = makeTempDir();
   writeLinksFile(dir);
-  const tunnelDir = path.join(dir, 'sources', 'hidemyname');
+  const tunnelDir = path.join(dir, 'providers', 'hidemyname');
   fs.mkdirSync(tunnelDir, {recursive: true});
   fs.copyFileSync(PROVIDER_CONF, path.join(tunnelDir, 'AustriaGrazS4.conf'));
-  const settingsFile = writeSettings(dir, {sources: ['vpnd', 'hidemyname']});
+  const settingsFile = writeSettings(dir, {
+    providers: {vpnd: {enabled: true}, hidemyname: {enabled: true}},
+  });
   const stateDir = path.join(dir, 'state');
 
   const {server, model, url} = await startServer({
@@ -66,10 +68,15 @@ async function postTunnel(base, fields) {
 }
 
 describe('the tunnel preview (NEW)', () => {
-  test('the providers panel links every tunnel config', async () => {
+  test('the provider panel links every tunnel config', async () => {
     const editor = await startEditor();
     try {
-      const html = await (await fetch(`${editor.base}/panel/providers`)).text();
+      const list = await (await fetch(`${editor.base}/panel/providers`)).text();
+      assert.match(list, /provider%3Ahidemyname/, 'the list links the provider itself');
+
+      const html = await (
+        await fetch(`${editor.base}/panel/${encodeURIComponent('provider:hidemyname')}`)
+      ).text();
 
       assert.match(html, /AustriaGrazS4\.conf/);
       assert.match(html, /tunnel%3Ahidemyname%2FAustriaGrazS4\.conf/);
@@ -161,7 +168,7 @@ describe('the tunnel preview (NEW)', () => {
       const response = await postTunnel(editor.base, {provider: 'nope', file: 'x.conf'});
       const html = await response.text();
 
-      assert.match(html, /не указан в поле sources/);
+      assert.match(html, /не найден среди папок провайдеров/);
     } finally {
       await editor.close();
     }

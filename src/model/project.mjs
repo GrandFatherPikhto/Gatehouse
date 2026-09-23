@@ -42,12 +42,9 @@ import {
   validateTunnelLabel,
 } from '../core/normalize.mjs';
 import {
-  LEGACY_KIND,
-  LINKS_FILENAME,
-  TUNNEL_EXTENSION,
-  readSources,
-  resolveSourcesRoot,
-  sourceSpecs,
+  isProviderId,
+  readProviders,
+  resolveProvidersRoot,
 } from '../core/sources.mjs';
 import {
   applyTunnelConfig,
@@ -119,7 +116,7 @@ export function newDocument() {
   return {
     version: DOCUMENT_VERSION,
     listen_ip: DEFAULT_LISTEN_IP,
-    sources: [],
+    providers: {},
     output_file: DEFAULT_OUTPUT_FILE,
     exclude_from_auto: [...DEFAULT_EXCLUDE],
     urltest: {
@@ -135,24 +132,21 @@ export function newDocument() {
 }
 
 /**
- * Migrates a version-1 or pre-sources document into the current shape.
+ * Flattens a version-1 document and drops its `links_file`.
  *
- * Two incompatible changes are folded into this one pass, because both mean
- * "open the file once in the editor":
+ * The envelope (`defaults`/`profiles`/`active`) is flattened here. More than one
+ * profile is NOT guessed — the owner picked the active one for a reason — so the
+ * file is refused with the names; a single body is spread on top of a merged
+ * `defaults` (the profile is stronger), with one warning per migrated key.
  *
- *   * the `defaults`/`profiles`/`active` envelope is flattened. More than one
- *     profile is NOT guessed — the owner picked the active one for a reason —
- *     so the file is refused with the names; a single body is spread on top of a
- *     merged `defaults` (the profile is stronger), with one warning per migrated
- *     key;
- *   * a `links_file` string becomes `sources: [<parent folder>]`, the folder
- *     name being the provider name. A bare file name carries no provider name,
- *     so it maps to 'default' with a warning telling the owner where the file
- *     has to move.
+ * `links_file` is only DROPPED and reported: which providers to enable depends on
+ * the folders on disk, so the folder work is `ProjectModel#migrateProvidersToProviders`,
+ * which `open` runs with the resolved providers root. `linksFile` carries the old
+ * value so `open` knows it has to enable every provider that holds a `links.txt`.
  *
  * @param {Record<string, unknown>} data Parsed legacy document.
  * @param {string} [source] File name used in the messages.
- * @returns {{document: Record<string, unknown>, warnings: string[]}}
+ * @returns {{document: Record<string, unknown>, warnings: string[], linksFile: string|null}}
  */
 export function migrateLegacyDocument(data, source = 'webui.json') {
   const warnings = [];
@@ -198,23 +192,17 @@ export function migrateLegacyDocument(data, source = 'webui.json') {
     merged = {...data};
   }
 
+  let linksFile = null;
   if (typeof merged.links_file === 'string' && merged.links_file.length > 0) {
-    const linksFile = merged.links_file;
-    const folder = path.dirname(linksFile);
-    const provider = folder === '.' || folder === '' ? 'default' : path.basename(folder);
+    linksFile = merged.links_file;
     delete merged.links_file;
-    if (Array.isArray(merged.sources) && merged.sources.length > 0) {
-      warnings.push(`Предупреждение: поле links_file '${linksFile}' отброшено в пользу sources`);
-    } else {
-      merged.sources = [provider];
-      warnings.push(
-        `Предупреждение: links_file '${linksFile}' заменён на sources: ['${provider}']` +
-          (provider === 'default' ? `; положите файл в <sources>/${provider}/links.txt` : ''),
-      );
-    }
+    warnings.push(
+      `Предупреждение: поле links_file '${linksFile}' отброшено: ` +
+        'провайдеры теперь читаются из папок под GATEHOUSE_PROVIDERS',
+    );
   }
 
-  return {document: {version: DOCUMENT_VERSION, ...merged}, warnings};
+  return {document: {version: DOCUMENT_VERSION, ...merged}, warnings, linksFile};
 }
 
 /**
@@ -326,9 +314,12 @@ function amneziaDirAccessMessage(dir, state) {
  */
 export class ProjectModel {
   /**
-   * @param {{path?: string|null, stateDir?: string, snapshotKeep?: number}} [options]
+   * @param {{path?: string|null, stateDir?: string, snapshotKeep?: number,
+   *   amneziaDir?: string, providersDir?: string}} [options]
    *   `path` opens an existing file immediately; `stateDir` is where snapshots
-   *   go, `.state` beside the project by default.
+   *   go, `.state` beside the project by default. `amneziaDir` and `providersDir`
+   *   come from `GATEHOUSE_AMNEZIA_DIR` / `GATEHOUSE_PROVIDERS`; the web layer,
+   *   which alone may read the environment, fills them in.
    */
   constructor(options = {}) {
     this.stateDir = options.stateDir ?? path.join(process.cwd(), DEFAULT_STATE_DIR);
@@ -341,6 +332,13 @@ export class ProjectModel {
      * @type {string}
      */
     this.defaultAmneziaDir = typeof options.amneziaDir === 'string' ? options.amneziaDir : '';
+    /**
+     * Root of the provider folders, handed in by the web layer from
+     * `GATEHOUSE_PROVIDERS`; empty means "read the variable, else the default".
+     *
+     * @type {string}
+     */
+    this.providersDir = typeof options.providersDir === 'string' ? options.providersDir : '';
     this.path = null;
     this.document = newDocument();
     /**
@@ -352,13 +350,13 @@ export class ProjectModel {
      */
     this.lastMigration = null;
     /**
-     * Warnings of the last `open` that converted legacy bare-string `sources`
-     * entries into explicit objects. `null` when there was nothing to convert; the
-     * web layer shows the lines once and a save makes them true no more.
+     * Warnings of the last `open` that migrated the `sources` field into
+     * `providers`. `null` when there was nothing to convert; the web layer shows
+     * the lines once and a save makes them true no more.
      *
      * @type {{warnings: string[]}|null}
      */
-    this.lastSourcesMigration = null;
+    this.lastProvidersMigration = null;
     /**
      * Names of the fields of the removed Watchdog that were in the file at load
      * time. The web layer shows one line about them while they are still listed
@@ -394,16 +392,17 @@ export class ProjectModel {
   }
 
   /**
-   * The lines the editor shows about `sources` entries converted on the last
-   * open, or `null` when there were none. They live until a save, exactly like the
-   * removed-fields notice: the file still carries the old form until then.
+   * The lines the editor shows about the `sources` → `providers` migration of the
+   * last open, or `null` when there was none. They live until a save, exactly like
+   * the removed-fields notice: the file still carries the old form until then.
    *
    * @type {string|null}
    */
-  get sourcesMigrationNotice() {
-    return this.lastSourcesMigration === null || this.lastSourcesMigration.warnings.length === 0
+  get providersMigrationNotice() {
+    return this.lastProvidersMigration === null ||
+      this.lastProvidersMigration.warnings.length === 0
       ? null
-      : this.lastSourcesMigration.warnings.join(' ');
+      : this.lastProvidersMigration.warnings.join(' ');
   }
 
   /** Marks the document as changed (reference: `mark_dirty`). */
@@ -441,7 +440,7 @@ export class ProjectModel {
     this.document = newDocument();
     this.path = target ? path.resolve(target) : null;
     this.lastMigration = null;
-    this.lastSourcesMigration = null;
+    this.lastProvidersMigration = null;
     this.lastRemoved = [];
     this.markClean();
     return this.document;
@@ -461,37 +460,42 @@ export class ProjectModel {
    */
   open(target) {
     const resolved = path.resolve(target);
+    const settingsDir = path.dirname(resolved);
+    const root =
+      this.providersDir.length > 0 ? this.providersDir : resolveProvidersRoot(settingsDir);
     const raw = this.#readJson(resolved);
 
     if (isLegacyDocument(raw)) {
-      const {document, warnings} = migrateLegacyDocument(raw, resolved);
+      const {document, warnings, linksFile} = migrateLegacyDocument(raw, resolved);
       // A version-1 file kept the Watchdog fields per profile, so the migration
       // may carry them along: they are dropped from its RESULT as well.
       this.lastRemoved = dropRemovedSettings(document);
+      // The `sources` → `providers` migration runs BEFORE validation, because the
+      // schema no longer knows `sources` and `dropRemovedSettings` would otherwise
+      // drop it without ever enabling a provider.
+      const migrated = this.#migrateProviders(document, root, settingsDir, linksFile !== null);
       validateSettings(document, resolved);
       const snapshot = takeSnapshot(resolved, this.stateDir, {keep: this.snapshotKeep});
       writeAtomic(resolved, canonicalJson(document));
+      this.document = document;
       this.lastMigration = {
         snapshot: snapshot === null ? null : snapshot.path,
-        warnings,
+        warnings: [...warnings, ...migrated],
       };
-      this.document = document;
+      this.lastProvidersMigration = null;
     } else {
-      // Dropped BEFORE validation, through the same function the core uses, so the
-      // editor and `tools/generate.mjs` agree on what is stale. In place, and
-      // without rewriting the file: the fields leave it on the next ordinary save.
+      // Migrated BEFORE `dropRemovedSettings`, for the same reason: `sources` must
+      // become `providers`, not vanish. Neither touches the file here — the fields
+      // leave it on the next ordinary save.
+      const migrated = this.#migrateProviders(raw, root, settingsDir, false);
       this.lastRemoved = dropRemovedSettings(raw);
       validateSettings(raw, resolved);
       this.document = raw;
       this.lastMigration = null;
+      this.lastProvidersMigration = migrated.length > 0 ? {warnings: migrated} : null;
     }
 
     this.path = resolved;
-    // A document written before the explicit sources carries bare folder names.
-    // They are converted in memory (the reader understands both forms), and the
-    // notice tells the owner to save so the file catches up.
-    const sourcesMigration = this.#migrateSourceEntries();
-    this.lastSourcesMigration = sourcesMigration.length > 0 ? {warnings: sourcesMigration} : null;
     this.markClean();
     return this.document;
   }
@@ -523,10 +527,10 @@ export class ProjectModel {
     const snapshot = takeSnapshot(this.path, this.stateDir, {keep: this.snapshotKeep});
     writeAtomic(this.path, canonicalJson(this.document));
     // Whatever the Watchdog left behind is gone from the file now, so the line the
-    // editor shows about it must go as well. Same for the sources migration
-    // notice: the file carries the explicit objects after this save.
+    // editor shows about it must go as well. Same for the providers migration
+    // notice: the file carries `providers` after this save.
     this.lastRemoved = [];
-    this.lastSourcesMigration = null;
+    this.lastProvidersMigration = null;
     this.markClean();
     return {
       path: this.path,
@@ -581,139 +585,124 @@ export class ProjectModel {
     return this.document;
   }
 
-  /** Source specs of the document: `{kind, name, path}` objects. */
-  sources() {
-    return sourceSpecs(this.document.sources);
+  /** Stored `providers` map as a plain object: `id -> {enabled, label?}`. */
+  providers() {
+    const value = this.document.providers;
+    return isMapping(value) ? value : {};
+  }
+
+  /** Identifiers of the providers named in the document. */
+  providerIds() {
+    return Object.keys(this.providers());
   }
 
   /**
-   * One source by its provider name, or `null`. Two entries may share a name only
-   * in a document migrated from the folder layout (a folder holding both
-   * `links.txt` and `*.conf` splits into a links and a tunnels source); when a
-   * kind is given it decides between them.
+   * One stored provider record, or `null`.
    *
-   * @param {string} name
-   * @param {string} [kind]
-   * @returns {{kind: string, name: string, path: string}|null}
+   * @param {string} id
+   * @returns {Record<string, unknown>|null}
    */
-  sourceByName(name, kind) {
-    const target = String(name ?? '').trim();
-    return (
-      this.sources().find(
-        (spec) => spec.name === target && (kind === undefined || spec.kind === kind),
-      ) ?? null
-    );
+  getProvider(id) {
+    const record = this.providers()[String(id ?? '').trim()];
+    return isMapping(record) ? record : null;
   }
 
   /**
-   * Absolute directory of a tunnels source, or `null` when no source of that name
-   * holds tunnel configs. A legacy folder under the sources root is accepted too.
+   * Absolute directory of a discovered provider, or `null` when the folder is not
+   * there (a record without a folder included). Used to read a `*.conf` for the
+   * preview; the provider does NOT have to be enabled for that.
    *
-   * @param {string} name
+   * @param {string} id
    * @returns {string|null}
    */
-  tunnelSourceDir(name) {
-    const spec = this.sourceByName(name);
-    if (spec === null) return null;
-    if (spec.kind === 'tunnels') return this.#resolveSourcePath(spec.path);
-    if (spec.kind === LEGACY_KIND) return path.join(this.resolvedSourcesRoot(), spec.path);
-    return null;
+  providerDir(id) {
+    const provider = this.providersInfo().providers.find((item) => item.id === id);
+    return provider === undefined ? null : provider.path;
+  }
+
+  /** @returns {Record<string, unknown>} */
+  #ensureProviders() {
+    if (!isMapping(this.document.providers)) this.document.providers = {};
+    return this.document.providers;
   }
 
   /**
-   * Stored `sources` entries as they are: strings and objects alike. The writer
-   * must never turn a legacy string into an object it did not migrate, so adding
-   * or removing one entry goes through this list, not through `sources()`.
+   * Migrates the `sources` field into `providers`, in place, and drops `sources`.
+   * Returns the warnings to show.
    *
-   * @returns {unknown[]}
-   */
-  #rawSources() {
-    const value = this.document.sources;
-    return Array.isArray(value) ? [...value] : [];
-  }
-
-  /**
-   * Provider name of a stored source entry, whatever form it has.
+   * `enableAllWithLinks` is the version-1 case: the old file had no list at all,
+   * only a `links_file` that may have moved, so every folder that now carries a
+   * `links.txt` is enabled by name — otherwise the router's `config.json` would
+   * come out empty after the first open. If none is found the owner is told where
+   * to put the file and NOTHING is enabled.
    *
-   * @param {unknown} item
-   * @returns {string}
-   */
-  #sourceNameOf(item) {
-    if (typeof item === 'string') return item.trim();
-    if (isMapping(item) && typeof item.name === 'string') return item.name.trim();
-    return '';
-  }
-
-  /**
-   * Resolves a stored source path: absolute as is, relative against the settings
-   * directory — the same rule `output_file` follows.
-   *
-   * @param {string} target
-   * @returns {string}
-   */
-  #resolveSourcePath(target) {
-    return path.isAbsolute(target) ? target : path.join(this.settingsDir, target);
-  }
-
-  /**
-   * Converts legacy bare-string `sources` entries into explicit objects, in
-   * place, by inspecting the folder under the sources root. Returns the warnings
-   * to show, empty when nothing was converted.
-   *
-   * The folder name is kept as the provider name. A folder holding `links.txt`
-   * becomes a `links` source, one holding `*.conf` a `tunnels` source; a folder
-   * holding BOTH becomes two entries with the same name, because the two kinds
-   * are different things and merging them would lose one of them. A folder that
-   * is missing or holds neither is left as a string, so the reader keeps
-   * reporting it honestly.
-   *
+   * @param {Record<string, unknown>} document
+   * @param {string} root Providers root.
+   * @param {string} settingsDir Directory a relative stored path resolves against.
+   * @param {boolean} enableAllWithLinks
    * @returns {string[]}
    */
-  #migrateSourceEntries() {
-    const raw = this.document.sources;
-    if (!Array.isArray(raw)) return [];
+  #migrateProviders(document, root, settingsDir, enableAllWithLinks) {
     const warnings = [];
-    const converted = [];
-    for (const item of raw) {
-      if (typeof item !== 'string') {
-        converted.push(item);
-        continue;
+    const providers = isMapping(document.providers) ? {...document.providers} : {};
+    let touched = false;
+
+    const rawSources = Array.isArray(document.sources) ? document.sources : null;
+    if (rawSources !== null) {
+      for (const item of rawSources) {
+        let id = '';
+        let stored = null;
+        if (typeof item === 'string') {
+          id = item.trim();
+        } else if (isMapping(item) && typeof item.name === 'string') {
+          id = item.name.trim();
+          if (typeof item.path === 'string') stored = item.path.trim();
+        } else {
+          continue;
+        }
+        if (id.length === 0) continue;
+        if (!isProviderId(id)) {
+          warnings.push(
+            `Предупреждение: источник '${id}' не подходит для имени папки провайдера — пропущен`,
+          );
+          continue;
+        }
+        if (stored !== null && stored.length > 0) {
+          const resolvedStored = path.isAbsolute(stored) ? stored : path.join(settingsDir, stored);
+          const expected = path.join(root, id);
+          const inside =
+            resolvedStored === expected || resolvedStored.startsWith(`${expected}${path.sep}`);
+          if (!inside) {
+            warnings.push(
+              `Предупреждение: источник '${id}' лежал в '${stored}', теперь провайдеры ` +
+                `читаются только из '${root}': перенесите папку в '${expected}'`,
+            );
+          }
+        }
+        providers[id] = {...(isMapping(providers[id]) ? providers[id] : {}), enabled: true};
+        touched = true;
       }
-      const name = item.trim();
-      if (name.length === 0) continue;
-      const dir = path.join(this.resolvedSourcesRoot(), name);
-      const linksPath = path.join(dir, LINKS_FILENAME);
-      let entries = [];
-      try {
-        entries = fs
-          .readdirSync(dir)
-          .filter((entry) => entry.endsWith(TUNNEL_EXTENSION))
-          .sort();
-      } catch {
-        // a missing folder stays a legacy entry: the reader reports it
+      delete document.sources;
+      if (touched) {
+        warnings.push('Предупреждение: поле sources заменено на providers: сохраните изменения');
       }
-      // A directory named `links.txt` is not a links file: it stays a legacy
-      // folder entry, which the reader then diagnoses as unreadable.
-      let hasLinks = false;
-      try {
-        hasLinks = fs.existsSync(linksPath) && fs.statSync(linksPath).isFile();
-      } catch {
-        hasLinks = false;
+    } else if (enableAllWithLinks) {
+      const read = readProviders({}, root);
+      const found = read.providers
+        .filter((provider) => provider.kind === 'links' || provider.kind === 'mixed')
+        .map((provider) => provider.id);
+      if (found.length === 0) {
+        warnings.push(
+          `Предупреждение: не найдено ни одного провайдера со ссылками в '${root}': ` +
+            'положите links.txt в папку провайдера',
+        );
+      } else {
+        for (const id of found) providers[id] = {enabled: true};
+        warnings.push(`Предупреждение: включены найденные провайдеры: ${found.join(', ')}`);
       }
-      if (!hasLinks && entries.length === 0) {
-        converted.push(item);
-        continue;
-      }
-      if (hasLinks) converted.push({kind: 'links', name, path: linksPath});
-      if (entries.length > 0) converted.push({kind: 'tunnels', name, path: dir});
-      const parts = [];
-      if (hasLinks) parts.push('файл ссылок');
-      if (entries.length > 0) parts.push('каталог туннелей');
-      warnings.push(
-        `Источник '${name}' переведён в новый формат (${parts.join(' и ')}): сохраните изменения`,
-      );
     }
-    this.document.sources = converted;
+
+    if (touched || Object.keys(providers).length > 0) document.providers = providers;
     return warnings;
   }
 
@@ -739,9 +728,36 @@ export class ProjectModel {
     return this.path !== null && fs.existsSync(this.path);
   }
 
-  /** Root the provider folders resolve against (`GATEHOUSE_SOURCES` or `<dir>/sources`). */
-  resolvedSourcesRoot() {
-    return resolveSourcesRoot(this.settingsDir);
+  /** Human name of where the providers root came from, for the panel. */
+  get providersRootSource() {
+    if (this.providersDir.length > 0) return 'GATEHOUSE_PROVIDERS';
+    const configured = process.env.GATEHOUSE_PROVIDERS;
+    if (typeof configured === 'string' && configured.length > 0) return 'GATEHOUSE_PROVIDERS';
+    try {
+      if (fs.statSync(path.join(this.settingsDir, 'providers')).isDirectory()) {
+        return 'рядом с webui.json';
+      }
+    } catch {
+      // fall through to the build default
+    }
+    return 'умолчание';
+  }
+
+  /** Root the provider folders resolve against (`GATEHOUSE_PROVIDERS` or its default). */
+  resolvedProvidersRoot() {
+    return this.providersDir.length > 0
+      ? this.providersDir
+      : resolveProvidersRoot(this.settingsDir);
+  }
+
+  /**
+   * Fills the providers root from `GATEHOUSE_PROVIDERS`. Called by the web layer,
+   * which alone may read the environment.
+   *
+   * @param {string} value
+   */
+  setProvidersDir(value) {
+    if (typeof value === 'string' && value.length > 0) this.providersDir = value;
   }
 
   /** Reference: `resolved_output_path`. */
@@ -898,68 +914,82 @@ export class ProjectModel {
   }
 
   /**
-   * Adds one explicit source to `sources`.
+   * Turns a discovered provider on or off. A provider absent from the map is
+   * "found, disabled", so enabling has to CREATE the record and disabling keeps
+   * it — an explicit `false` is a decision, not an absence.
    *
-   * The path is stored exactly as typed and is NOT touched on disk: the tool reads
-   * the owner's data directories, never writes to them. What is checked is that
-   * the origin really is what it claims to be — a readable FILE for `kind:
-   * 'links'`, a DIRECTORY for `kind: 'tunnels'` — because adding a source that
-   * cannot be read only moves the failure to generation time.
-   *
-   * @param {string} name Provider label; unique across all sources.
-   * @param {string} sourcePath Path to the links file or the tunnel directory.
-   * @param {string} kind `links` or `tunnels`.
-   * @returns {Array<Record<string, unknown>>} The new list.
+   * @param {string} id Provider identifier (folder name).
+   * @param {boolean} enabled
+   * @returns {Record<string, unknown>} The stored record.
    */
-  addSource(name, sourcePath, kind) {
-    const cleanName = String(name ?? '').trim();
-    const cleanPath = String(sourcePath ?? '').trim();
-    if (cleanName.length === 0) throw new ConfigError('имя провайдера не может быть пустым');
-    if (cleanPath.length === 0) throw new ConfigError('путь источника не может быть пустым');
-    if (kind !== 'links' && kind !== 'tunnels') {
-      throw new ConfigError(
-        `неизвестный тип источника '${String(kind ?? '')}' (ожидается links|tunnels)`,
-      );
+  setProviderEnabled(id, enabled) {
+    const clean = String(id ?? '').trim();
+    if (!isProviderId(clean)) {
+      throw new ConfigError(`имя провайдера '${clean}' не подходит для идентификатора`);
     }
-    if (this.#rawSources().some((item) => this.#sourceNameOf(item) === cleanName)) {
-      throw new ConfigError(`источник '${cleanName}' уже указан в sources`);
-    }
-
-    const resolved = this.#resolveSourcePath(cleanPath);
-    if (kind === 'links') {
-      if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
-        throw new ConfigError(`файл ссылок не найден или это не файл: ${resolved}`);
-      }
-      try {
-        fs.accessSync(resolved, fs.constants.R_OK);
-      } catch {
-        throw new ConfigError(`файл ссылок недоступен для чтения: ${resolved}`);
-      }
-    } else if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
-      throw new ConfigError(`каталог конфигов не найден или это не каталог: ${resolved}`);
-    }
-
-    this.document.sources = [...this.#rawSources(), {kind, name: cleanName, path: cleanPath}];
+    const providers = this.#ensureProviders();
+    const current = isMapping(providers[clean]) ? providers[clean] : {};
+    providers[clean] = {...current, enabled: enabled === true};
     this.markDirty();
-    return this.document.sources;
+    return providers[clean];
   }
 
   /**
-   * Drops one source from `sources`. The file or directory itself is left alone:
-   * removing an entry means "do not read it", never "delete the owner's data".
+   * Sets (or clears) the human-readable name of a provider. The name is SHOWN
+   * only: it never reaches tags, keys or `config.json`, so changing it cannot move
+   * a byte of the generated config.
    *
-   * @param {string} name
-   * @returns {Array<Record<string, unknown>>} The new list.
+   * @param {string} id
+   * @param {string} label Empty clears the name, so the identifier is shown again.
+   * @returns {Record<string, unknown>} The stored record.
    */
-  removeSource(name) {
-    const clean = String(name ?? '').trim();
-    const raw = this.#rawSources();
-    if (!raw.some((item) => this.#sourceNameOf(item) === clean)) {
-      throw new ConfigError(`источник '${clean}' не указан в sources`);
+  setProviderLabel(id, label) {
+    const clean = String(id ?? '').trim();
+    if (!isProviderId(clean)) {
+      throw new ConfigError(`имя провайдера '${clean}' не подходит для идентификатора`);
     }
-    this.document.sources = raw.filter((item) => this.#sourceNameOf(item) !== clean);
+    const text = String(label ?? '').trim();
+    if (text.length > 64) throw new ConfigError('имя провайдера не длиннее 64 символов');
+    if (/[\u0000-\u001f\u007f]/.test(text)) {
+      throw new ConfigError('имя провайдера не должно содержать управляющих символов');
+    }
+    const providers = this.#ensureProviders();
+    const current = isMapping(providers[clean]) ? providers[clean] : {};
+    if (text.length === 0) {
+      const rest = {...current};
+      delete rest.label;
+      if (Object.keys(rest).length === 0) delete providers[clean];
+      else providers[clean] = rest;
+    } else {
+      providers[clean] = {...current, label: text};
+    }
     this.markDirty();
-    return this.document.sources;
+    return this.getProvider(clean) ?? {};
+  }
+
+  /**
+   * Forgets a record whose folder is gone: the provider disappears from the map
+   * and from the «Не прочиталось» list. Only a record with NO folder may be
+   * forgotten — a folder that is there is removed from disk, not from the file.
+   *
+   * @param {string} id
+   * @returns {boolean}
+   */
+  forgetProvider(id) {
+    const clean = String(id ?? '').trim();
+    const providers = this.#ensureProviders();
+    if (!Object.hasOwn(providers, clean)) {
+      throw new ConfigError(`провайдер '${clean}' не указан в providers`);
+    }
+    if (this.providersInfo().providers.some((provider) => provider.id === clean)) {
+      throw new ConfigError(
+        `провайдер '${clean}' найден на диске: «Забыть» убирает только запись о пропавшей папке`,
+      );
+    }
+    delete providers[clean];
+    if (Object.keys(providers).length === 0) delete this.document.providers;
+    this.markDirty();
+    return true;
   }
 
   /**
@@ -1032,7 +1062,7 @@ export class ProjectModel {
    */
   excludePrefixOptions() {
     const counts = new Map();
-    for (const tag of this.sourcesInfo().tags) {
+    for (const tag of this.providersInfo().tags) {
       const prefix = tagPrefix(tag);
       if (prefix.length === 0) continue;
       counts.set(prefix, (counts.get(prefix) ?? 0) + 1);
@@ -1392,36 +1422,37 @@ export class ProjectModel {
   // ------------------------------------------------------------------
 
   /**
-   * Reads every provider of the document and merges the links.
+   * Discovers every provider folder and merges the links of the ENABLED ones.
    *
-   * The error is returned, not thrown: a missing or empty folder is a normal
-   * state that the tree marks with an honest per-provider diagnosis. `tags` are
-   * the merged outbound tags, carrying a provider label only on a name collision
-   * between providers — which is what keeps a single-source project's
-   * `config.json` byte-identical.
+   * The error is not thrown but returned: an absent root, an unreadable folder and
+   * a record whose folder is gone are normal states the panel and the tree show
+   * with an honest reason. `providers` carries the folders that were READ (a links
+   * file and/or tunnel configs); `unread` carries everything that could not be
+   * read, with the reason. `tags` are the merged outbound tags of the enabled
+   * providers, carrying a provider identifier only on a name collision — which is
+   * what keeps a one-provider project's `config.json` byte-identical.
    *
-   * @returns {{sources: string[], root: string, providers: Array<Record<string, unknown>>,
+   * @returns {{root: string, rootSource: string,
+   *   rootState: {state: string, owner: string|null, mode: string|null,
+   *   message: string|null}, providers: Array<Record<string, unknown>>,
+   *   unread: Array<Record<string, unknown>>,
    *   outbounds: Array<Record<string, unknown>>, tags: string[], error: string|null,
    *   warnings: string[]}}
    */
-  sourcesInfo() {
+  providersInfo() {
     const warnings = [];
-    const root = this.resolvedSourcesRoot();
-    const read = readSources(
-      this.document.sources,
-      {root, baseDir: this.settingsDir},
-      warnings,
-    );
-    const broken = read.providers.filter((provider) => provider.error !== null);
+    const root = this.resolvedProvidersRoot();
+    const read = readProviders(this.document.providers, root, warnings);
 
     return {
-      sources: read.providers.map((provider) => provider.name),
-      specs: this.sources(),
       root,
+      rootSource: this.providersRootSource,
+      rootState: read.rootState,
       providers: read.providers,
+      unread: read.unread,
       outbounds: read.outbounds,
       tags: read.tags,
-      error: broken.length > 0 ? broken.map((provider) => provider.error).join('\n') : null,
+      error: read.rootState.message,
       warnings,
     };
   }
@@ -1448,9 +1479,9 @@ export class ProjectModel {
     if (provider.length === 0 || file.length === 0) {
       throw new ConfigError('не указан источник или файл туннеля');
     }
-    const dir = this.tunnelSourceDir(provider);
+    const dir = this.providerDir(provider);
     if (dir === null) {
-      throw new ConfigError(`источник туннелей '${provider}' не указан в поле sources`);
+      throw new ConfigError(`провайдер '${provider}' не найден среди папок провайдеров`);
     }
     if (path.extname(file) !== '.conf') {
       throw new ConfigError(`'${file}' не похож на конфиг туннеля (.conf)`);
@@ -1589,7 +1620,7 @@ export class ProjectModel {
    */
   providerTunnelRows(providerName) {
     const provider = String(providerName ?? '').trim();
-    const folder = this.sourcesInfo().providers.find((item) => item.name === provider);
+    const folder = this.providersInfo().providers.find((item) => item.id === provider);
     if (folder === undefined) return [];
 
     return (folder.entries ?? []).map((file) => {
@@ -1863,7 +1894,7 @@ export class ProjectModel {
 
   /** Reference: `load_server_tags`, reduced to what most callers need. */
   loadServerTags() {
-    const info = this.sourcesInfo();
+    const info = this.providersInfo();
     return {tags: info.tags, error: info.error};
   }
 
@@ -1884,13 +1915,14 @@ export class ProjectModel {
    * @returns {Record<string, unknown>}
    */
   treeSpec(options = {}) {
-    const info = this.sourcesInfo();
+    const info = this.providersInfo();
     return buildTree({
       document: this.document,
       allTags: info.tags,
       title: this.displayName,
-      sourcesRoot: info.root,
+      providersRoot: info.root,
       providers: info.providers,
+      unread: info.unread,
       outputFile: this.outputFile,
       // Runtime tunnel states, handed in by the web layer. Absent means "not
       // asked", and then no proxy gets a tunnel mark.
@@ -1918,7 +1950,10 @@ export class ProjectModel {
       throw new ConfigError('сначала сохраните webui.json: генерация запускается по файлу');
     }
     const wasDirty = this.dirty;
-    const result = generateConfigFile(this.path, options);
+    const result = generateConfigFile(this.path, {
+      ...options,
+      providersRoot: this.resolvedProvidersRoot(),
+    });
     return {
       ...result,
       summary: formatStats(result.outputFile, result.stats, result.warnings),

@@ -18,7 +18,7 @@ import {ALL_TAGS, FI_TAG, FIXTURES_DIR, NL_TAG, RU_TAG} from './helpers.mjs';
 import {validateProxies} from '../src/core/validate.mjs';
 
 const FIXTURE_SETTINGS = path.join(FIXTURES_DIR, 'settings.json');
-const FIXTURE_LINKS = path.join(FIXTURES_DIR, 'sources', 'vpnd', 'links.txt');
+const FIXTURE_LINKS = path.join(FIXTURES_DIR, 'providers', 'vpnd', 'links.txt');
 const GOLDEN_CONFIG = path.join(FIXTURES_DIR, 'golden', 'config.json');
 
 /** Reference: the `_proxy(**overrides)` helper of the Python test file. */

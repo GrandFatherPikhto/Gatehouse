@@ -17,7 +17,7 @@ const USAGE = `Использование: node tools/generate.mjs [опции]
 Опции:
   --settings PATH             файл настроек (по умолчанию ${DEFAULT_SETTINGS_FILE})
   --output PATH               куда писать config.json (переопределяет output_file)
-  --links PATH                один файл VLESS-ссылок вместо источников (sources)
+  --links PATH                один файл VLESS-ссылок вместо найденных провайдеров
   --listen-ip IP              адрес прослушивания (переопределяет listen_ip)
   --exclude-from-auto PREFIX  префиксы, выкидываемые из auto-select; можно
                               перечислить несколько значений

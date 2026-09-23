@@ -479,14 +479,14 @@ describe('saving and generating from the UI', () => {
   });
 
   test('generation reports the core error without a stack trace', async () => {
-    const editor = await startEditor({overrides: {sources: ['nowhere']}});
+    const editor = await startEditor({overrides: {providers: {nowhere: {enabled: true}}}});
     try {
       await post(editor.base, '/save', {panel: 'singbox'});
 
       const response = await post(editor.base, '/generate', {});
 
       assert.equal(response.status, 200);
-      assert.match(await response.text(), /источник/);
+      assert.match(await response.text(), /включённого провайдера со ссылками/);
     } finally {
       await editor.close();
     }

@@ -62,6 +62,21 @@ sudoedit /etc/gatehouse/env          # вписать токен: openssl rand -
 `GATEHOUSE_SETTINGS`. Права на него редактор выставляет сам (0600), но
 каталог `/etc/gatehouse` должен принадлежать `denis`.
 
+Провайдеры (списки серверов и конфиги туннелей) живут **папками** под
+`GATEHOUSE_PROVIDERS`, по умолчанию `/var/lib/gatehouse/providers`. Каждая
+подпапка — провайдер: `links.txt` даёт серверы Sing-Box, `*.conf` — конфиги
+Amnezia. Каталог создайте до первого запуска и положите в него папку `vpnd`:
+
+```bash
+sudo install -d -m 0700 -o denis -g denis /var/lib/gatehouse/providers/vpnd
+# затем скопируйте туда links.txt владельца
+sudo -u denis cp links.txt /var/lib/gatehouse/providers/vpnd/links.txt
+```
+
+При обнаружении каждый провайдер **выключен**: включите его галочкой в панели
+«Провайдеры» и сохраните. Новый файл на диске не меняет `config.json` сам по
+себе.
+
 **Токен обязателен при привязке к LAN.** Если `GATEHOUSE_HOST` не адрес
 обратной петли, а `GATEHOUSE_TOKEN` пуст, сервер **откажется стартовать** —
 это не предупреждение в логе, а отказ. Проверить:
@@ -129,6 +144,13 @@ sudo systemctl restart polkit
 sudo systemctl daemon-reload
 sudo systemctl enable --now gatehouse
 ```
+
+В этом варианте `gatehouse-tunnel@` **не настроен**: правило polkit разрешает
+ровно `restart sing-box`, поэтому туннели показываются без кнопок запуска и
+остановки. Каталог туннелей и `ReadWritePaths` при этом такие же, как в
+`gatehouse.service` (`/etc/gatehouse/tunnels`, `/etc/sing-box /etc/gatehouse`),
+чтобы оба юнита и шаблон смотрели на один файл. Набор правил ради туннелей здесь
+намеренно не расширяется.
 
 Проверка правила полномочий (от имени `denis`):
 

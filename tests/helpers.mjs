@@ -52,13 +52,13 @@ export const DEFAULT_LINKS = `${[
 ].join('\n')}\n`;
 
 /**
- * Minimal flat settings body (version 2, sources): 3 servers, 2 proxies (one
+ * Minimal flat settings body (version 2, providers): 3 servers, 2 proxies (one
  * with its own pool). Reference: `DEFAULT_SETTINGS` in conftest.py, without the
- * profile envelope and with the single links file replaced by one provider.
+ * profile envelope. The single links file is one ENABLED provider folder.
  */
 export const DEFAULT_SETTINGS_BODY = {
   listen_ip: '127.0.0.1',
-  sources: [LINKS_PROVIDER],
+  providers: {[LINKS_PROVIDER]: {enabled: true}},
   output_file: 'config.json',
   exclude_from_auto: ['🇷🇺'],
   urltest: {url: 'https://gstatic.com', interval: '3m', tolerance: 50},
@@ -84,14 +84,27 @@ export function makeTempDir(prefix = 'singbox-test-') {
 }
 
 /**
- * Writes the links file of the default provider: `<dir>/sources/vpnd/links.txt`.
+ * Root the provider folders of one temporary project resolve against. A test
+ * points the model here (`providersDir`) or the environment here
+ * (`GATEHOUSE_PROVIDERS`); the router uses `/var/lib/gatehouse/providers`.
+ *
+ * @param {string} dir
+ * @returns {string}
+ */
+export function providersDir(dir) {
+  return path.join(dir, 'providers');
+}
+
+/**
+ * Writes the links file of the default provider:
+ * `<dir>/providers/vpnd/links.txt`.
  *
  * @param {string} dir
  * @param {string|Buffer} [content]
  * @returns {string} Path of the written file.
  */
 export function writeLinksFile(dir, content = DEFAULT_LINKS) {
-  const providerDir = path.join(dir, 'sources', LINKS_PROVIDER);
+  const providerDir = path.join(providersDir(dir), LINKS_PROVIDER);
   fs.mkdirSync(providerDir, {recursive: true});
   const file = path.join(providerDir, 'links.txt');
   fs.writeFileSync(file, content);
@@ -128,13 +141,13 @@ export function writeSettings(dir, overrides = {}, extra = {}) {
  *
  * @param {Record<string, unknown>} [overrides]
  * @param {{defaults?: Record<string, unknown>, links?: string}} [extra]
- * @returns {{dir: string, settingsFile: string, linksFile: string}}
+ * @returns {{dir: string, settingsFile: string, linksFile: string, providersDir: string}}
  */
 export function makeProject(overrides = {}, extra = {}) {
   const dir = makeTempDir();
   const linksFile = writeLinksFile(dir, extra.links);
   const settingsFile = writeSettings(dir, overrides, extra);
-  return {dir, settingsFile, linksFile};
+  return {dir, settingsFile, linksFile, providersDir: providersDir(dir)};
 }
 
 /** Directory of the fake binaries the system-layer tests run instead of the real ones. */

@@ -44,6 +44,8 @@ UMask=0027
 
 Environment=GATEHOUSE_SETTINGS=/etc/gatehouse/webui.json
 Environment=GATEHOUSE_STATE_DIR=/var/lib/gatehouse
+# Provider folders live under /var/lib (personal lists), not under /etc.
+Environment=GATEHOUSE_PROVIDERS=/var/lib/gatehouse/providers
 Environment=GATEHOUSE_HOST=10.95.2.1
 Environment=GATEHOUSE_PORT=9090
 Environment=GATEHOUSE_CONFIG=/etc/sing-box/config.json
@@ -51,9 +53,14 @@ Environment=GATEHOUSE_SINGBOX=/usr/local/bin/sing-box
 Environment=GATEHOUSE_SYSTEMCTL=/usr/bin/systemctl
 Environment=GATEHOUSE_JOURNALCTL=/usr/bin/journalctl
 Environment=GATEHOUSE_UNIT=sing-box
-Environment=GATEHOUSE_AMNEZIA_DIR=/etc/amnezia/amneziawg
-# С polkit правила sudoers не нужны; этот путь просто не существует, поэтому
-# туннели показываются без кнопок, пока в polkit-правило не добавлены их юниты.
+# Тот же каталог, что в `gatehouse.service` и в шаблоне `gatehouse-tunnel@`:
+# один путь для записи, удаления и предохранителя. Конфиги ЛИЧНЫХ туннелей
+# amnezia GateHouse не видит и не трогает — это разграничение держится и в
+# polkit-варианте.
+Environment=GATEHOUSE_AMNEZIA_DIR=/etc/gatehouse/tunnels
+# В этом варианте `gatehouse-tunnel@` не настроен: правило polkit ниже разрешает
+# только `restart sing-box`, поэтому туннели показываются без кнопок запуска и
+# остановки. Это осознанно — набор правил ради туннелей здесь не расширяется.
 Environment=GATEHOUSE_SUDOERS=/etc/sudoers.d/gatehouse
 # Никакого sudo: рестарт идёт через D-Bus и правило polkit.
 Environment=GATEHOUSE_SUDO=none
@@ -69,11 +76,14 @@ RestartSec=5
 # принадлежит denis, но сервис всё равно не может переписать собственный код —
 # а rsync владельца, живущий в обычном пространстве, пишет туда свободно.
 # Каталоги из StateDirectory и ConfigurationDirectory systemd открывает на запись
-# сам; /etc/sing-box и /etc/amnezia/amneziawg приходится разрешать явно.
+# сам; /etc/sing-box и /etc/gatehouse (каталог нормализованных конфигов туннелей)
+# приходится разрешать явно. Согласие с `gatehouse.service` обязательно, иначе
+# «проверили один файл, запустили другой»: оба юнита и шаблон `gatehouse-tunnel@`
+# смотрят на один и тот же каталог.
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/etc/sing-box /etc/amnezia/amneziawg
+ReadWritePaths=/etc/sing-box /etc/gatehouse
 # Здесь setuid не нужен — рестарт идёт по D-Bus, поэтому доступно и это.
 NoNewPrivileges=yes
 

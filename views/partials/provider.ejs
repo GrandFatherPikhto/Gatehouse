@@ -1,21 +1,42 @@
-<%# One source folder: what it holds. A links folder shows the servers it hands
-    out; a tunnels folder shows its .conf files, each opening the normalisation
-    preview. The folder is only read — the tool never writes to sources/. %>
+<%# One provider folder: what it holds, and its two editable settings — the
+    human-readable name and the «включён» flag. The folder is only read: the tool
+    writes nothing into the providers root. A disabled provider shows its content
+    but offers no «включить» on its `.conf` rows. %>
 <h2><%= panel.title %></h2>
+
+<form id="panel-form" class="form" hx-post="/provider" hx-target="#panel" hx-swap="innerHTML" method="post" action="/provider">
+  <input type="hidden" name="id" value="<%= panel.providerId %>">
+  <fieldset>
+    <legend>Провайдер</legend>
+    <p class="hint">
+      Идентификатор — имя папки <code><%= panel.providerId %></code>. Он идёт в теги
+      серверов, в <code>tunnels[].provider</code> и в <code>config.json</code> и не
+      меняется. Человекочитаемое имя показывается только в редакторе.
+    </p>
+    <label for="label">имя</label>
+    <input type="text" id="label" name="label" value="<%= panel.provider.label ?? '' %>"
+           maxlength="64" size="40" placeholder="<%= panel.providerId %>">
+    <label class="check">
+      <input type="checkbox" name="enabled" value="1" <%= panel.enabled ? 'checked' : '' %>>
+      включён (серверы попадают в <code>config.json</code>)
+    </label>
+  </fieldset>
+</form>
 
 <p>
   Тип: <strong><%= panel.kindLabel %></strong><br>
-  <%= panel.provider.type === 'file' ? 'Файл' : 'Каталог' %>:
-  <code><%= panel.provider.path %></code><br>
-  Записей: <%= panel.provider.count %> · изменён: <%= panel.provider.mtime ?? '—' %>
+  Папка: <code><%= panel.provider.path %></code><br>
+  Записей: <%= panel.provider.count %>
 </p>
-
-<% if (panel.provider.error) { %>
-  <p class="error"><%= panel.provider.error %></p>
-<% } %>
 
 <% if (panel.provider.tags.length > 0) { %>
   <h3>Серверы (<%= panel.provider.tags.length %>)</h3>
+  <% if (!panel.enabled) { %>
+    <p class="hint">
+      Провайдер выключен: в <code>config.json</code> его серверов нет, пока не
+      поставите галочку «включён».
+    </p>
+  <% } %>
   <ul class="tags">
     <% for (const tag of panel.provider.tags) { %>
       <li><%= tag %></li>
@@ -25,66 +46,67 @@
 
 <% if (panel.provider.entries.length > 0) { %>
   <h3>Конфиги туннелей (<%= panel.provider.entries.length %>)</h3>
-  <p class="hint">
-    Галочка «включить» нормализует конфиг и кладёт
-    <code><имя файла>.conf</code> в каталог туннелей GateHouse
-    (<code>/etc/gatehouse/tunnels</code>); снятие галочки останавливает туннель и
-    убирает файл. Имя файла — это <code><имя файла>.conf</code> и юнит
-    <code>gatehouse-tunnel@<имя файла></code>, поэтому не длиннее 15 символов.
-    В <code>config.json</code> конфиги туннелей сами по себе не попадают.
-  </p>
-  <table class="list">
-    <thead>
-      <tr><th>файл</th><th>включение и имена</th></tr>
-    </thead>
-    <tbody>
-      <% for (const row of panel.tunnelRows) { %>
-        <% const key = `tunnel:${panel.provider.name}/${row.file}`; %>
-        <tr class="<%= row.marked && !row.applied ? 'stale' : '' %>">
-          <td>
-            <a href="/panel/<%= encodeURIComponent(key) %>"
-               hx-get="/panel/<%= encodeURIComponent(key) %>"
-               hx-target="#panel"
-               hx-swap="innerHTML"
-               hx-push-url="true"><%= row.file %></a>
-          </td>
-          <td>
-            <form class="inline" hx-post="/tunnels" hx-target="#panel" hx-swap="innerHTML" method="post" action="/tunnels">
-              <input type="hidden" name="provider" value="<%= panel.provider.name %>">
-              <input type="hidden" name="file" value="<%= row.file %>">
-              <label class="check">
-                <input type="checkbox" name="needed" value="1" <%= row.marked ? 'checked' : '' %>
-                       hx-post="/tunnels" hx-trigger="change"
-                       hx-target="#panel" hx-swap="innerHTML" hx-include="closest form">
-                включить
-              </label>
-              <label>имя туннеля
-                <input type="text" name="name" value="<%= row.name %>" maxlength="255" size="30">
-              </label>
-              <label>имя файла
-                <input type="text" name="interface" value="<%= row.interface %>" maxlength="15" size="14">
-              </label>
-              <button type="submit">Применить</button>
-              <% if (row.marked) { %>
-                <br><span class="hint"><%= row.applied ? 'файл на месте' : 'файла пока нет' %></span>
-              <% } %>
-            </form>
-          </td>
-        </tr>
-      <% } %>
-    </tbody>
-  </table>
+  <% if (!panel.enabled) { %>
+    <p class="hint">
+      Провайдер выключен: включите его, чтобы отметить конфиги туннелей.
+    </p>
+  <% } else { %>
+    <p class="hint">
+      Галочка «включить» нормализует конфиг и кладёт
+      <code><имя файла>.conf</code> в каталог туннелей GateHouse; снятие
+      галочки останавливает туннель и убирает файл. Имя файла — юнит
+      <code>gatehouse-tunnel@<имя файла></code>, поэтому не длиннее 15 символов.
+      В <code>config.json</code> конфиги туннелей сами по себе не попадают.
+    </p>
+    <table class="list">
+      <thead>
+        <tr><th>файл</th><th>включение и имена</th></tr>
+      </thead>
+      <tbody>
+        <% for (const row of panel.tunnelRows) { %>
+          <% const key = `tunnel:${panel.providerId}/${row.file}`; %>
+          <tr class="<%= row.marked && !row.applied ? 'stale' : '' %>">
+            <td>
+              <a href="/panel/<%= encodeURIComponent(key) %>"
+                 hx-get="/panel/<%= encodeURIComponent(key) %>"
+                 hx-target="#panel"
+                 hx-swap="innerHTML"
+                 hx-push-url="true"><%= row.file %></a>
+            </td>
+            <td>
+              <form class="inline" hx-post="/tunnels" hx-target="#panel" hx-swap="innerHTML" method="post" action="/tunnels">
+                <input type="hidden" name="provider" value="<%= panel.providerId %>">
+                <input type="hidden" name="file" value="<%= row.file %>">
+                <label class="check">
+                  <input type="checkbox" name="needed" value="1" <%= row.marked ? 'checked' : '' %>
+                         hx-post="/tunnels" hx-trigger="change"
+                         hx-target="#panel" hx-swap="innerHTML" hx-include="closest form">
+                  включить
+                </label>
+                <label>имя туннеля
+                  <input type="text" name="name" value="<%= row.name %>" maxlength="255" size="30">
+                </label>
+                <label>имя файла
+                  <input type="text" name="interface" value="<%= row.interface %>" maxlength="15" size="14">
+                </label>
+                <button type="submit">Применить</button>
+                <% if (row.marked) { %>
+                  <br><span class="hint"><%= row.applied ? 'файл на месте' : 'файла пока нет' %></span>
+                <% } %>
+              </form>
+            </td>
+          </tr>
+        <% } %>
+      </tbody>
+    </table>
+  <% } %>
 <% } %>
 
-<% if (
-     !panel.provider.error &&
-     panel.provider.tags.length === 0 &&
-     panel.provider.entries.length === 0
-   ) { %>
-  <p class="hint">Источник пуст: ни ссылок, ни конфигов туннелей.</p>
+<% if (panel.provider.tags.length === 0 && panel.provider.entries.length === 0) { %>
+  <p class="hint">Провайдер пуст: ни ссылок, ни конфигов туннелей.</p>
 <% } %>
 
 <p>
   <a href="/panel/providers" hx-get="/panel/providers" hx-target="#panel"
-     hx-swap="innerHTML" hx-push-url="true">← ко всем источникам</a>
+     hx-swap="innerHTML" hx-push-url="true">← ко всем провайдерам</a>
 </p>

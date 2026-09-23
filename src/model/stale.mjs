@@ -243,12 +243,14 @@ function providerKindLabel(kind) {
  * The profile level is gone, so the tree is flat: one `general` node holds every
  * setting that used to be split between the active profile and `defaults`.
  *
- * @param {{document: unknown, allTags?: string[], title?: string, sourcesRoot?: string,
- *   providers?: Array<Record<string, unknown>>, outputFile?: string,
+ * @param {{document: unknown, allTags?: string[], title?: string,
+ *   providersRoot?: string, providers?: Array<Record<string, unknown>>,
+ *   unread?: Array<Record<string, unknown>>, outputFile?: string,
  *   tunnelStates?: Record<string, {active?: boolean, enabled?: boolean,
  *   applied?: boolean}>}} options `tunnelStates` is the runtime state of the
  *   tunnels, keyed by interface; a proxy on a tunnel that is not up gets a mark
- *   that names the CONSEQUENCE, not the fact.
+ *   that names the CONSEQUENCE, not the fact. `providers` are the folders that
+ *   were READ, `unread` everything that could not be.
  * @returns {Record<string, unknown>} Root node.
  */
 export function treeSpec(options = {}) {
@@ -256,6 +258,7 @@ export function treeSpec(options = {}) {
   const allTags = asList(options.allTags).filter((tag) => typeof tag === 'string');
   const stale = staleMap(document, allTags);
   const providers = Array.isArray(options.providers) ? options.providers : [];
+  const unread = Array.isArray(options.unread) ? options.unread : [];
   const tunnelStates = isMapping(options.tunnelStates) ? options.tunnelStates : {};
 
   const proxyNodes = [];
@@ -312,29 +315,41 @@ export function treeSpec(options = {}) {
     );
   }
 
-  // Every provider folder is a node of its own, with the honest diagnosis in it:
-  // the reason a folder yielded nothing (a path, a permission, an empty folder)
-  // belongs where the owner looks, not only in the panel. Tunnels are listed
-  // here and never become outbounds.
+  // Every provider folder is a node of its own, with the honest diagnosis in it.
+  // A disabled provider says so — the whole point of the flag is that the owner
+  // notices at a glance which folders do NOT feed `config.json`. Unreadable
+  // entries are not nodes (many have no folder to open): they are counted in the
+  // mark of the «Провайдеры» node and listed in the panel.
   const providerNodes = providers.map((provider) => {
-    const mark = providerDiagnosis(provider);
-    const label = `${String(provider.name)} (${providerKindLabel(provider.kind)}, ${provider.count})`;
-    return node(`provider:${String(provider.name)}`, mark === '' ? label : `${label}  ${mark}`, 'provider', {
-      stale: mark !== '',
-      detail: String(provider.name),
+    const name =
+      typeof provider.label === 'string' && provider.label.length > 0
+        ? provider.label
+        : String(provider.id);
+    const diagnosis = providerDiagnosis(provider);
+    const marks = [];
+    if (provider.enabled === false) marks.push('[выключен]');
+    if (diagnosis !== '') marks.push(diagnosis);
+    const mark = marks.join('  ');
+    const label = `${name} (${providerKindLabel(provider.kind)}, ${provider.count})`;
+    return node(`provider:${String(provider.id)}`, mark === '' ? label : `${label}  ${mark}`, 'provider', {
+      stale: diagnosis !== '',
+      detail: String(provider.id),
       mark,
     });
   });
 
-  const noSources = providers.length === 0;
+  const noProviders = providers.length === 0;
   const providersTitle = `Провайдеры (${providers.length})`;
-  const providersMark = noSources ? '[!] источники не заданы' : '';
+  const rootMarks = [];
+  if (noProviders) rootMarks.push('[!] провайдеры не найдены');
+  if (unread.length > 0) rootMarks.push(`[!] не прочиталось: ${unread.length}`);
+  const providersMark = rootMarks.join('  ');
 
   return node('root', options.title ?? 'webui.json', 'root', {
     children: [
       node('providers', providersTitle, 'providers', {
         stale: providersMark !== '',
-        detail: String(options.sourcesRoot ?? ''),
+        detail: String(options.providersRoot ?? ''),
         mark: providersMark,
         children: providerNodes,
       }),
@@ -350,7 +365,7 @@ export function treeSpec(options = {}) {
         ],
       }),
       node('proxies', `Прокси (${proxyNodes.length})`, 'proxies', {children: proxyNodes}),
-      node('routes', `Маршруты (${routeNodes.length})`, 'routes', {children: routeNodes}),
+      node('routes', `Маршруты Sing-Box (${routeNodes.length})`, 'routes', {children: routeNodes}),
       // The host layer. It edits nothing, so the node carries no stale mark. Like
       // «Настройки» it is a GROUP without a page of its own, and the two former
       // tabs are its CHILDREN now, so the tree draws them as links. The watchdog

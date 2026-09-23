@@ -1,13 +1,11 @@
 {
   "version": 2,
   "listen_ip": "127.0.0.1",
-  "sources": [
-    {
-      "kind": "links",
-      "name": "vpnd",
-      "path": "sources/vpnd/links.txt"
+  "providers": {
+    "vpnd": {
+      "enabled": true
     }
-  ],
+  },
   "output_file": "config.json",
   "exclude_from_auto": [
     "🇷🇺"

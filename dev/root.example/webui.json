@@ -2,13 +2,11 @@
   "version": 2,
   "note": "Anonymised sample of the dev sandbox model.",
   "listen_ip": "127.0.0.1",
-  "sources": [
-    {
-      "kind": "links",
-      "name": "vpnd",
-      "path": "sources/vpnd/links.txt"
+  "providers": {
+    "vpnd": {
+      "enabled": true
     }
-  ],
+  },
   "output_file": "etc/sing-box/config.json",
   "exclude_from_auto": [
     "🇷🇺"

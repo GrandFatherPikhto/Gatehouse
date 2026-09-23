@@ -43,12 +43,12 @@ const GRAZ_MARK = {
 async function startEditor() {
   const dir = makeTempDir();
   writeLinksFile(dir);
-  const tunnelDir = path.join(dir, 'sources', 'hidemyname');
+  const tunnelDir = path.join(dir, 'providers', 'hidemyname');
   fs.mkdirSync(tunnelDir, {recursive: true});
   fs.copyFileSync(PROVIDER_CONF, path.join(tunnelDir, 'AustriaGrazS4.conf'));
 
   const settingsFile = writeSettings(dir, {
-    sources: ['vpnd', 'hidemyname'],
+    providers: {vpnd: {enabled: true}, hidemyname: {enabled: true}},
     proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
   });
   const sudoers = writeSudoers(path.join(dir, 'sudoers-gatehouse'), ['hmn-graz4']);

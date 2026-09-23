@@ -188,12 +188,12 @@ describe('a tunnel as a proxy (part 3)', () => {
 async function startEditor(options = {}) {
   const dir = makeTempDir();
   writeLinksFile(dir);
-  const tunnelDir = path.join(dir, 'sources', 'hidemyname');
+  const tunnelDir = path.join(dir, 'providers', 'hidemyname');
   fs.mkdirSync(tunnelDir, {recursive: true});
   fs.copyFileSync(PROVIDER_CONF, path.join(tunnelDir, 'AustriaGrazS4.conf'));
 
   const settingsFile = writeSettings(dir, {
-    sources: ['vpnd', 'hidemyname'],
+    providers: {vpnd: {enabled: true}, hidemyname: {enabled: true}},
     proxies:
       options.withProxy === false
         ? [{tag: 'main-socks', type: 'socks', port: 54321}]

@@ -22,7 +22,7 @@ import Ajv from 'ajv';
 
 import {buildConfig} from './build.mjs';
 import {ConfigError, DEFAULT_SETTINGS_FILE, isMapping} from './errors.mjs';
-import {readSources, resolveSourcesRoot} from './sources.mjs';
+import {readProviders, resolveProvidersRoot} from './sources.mjs';
 import {parseLinks} from './vless.mjs';
 
 const SCHEMA_URL = new URL('../schemas/webui.schema.json', import.meta.url);
@@ -50,12 +50,22 @@ export const LEGACY_KEYS = Object.freeze(['profiles', 'defaults', 'active', 'lin
  *   * `amnezia_dir` was a per-document tunnel directory. It is gone because the
  *     tunnel directory became a single constant of the build: the template unit
  *     reads a fixed path, so a document value could aim the start-up fuse at one
- *     file and the unit at another.
+ *     file and the unit at another;
+ *   * `sources` was the hand-written list of provider origins. Providers are now
+ *     DISCOVERED by folder under `GATEHOUSE_PROVIDERS`. The editor migrates the
+ *     field into `providers` on open (see `ProjectModel#migrateSourcesToProviders`);
+ *     this entry is the safety net for the CLI, which must not half-read a
+ *     document the schema no longer knows.
  *
  * The file itself is not rewritten here: the keys disappear on the next ordinary
  * save.
  */
-export const REMOVED_KEYS = Object.freeze(['watchdog', 'clash_api', 'amnezia_dir']);
+export const REMOVED_KEYS = Object.freeze([
+  'watchdog',
+  'clash_api',
+  'amnezia_dir',
+  'sources',
+]);
 
 /** Keys of a proxy that the Watchdog wrote, dropped with the rest. */
 export const REMOVED_PROXY_KEYS = Object.freeze(['watch', 'watch_url']);
@@ -116,7 +126,7 @@ export function dropRemovedSettings(data) {
  */
 export function removedSettingsMessage(dropped) {
   return (
-    `убраны устаревшие поля Сторожа: ${dropped.join(', ')}; ` +
+    `убраны устаревшие поля: ${dropped.join(', ')}; ` +
     'сохраните, чтобы они исчезли из файла'
   );
 }
@@ -132,7 +142,8 @@ export function validateSettings(data, source = DEFAULT_SETTINGS_FILE) {
     throw new ConfigError(
       `${source}: это webui.json старого формата (profiles/defaults или поле links_file). ` +
         'Откройте файл один раз в редакторе GateHouse: он развернёт единственный профиль, ' +
-        'заменит links_file на sources, поднимет version до 2 и сохранит снимок. ' +
+        'отбросит links_file, включит найденные провайдеры со ссылками, поднимет version ' +
+        'до 2 и сохранит снимок. ' +
         'Генератор по такому файлу не работает, чтобы не мигрировать его наполовину.',
     );
   }
@@ -270,7 +281,10 @@ export function writeJson(filePath, config) {
  * Reference: `generate_config_file` — same override order, same error cases.
  *
  * @param {string} settingsPath
- * @param {{output?: string, links?: string, listenIp?: string, excludeFromAuto?: unknown[], warnings?: string[], runningTunnels?: Set<string>}} [options]
+ * @param {{output?: string, links?: string, listenIp?: string, excludeFromAuto?: unknown[], warnings?: string[], runningTunnels?: Set<string>, providersRoot?: string}} [options]
+ *   `providersRoot` overrides the `GATEHOUSE_PROVIDERS` root the reader would
+ *   otherwise take from the environment; the editor passes the root it resolved
+ *   for the panel, so both look at the same folders.
  * @returns {{outputFile: string, stats: Record<string, unknown>, warnings: string[], config: Record<string, unknown>}}
  */
 export function generateConfigFile(settingsPath, options = {}) {
@@ -296,7 +310,7 @@ export function generateConfigFile(settingsPath, options = {}) {
       ? settings
       : {...settings, exclude_from_auto: override};
 
-  const outbounds = readOutbounds(settings, settingsDir, options.links, warnings);
+  const outbounds = readOutbounds(settings, settingsDir, options.links, warnings, options.providersRoot);
   // `runningTunnels` is the set of tunnel interfaces the caller found up in
   // systemd. It only feeds the §5.4 warning about a proxy on a stopped tunnel;
   // `undefined` means "not asked", which adds no warning.
@@ -313,27 +327,47 @@ export function generateConfigFile(settingsPath, options = {}) {
  *
  * `linksOverride` is the CLI `--links` flag: a single file, read exactly as the
  * version-2 code did, so a script that pins one list keeps working. Otherwise the
- * sources of the document are read: an explicit `path` resolves against the
- * settings directory, a legacy folder entry against the sources root.
+ * DISCOVERED providers are read and only the ENABLED ones contribute their
+ * servers; a provider that was never ticked is found and disabled, so a new folder
+ * on disk cannot move `config.json` by itself.
+ *
+ * When nothing enabled produced a server the generation REFUSES and names why —
+ * the disabled ones, the unreadable ones, an absent root. It must not fall back
+ * to `auto-select` or `direct`: a proxy whose servers vanished has to break the
+ * generation, not silently send traffic somewhere else.
  *
  * @param {Record<string, unknown>} settings
  * @param {string} settingsDir
  * @param {string|undefined} linksOverride
  * @param {string[]} warnings
+ * @param {string|undefined} providersRoot
  * @returns {Array<Record<string, unknown>>}
  */
-function readOutbounds(settings, settingsDir, linksOverride, warnings) {
+function readOutbounds(settings, settingsDir, linksOverride, warnings, providersRoot) {
   if (typeof linksOverride === 'string' && linksOverride.length > 0) {
     return parseLinks(resolvePath(settingsDir, linksOverride), warnings);
   }
 
-  const root = resolveSourcesRoot(settingsDir);
-  const read = readSources(settings.sources, {root, baseDir: settingsDir}, warnings);
+  const root =
+    typeof providersRoot === 'string' && providersRoot.length > 0
+      ? providersRoot
+      : resolveProvidersRoot(settingsDir);
+  const read = readProviders(settings.providers, root, warnings);
   if (read.outbounds.length === 0) {
-    const broken = read.providers.filter((provider) => provider.error !== null);
-    const reason = broken.length > 0 ? `\n  - ${broken.map((provider) => provider.error).join('\n  - ')}` : '';
+    const reasons = [];
+    if (read.rootState.message !== null) reasons.push(read.rootState.message);
+    for (const entry of read.unread) reasons.push(`${entry.id}: ${entry.error}`);
+    const disabled = read.providers.filter((provider) => !provider.enabled);
+    if (disabled.length > 0) {
+      reasons.push(
+        `включённых провайдеров нет; найдены и выключены: ${disabled
+          .map((provider) => provider.id)
+          .join(', ')}`,
+      );
+    }
+    const reason = reasons.length > 0 ? `\n  - ${reasons.join('\n  - ')}` : '';
     throw new ConfigError(
-      `не найдено ни одного выхода в источниках: проверьте поле sources${reason}`,
+      `не найдено ни одного включённого провайдера со ссылками${reason}`,
     );
   }
   return read.outbounds;

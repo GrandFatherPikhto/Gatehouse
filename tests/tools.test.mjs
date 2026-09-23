@@ -279,7 +279,7 @@ describe('dev.mjs: sandbox launcher (NEW)', () => {
     for (const file of [
       path.join(REPO_ROOT, 'dev', 'root.example', 'webui.json'),
       path.join(REPO_ROOT, 'dev', 'root.example', 'etc', 'sing-box', 'config.json'),
-      path.join(REPO_ROOT, 'dev', 'root.example', 'sources', 'vpnd', 'links.txt'),
+      path.join(REPO_ROOT, 'dev', 'root.example', 'providers', 'vpnd', 'links.txt'),
     ]) {
       assert.ok(fs.existsSync(file), `${path.relative(REPO_ROOT, file)} is missing`);
     }
