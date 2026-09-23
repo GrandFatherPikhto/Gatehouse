@@ -72,6 +72,9 @@ describe('the providers panel edits the list (NEW)', () => {
       assert.doesNotMatch(html, /<textarea/, 'no free-form text field');
       assert.match(html, /name="action" value="remove"/);
       assert.match(html, /provider%3Avpnd/, 'the provider name links to its contents');
+      // The servers of a provider belong to ITS panel, not to the summary list.
+      assert.doesNotMatch(html, /Выходы \(/);
+      assert.doesNotMatch(html, /🇫🇮 Finland - Helsinki 1/);
     } finally {
       await editor.close();
     }

@@ -90,15 +90,8 @@
     <button type="submit">Добавить</button>
   </form>
 <% } %>
-
-<% if (panel.info.outbounds.length > 0) { %>
-  <h3>Выходы (<%= panel.info.outbounds.length %>)</h3>
-  <ul class="tags">
-    <% for (const outbound of panel.info.outbounds) { %>
-      <li><%= outbound.tag %></li>
-    <% } %>
-  </ul>
-<% } %>
+<%# The merged outbound list is deliberately NOT shown here: it belongs to the
+    folder that produced it. Open a provider to see the servers that one hands out. %>
 
 <% if (panel.info.warnings.length > 0) { %>
   <h3>Предупреждения</h3>
