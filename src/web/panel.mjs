@@ -24,9 +24,10 @@ export const PANEL_KINDS = Object.freeze([
 ]);
 
 /**
- * Tabs of the «Система» panel. The tab is carried by the panel KEY
- * (`system:singbox`), so a tab is a real address: it can be bookmarked, and with
- * JavaScript off it is simply a link.
+ * Children of the «Система» group. A child is carried by the panel KEY
+ * (`system:singbox`), so it is a real address: it can be bookmarked, and with
+ * JavaScript off it is simply a link in the tree. The list also names the child
+ * whose content an unknown or absent key falls back to.
  */
 export const SYSTEM_TABS = Object.freeze(['singbox', 'amnezia']);
 
@@ -266,25 +267,22 @@ export function buildPanel(model, key, extra = {}) {
 
     case 'system': {
       const lastCheck = system.lastCheck ?? null;
-      // The tab comes from the panel KEY; an unknown or absent one means the first
-      // tab, so `/panel/system` and a stale bookmark never render nothing.
+      // The child comes from the panel KEY; an unknown or absent one means the
+      // first child, so `/panel/system` and a stale bookmark never render nothing.
       const tab = SYSTEM_TABS.includes(name) ? name : SYSTEM_TABS[0];
       const info = model.sourcesInfo();
 
-      // ONE panel object carries the fields of every tab: each tab is a partial
-      // included by the container, and all of them read from here.
+      // ONE panel object carries the fields of both children: each child is a
+      // partial included by the container, and both read from here. The tree draws
+      // the two children as nodes of the «Система» group; the panel itself has no
+      // tab strip any more.
       return {
         ...base,
         title: 'Система',
         tab,
-        tabs: SYSTEM_TABS.map((item) => ({
-          name: item,
-          title: item === 'singbox' ? 'Sing-box' : 'Amnezia',
-          key: panelKey('system', item),
-        })),
-        // Neither of the two tabs carries an edit form — they were read-only
-        // before, and the watchdog form went away with the watchdog — so the header
-        // save button must never appear on this panel.
+        // Neither child carries an edit form — both were read-only before, and the
+        // watchdog form went away with the watchdog — so the header save button must
+        // never appear on this panel.
         editForm: false,
 
         // --- Sing-box: check, restart, rollback, journal, server test ---

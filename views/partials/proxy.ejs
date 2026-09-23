@@ -16,13 +16,21 @@
      note: pick('note', stored.note ?? ''),
      pinned: ticked('pinned', stored.pinned === true),
    }; %>
-<%# The tunnel selector: one `<select>` carrying `provider/file`, plus the
-    interface name. An empty select means an ordinary proxy with a server pool.
-    A rejected form keeps the posted values, like every other field here. %>
+<%# The exit is ONE of two kinds, chosen by the `exit_kind` combo: `singbox` shows
+    the outbound picker, `tunnel` the single-tunnel selector. The stored kind comes
+    from the entry (a `tunnel` object means Tunnel), and a rejected form keeps the
+    posted combo. %>
 <% const storedTunnel = stored.tunnel && typeof stored.tunnel === 'object' ? stored.tunnel : null; %>
 <% const tunnelRef = posted
      ? (posted.tunnel ?? '')
      : (storedTunnel ? `${storedTunnel.provider}/${storedTunnel.file}` : ''); %>
+<% const exitKind = posted
+     ? (posted.exit_kind === 'tunnel'
+         ? 'tunnel'
+         : posted.exit_kind === 'singbox'
+           ? 'singbox'
+           : (posted.tunnel ? 'tunnel' : 'singbox'))
+     : (storedTunnel ? 'tunnel' : 'singbox'); %>
 <% const current = posted && posted.current !== undefined ? posted.current : stored.tag; %>
 <% const servers = posted
      ? (posted.servers === undefined
@@ -63,96 +71,119 @@
       серверов. Сохранение с двумя серверами отвергается текстом «у прокси
       зафиксирован выход — снимите отметку, если нужен пул», молча список не
       обрезается. Ядро этот ключ отбрасывает: в <code>config.json</code> он не
-      попадает. Рядом поле <code>note</code> — там запишите причину закрепления.
+      попадает. Отметка осмысленна только для выхода через Sing-box; в режиме
+      Tunnel она сохраняется, но ни на что не влияет.
     </p>
   </fieldset>
 
   <fieldset>
-    <legend>Туннель или пул серверов</legend>
-    <p class="hint">
-      Один туннель — один прокси — один выход. Выберите туннель, и серверы ниже
-      будут проигнорированы: в <code>config.json</code> появится пара «инбаунд +
-      <code>direct</code>-аутбаунд» с <code>bind_interface</code>. Оставьте поле
-      пустым — прокси работает по правилам ниже (auto-select или пул).
-    </p>
-    <label for="tunnel">туннель</label>
-    <select id="tunnel" name="tunnel">
-      <option value="">— нет, обычный прокси (серверы ниже) —</option>
-      <% for (const item of panel.tunnels) { %>
-        <% const value = `${item.provider}/${item.file}`; %>
-        <option value="<%= value %>" <%= tunnelRef === value ? 'selected' : '' %>><%= item.name %> (<%= item.interface %>)</option>
-      <% } %>
-      <% if (storedTunnel && !panel.tunnels.some((item) => `${item.provider}/${item.file}` === tunnelRef)) { %>
-        <option value="<%= tunnelRef %>" selected><%= tunnelRef %> (не отмечен)</option>
-      <% } %>
+    <legend>Куда выходит прокси</legend>
+    <label for="exit_kind">Режим выхода</label>
+    <%# The combo picks the branch. The SERVER is the arbiter: it reads `exit_kind`
+        and takes exactly one branch, so the form keeps working without script — both
+        branches stay visible and the ignored one is simply discarded on save. The
+        script only hides the other branch and disables its fields. %>
+    <select id="exit_kind" name="exit_kind" data-exit-kind>
+      <option value="singbox" <%= exitKind === 'singbox' ? 'selected' : '' %>>Sing-box — пул аутбаундов</option>
+      <option value="tunnel" <%= exitKind === 'tunnel' ? 'selected' : '' %>>Tunnel — один туннель</option>
     </select>
     <p class="hint">
-      В списке — только отмеченные туннели из «Провайдеров». Имя файла и юнит
-      берутся из отметки: <code><имя файла>.conf</code> в каталоге amnezia и
-      <code>awg-quick@<имя файла></code>. Серверы ниже игнорируются.
-      Не забудьте сохранить <code>webui.json</code> после правки.
+      Прокси выходит либо через аутбаунды sing-box, либо через ровно один
+      туннель. Ниже остаются обе ветки, но сохраняется только выбранная: вторая
+      при сохранении не учитывается.
     </p>
-    <% if (storedTunnel) { %>
-      <p class="hint">
-        Сейчас прокси привязан к туннелю
-        <code><%= `${storedTunnel.provider}/${storedTunnel.file}` %></code>
-        (интерфейс <code><%= storedTunnel.interface %></code>). Подпись и состояние
-        юнита — в разделе «Система».
-      </p>
-    <% } %>
-  </fieldset>
 
-  <fieldset>
-    <legend>Серверы</legend>
-    <p class="hint">
-      Ничего не отмечено — прокси идёт в auto-select (все серверы, кроме
-      исключённых). Отмеченные серверы образуют пул
-      <code>pool-<%= proxy.tag %></code>; снятая галочка убирает сервер из пула.
-      Эти поля не участвуют, если выбран туннель.
-    </p>
-    <% if (panel.linksError) { %>
-      <p class="error"><%= panel.linksError %></p>
-    <% } %>
-    <%# The checked servers come FIRST, in their stored order, and only then the
-        rest in links-file order. A browser submits checked boxes in DOCUMENT
-        order, so any other layout would silently rewrite the list on the first
-        save of a form nobody edited: the stored order of the servers would become
-        the order of links.txt, and a server missing from that file would move to
-        the end. Keeping document order equal to storage order makes an untouched
-        save a no-op, and puts the chosen servers on top, which is also handier. %>
-    <% const ordered = [
-         ...servers.map((tag) => ({tag, checked: true})),
-         ...panel.tags
-           .filter((tag) => !servers.includes(tag))
-           .map((tag) => ({tag, checked: false})),
-       ]; %>
-    <div class="servers-picker" data-servers-picker>
-      <%# The filter and the clear-all button need the script; without it they stay
-          hidden instead of sitting there doing nothing. The checkboxes and the
-          submit button work with JavaScript off. %>
-      <div class="servers-tools" data-servers-tools hidden>
-        <label for="servers-filter">Фильтр</label>
-        <input type="search" id="servers-filter" data-servers-filter
-               placeholder="страна или город" autocomplete="off">
-        <button type="button" class="secondary" data-servers-clear hidden>Снять все</button>
+    <div class="exit-branch" data-exit-branch="singbox">
+      <h4>Аутбаунды sing-box</h4>
+      <p class="hint">
+        Ничего не отмечено — прокси идёт в auto-select (все серверы, кроме
+        исключённых). Отмеченные серверы образуют пул
+        <code>pool-<%= proxy.tag %></code>; снятая галочка убирает сервер из пула.
+      </p>
+      <% if (panel.linksError) { %>
+        <p class="error"><%= panel.linksError %></p>
+      <% } %>
+      <%# The checked servers come FIRST, in their stored order, and only then the
+          rest in links-file order. A browser submits checked boxes in DOCUMENT
+          order, so any other layout would silently rewrite the list on the first
+          save of a form nobody edited: the stored order of the servers would become
+          the order of links.txt, and a server missing from that file would move to
+          the end. Keeping document order equal to storage order makes an untouched
+          save a no-op, and puts the chosen servers on top, which is also handier. %>
+      <% const ordered = [
+           ...servers.map((tag) => ({tag, checked: true})),
+           ...panel.tags
+             .filter((tag) => !servers.includes(tag))
+             .map((tag) => ({tag, checked: false})),
+         ]; %>
+      <div class="servers-picker" data-servers-picker>
+        <%# The filter and the clear-all button need the script; without it they stay
+            hidden instead of sitting there doing nothing. The checkboxes and the
+            submit button work with JavaScript off. %>
+        <div class="servers-tools" data-servers-tools hidden>
+          <label for="servers-filter">Фильтр</label>
+          <input type="search" id="servers-filter" data-servers-filter
+                 placeholder="страна или город" autocomplete="off">
+          <button type="button" class="secondary" data-servers-clear hidden>Снять все</button>
+        </div>
+        <div class="servers-list" data-servers-list>
+          <% for (const {tag, checked} of ordered) { %>
+            <% const excluded = excludePrefixes.filter((prefix) => tag.startsWith(prefix)); %>
+            <label class="check server" data-server data-tag="<%= tag %>">
+              <input type="checkbox" name="servers" value="<%= tag %>"<%= checked ? ' checked' : '' %>>
+              <span class="server-tag"><%= tag %></span>
+              <% if (!known.has(tag)) { %>
+                <span class="badge server-missing">нет в файле ссылок</span>
+              <% } %>
+              <% if (excluded.length === 0) { %>
+                <span class="badge server-auto" title="уходит в auto-select">в auto-select</span>
+              <% } else { %>
+                <span class="badge server-excluded" title="<%= `исключён по exclude_from_auto: ${excluded.join(', ')}` %>">исключён</span>
+              <% } %>
+            </label>
+          <% } %>
+        </div>
       </div>
-      <div class="servers-list" data-servers-list>
-        <% for (const {tag, checked} of ordered) { %>
-          <% const excluded = excludePrefixes.filter((prefix) => tag.startsWith(prefix)); %>
-          <label class="check server" data-server data-tag="<%= tag %>">
-            <input type="checkbox" name="servers" value="<%= tag %>"<%= checked ? ' checked' : '' %>>
-            <span class="server-tag"><%= tag %></span>
-            <% if (!known.has(tag)) { %>
-              <span class="badge server-missing">нет в файле ссылок</span>
-            <% } %>
-            <% if (excluded.length === 0) { %>
-              <span class="badge server-auto" title="уходит в auto-select">в auto-select</span>
-            <% } else { %>
-              <span class="badge server-excluded" title="<%= `исключён по exclude_from_auto: ${excluded.join(', ')}` %>">исключён</span>
-            <% } %>
-          </label>
+    </div>
+
+    <div class="exit-branch" data-exit-branch="tunnel">
+      <h4>Туннель</h4>
+      <label for="tunnel">туннель</label>
+      <select id="tunnel" name="tunnel">
+        <option value="">— выберите туннель —</option>
+        <% for (const item of panel.tunnels) { %>
+          <% const value = `${item.provider}/${item.file}`; %>
+          <option value="<%= value %>" <%= tunnelRef === value ? 'selected' : '' %>><%= item.name %> (<%= item.interface %>)</option>
         <% } %>
-      </div>
+        <% if (storedTunnel && !panel.tunnels.some((item) => `${item.provider}/${item.file}` === tunnelRef)) { %>
+          <option value="<%= tunnelRef %>" selected><%= tunnelRef %> (не отмечен)</option>
+        <% } %>
+      </select>
+      <p class="hint">
+        Один туннель — один прокси — один выход: в <code>config.json</code> появится
+        пара «инбаунд + <code>direct</code>-аутбаунд» с <code>bind_interface</code>,
+        а список аутбаундов выше будет проигнорирован.
+      </p>
+      <% if (panel.tunnels.length === 0) { %>
+        <p class="hint">
+          Включённых туннелей нет: отметьте «включить» у <code>.conf</code> в
+          «Провайдерах» — тогда туннель появится здесь.
+        </p>
+      <% } else { %>
+        <p class="hint">
+          В списке — только отмеченные туннели из «Провайдеров». Имя файла и юнит
+          берутся из отметки: <code><имя файла>.conf</code> в каталоге amnezia
+          и <code>awg-quick@<имя файла></code>.
+        </p>
+      <% } %>
+      <% if (storedTunnel) { %>
+        <p class="hint">
+          Сейчас прокси привязан к туннелю
+          <code><%= `${storedTunnel.provider}/${storedTunnel.file}` %></code>
+          (интерфейс <code><%= storedTunnel.interface %></code>). Подпись и состояние
+          юнита — в разделе «Система».
+        </p>
+      <% } %>
     </div>
   </fieldset>
 

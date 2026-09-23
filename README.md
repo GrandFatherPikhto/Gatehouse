@@ -229,15 +229,16 @@ There is deliberately no "open file" box in the UI: a path arriving from the
 browser at a process that writes files is a path traversal waiting to happen.
 
 One tree node per screen: Провайдеры (source folders and their tunnels), Настройки —
-a group with two children, Прокси → tag, Маршруты → name, and Система, which is ONE
-panel with two tabs: Sing-box (schema check, daemon restart, rollback, the journal
-and the server test) and Amnezia (the tunnel rows grouped by provider). A tab
-is carried by the panel key (`system:amnezia`), so it is a real address that can be
-bookmarked and works without script. «Настройки Sing-Box» collects every sing-box
-setting on one page (the old Общие, DNS and Вывод); «Настройки Amnezia» holds the
-output directory of the tunnel configs and the regeneration button. Inside a provider
-folder every `.conf` carries the «включить» switch and its two names; clicking it opens
-a read-only normalisation preview with the policy-routing switch.
+a group with two children, Прокси → tag, Маршруты → name, and Система, which is a
+group with two children as well: Sing-box (schema check, daemon restart, rollback,
+the journal and the server test) and Amnezia (the tunnel rows grouped by provider).
+A child is carried by the panel key (`system:amnezia`), so it is a real address that
+can be bookmarked and works without script; a bare `system` key opens the first
+child. «Настройки Sing-Box» collects every sing-box setting on one page (the old
+Общие, DNS and Вывод); «Настройки Amnezia» holds the output directory of the tunnel
+configs and the regeneration button. Inside a provider folder every `.conf` carries
+the «включить» switch and its two names; clicking it opens a read-only normalisation
+preview with the policy-routing switch.
 
 * **`webui.json` is flat; the profile level is gone.** The body used to be split
   between the active profile and `defaults`, but there was exactly one profile and
@@ -282,6 +283,15 @@ a read-only normalisation preview with the policy-routing switch.
   left the links file, and a route naming an unknown outbound, are marked in the
   tree; saving stays possible. Only the generator refuses to build a pool for a
   missing server.
+* **A proxy exits one way or the other, and the form says which.** The exit field
+  of a proxy is a single combo, `Sing-box` or `Tunnel`: `Sing-box` shows the outbound
+  picker (the servers), `Tunnel` shows one tunnel selector. `webui.json` carries
+  either `servers` or `tunnel` — never both, which is exactly what the core refuses.
+  The SERVER reads the combo and takes one branch, so the form still works with
+  JavaScript off: then both branches are visible and the ignored one is discarded on
+  save. The script only hides the other branch and disables its fields; a `Tunnel`
+  mode without a tunnel is refused with a sentence, never silently turned into
+  `auto-select`.
 * **The servers list keeps the stored order.** The picker draws the checked
   servers first, in the order the file holds them, and the rest of the links file
   after them. A browser submits checked boxes in document order, so any other

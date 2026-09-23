@@ -1,8 +1,8 @@
-// The «Система» tabs. The host layer is ONE panel with three tabs, and a tab is
-// carried by the panel KEY: `system:singbox` (the first one), `system:amnezia`,
-// `system:watchdog`. That makes a tab a real address that works without script, and
-// these tests pin the split: sing-box things must not appear on the amnezia tab and
-// the other way round.
+// The «Система» children. The host layer is a GROUP without a page of its own,
+// drawn by the tree as a heading over TWO child nodes, exactly like «Настройки».
+// A child is carried by the panel KEY: `system:singbox` (the first one) and
+// `system:amnezia`. Those tests pin the split: sing-box things must not appear on
+// the amnezia child and the other way round, and the tab strip is gone for good.
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -33,7 +33,7 @@ const GRAZ_MARK = {
 
 /**
  * Starts an editor with a tunnel source, one ordinary proxy and sudoers rights for
- * the tunnel, so every tab has something to show.
+ * the tunnel, so both children have something to show.
  *
  * @returns {Promise<Record<string, unknown>>}
  */
@@ -97,61 +97,73 @@ function pushed(panel) {
   return header === null ? null : decodeURIComponent(header);
 }
 
-describe('the «Система» tabs (NEW)', () => {
-  test('the first tab is sing-box: check, rollback, journal and the server test', async () => {
+describe('the «Система» children (NEW)', () => {
+  test('the tree draws «Система» as a group with two child links, and no tab strip', async () => {
     const editor = await startEditor();
     try {
-      const plain = await (await fetch(`${editor.base}/panel/system`)).text();
-      const explicit = await (await fetch(`${editor.base}/panel/system:singbox`)).text();
-      // The two pages differ only in the panel key they carry (the hidden field and
-      // the Save button's formaction), so the comparison drops the explicit tab:
-      // a missing tab name must mean the first tab.
-      const strip = (text) => text.replaceAll('system:singbox', 'system');
-      assert.equal(strip(plain), strip(explicit), 'a missing tab name means the first tab');
+      const html = await (await fetch(`${editor.base}/panel/system:singbox`)).text();
 
-      assert.match(plain, /class="tab active"[^>]*>Sing-box</);
-      assert.match(plain, /hx-post="\/check"/);
-      assert.match(plain, /hx-post="\/rollback"/);
-      assert.match(plain, /Журнал sing-box/);
-      assert.match(plain, /Проверить все серверы профиля/);
-
-      assert.doesNotMatch(plain, /hx-post="\/tunnel\/toggle"/, 'tunnels have their own tab');
-      assert.doesNotMatch(plain, /Общий рубильник/, 'so does the watchdog');
-      assert.doesNotMatch(plain, /id="panel-form"/, 'this tab has no edit form');
+      // The group has no page: it is a heading, never a link that leads nowhere.
+      assert.match(html, /<span class="group"[^>]*>Система<\/span>/);
+      assert.match(html, />Sing-Box<\/a>/);
+      assert.match(html, />Amnezia<\/a>/);
+      // The old in-panel navigation is gone; the tree carries the two children.
+      assert.doesNotMatch(html, /class="tab/);
+      assert.doesNotMatch(html, /nav class="tabs"/);
     } finally {
       await editor.close();
     }
   });
 
-  test('the amnezia tab holds the tunnels and nothing of sing-box', async () => {
+  test('the first child is sing-box: check, rollback, journal and the server test', async () => {
+    const editor = await startEditor();
+    try {
+      // A bare key must open the first child, so the two pages are IDENTICAL: the
+      // canonical key is `system:singbox` in both, the tree highlights that child.
+      const plain = await (await fetch(`${editor.base}/panel/system`)).text();
+      const explicit = await (await fetch(`${editor.base}/panel/system:singbox`)).text();
+      assert.equal(plain, explicit, 'a bare key means the first child');
+
+      assert.match(plain, /class="active"[^>]*>Sing-Box</);
+      assert.match(plain, /hx-post="\/check"/);
+      assert.match(plain, /hx-post="\/rollback"/);
+      assert.match(plain, /Журнал sing-box/);
+      assert.match(plain, /Проверить все серверы профиля/);
+
+      assert.doesNotMatch(plain, /hx-post="\/tunnel\/toggle"/, 'tunnels have their own child');
+      assert.doesNotMatch(plain, /id="panel-form"/, 'this child has no edit form');
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('the amnezia child holds the tunnels and nothing of sing-box', async () => {
     const editor = await startEditor();
     try {
       await post(editor.base, '/tunnels', GRAZ_MARK);
 
       const html = await (await fetch(`${editor.base}/panel/system:amnezia`)).text();
 
-      assert.match(html, /class="tab active"[^>]*>Amnezia</);
+      assert.match(html, /class="active"[^>]*>Amnezia</);
       assert.match(html, /awg-quick@hmn-graz4/);
       assert.match(html, /hx-post="\/tunnel\/toggle"/);
       assert.doesNotMatch(html, /hx-post="\/check"/);
       assert.doesNotMatch(html, /Журнал sing-box/);
-      assert.doesNotMatch(html, /Общий рубильник/);
     } finally {
       await editor.close();
     }
   });
 
-  test('the removed watchdog tab falls back to the first one, and its routes are gone', async () => {
+  test('the removed watchdog key falls back to the first child, and its routes are gone', async () => {
     const editor = await startEditor();
     try {
-      // A stale bookmark must not render an empty page: an unknown tab name already
-      // means the first tab, and there is no third tab any more.
+      // A stale bookmark must not render an empty page: an unknown child name already
+      // means the first child, and there is no third child any more.
       const html = await (await fetch(`${editor.base}/panel/system:watchdog`)).text();
 
-      assert.match(html, /class="tab active"[^>]*>Sing-box</);
-      assert.equal(html.split('id="panel-form"').length - 1, 0, 'no tab has an edit form');
+      assert.match(html, /class="active"[^>]*>Sing-Box</);
+      assert.equal(html.split('id="panel-form"').length - 1, 0, 'no child has an edit form');
       assert.doesNotMatch(html, /Сторож/);
-      assert.doesNotMatch(html, /Общий рубильник/);
 
       // The routes went with the watchdog: 404, not a silent no-op.
       assert.equal((await post(editor.base, '/watchdog/check')).status, 404);
@@ -162,12 +174,18 @@ describe('the «Система» tabs (NEW)', () => {
     }
   });
 
-  test('the tree keeps ONE «Система» node, highlighted on every tab', async () => {
+  test('every key of the group highlights one of the two child nodes', async () => {
     const editor = await startEditor();
     try {
-      for (const key of ['system', 'system:singbox', 'system:amnezia', 'system:watchdog']) {
+      const expected = {
+        system: 'Sing-Box',
+        'system:singbox': 'Sing-Box',
+        'system:amnezia': 'Amnezia',
+        'system:watchdog': 'Sing-Box',
+      };
+      for (const [key, child] of Object.entries(expected)) {
         const html = await (await fetch(`${editor.base}/panel/${key}`)).text();
-        assert.match(html, /class="active"[^>]*>Система</, `${key}: the node is highlighted`);
+        assert.match(html, new RegExp(`class="active"[^>]*>${child}<`), `${key}: ${child}`);
       }
 
       const page = await (await fetch(`${editor.base}/`)).text();
@@ -179,7 +197,7 @@ describe('the «Система» tabs (NEW)', () => {
     }
   });
 
-  test('an action stays on the tab it was taken from', async () => {
+  test('an action stays on the child it was taken from', async () => {
     const editor = await startEditor();
     try {
       await post(editor.base, '/check');

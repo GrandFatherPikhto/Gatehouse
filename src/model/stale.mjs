@@ -345,11 +345,17 @@ export function treeSpec(options = {}) {
       }),
       node('proxies', `Прокси (${proxyNodes.length})`, 'proxies', {children: proxyNodes}),
       node('routes', `Маршруты (${routeNodes.length})`, 'routes', {children: routeNodes}),
-      // The host layer. It edits nothing, so the node carries no stale mark, and
-      // its former children — the journal and the server test — are TABS of this
-      // one panel now (`system:singbox`, `system:amnezia`). The watchdog tab went
-      // away with the watchdog itself.
-      node('system', 'Система', 'system'),
+      // The host layer. It edits nothing, so the node carries no stale mark. Like
+      // «Настройки» it is a GROUP without a page of its own, and the two former
+      // tabs are its CHILDREN now, so the tree draws them as links. The watchdog
+      // went away with the watchdog itself.
+      node('system', 'Система', 'system', {
+        group: true,
+        children: [
+          node('system:singbox', 'Sing-Box', 'system'),
+          node('system:amnezia', 'Amnezia', 'system'),
+        ],
+      }),
     ],
   });
 }

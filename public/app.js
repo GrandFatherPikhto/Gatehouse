@@ -101,9 +101,55 @@ function wirePicker(picker) {
   }
 }
 
-/** Wires every picker of the document, if any. */
+/**
+ * True when a branch belongs to the chosen exit kind. A pure function on purpose,
+ * like `applyFilter`: the rule is exported so the test suite can pin it without a
+ * browser.
+ *
+ * @param {string} kind Value of the `[data-exit-kind]` combo.
+ * @param {string} branchKind Value of one `[data-exit-branch]`.
+ * @returns {boolean}
+ */
+export function isActiveBranch(kind, branchKind) {
+  return kind === branchKind;
+}
+
+/**
+ * Wires one exit selector of the proxy form: the combo decides which branch is
+ * shown. The branches are only HIDDEN, never removed, and the server reads
+ * `exit_kind` as the arbiter, so the form still works with the script absent —
+ * then both branches are visible and the ignored one is discarded on save. The
+ * fields of the hidden branch are disabled as well, so an untouched save cannot
+ * carry the other branch along.
+ *
+ * @param {HTMLSelectElement} combo
+ */
+function wireExitKind(combo) {
+  if (combo.dataset.wired === '1') return;
+  combo.dataset.wired = '1';
+
+  const form = combo.closest('form');
+  if (form === null) return;
+  const branches = [...form.querySelectorAll('[data-exit-branch]')];
+
+  const apply = () => {
+    for (const branch of branches) {
+      const active = isActiveBranch(combo.value, branch.dataset.exitBranch ?? '');
+      branch.hidden = !active;
+      for (const field of branch.querySelectorAll('input, select, textarea, button')) {
+        field.disabled = !active;
+      }
+    }
+  };
+
+  combo.addEventListener('change', apply);
+  apply();
+}
+
+/** Wires every picker and exit selector of the document, if any. */
 function setup() {
   for (const picker of document.querySelectorAll('[data-servers-picker]')) wirePicker(picker);
+  for (const combo of document.querySelectorAll('[data-exit-kind]')) wireExitKind(combo);
 }
 
 if (typeof document !== 'undefined') {

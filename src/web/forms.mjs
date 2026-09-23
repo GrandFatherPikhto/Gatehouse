@@ -80,10 +80,19 @@ export function selection(value) {
 /**
  * Parses the proxy form.
  *
+ * The exit is ONE of two kinds, chosen by the `exit_kind` combo: `singbox` takes
+ * the checked outbounds, `tunnel` takes the single tunnel. The SERVER is the
+ * arbiter — it reads the combo and uses exactly one branch, so the form keeps
+ * working with JavaScript off, when both branches are visible and the ignored one
+ * travels along in the body.
+ *
  * The tunnel selector is two fields: `tunnel` carries `provider/file` (the value
  * of the `<select>`), `tunnel_interface` the interface name. An empty `tunnel`
  * means "an ordinary proxy", and the key is left out entirely, so an untouched
  * form does not add an empty `tunnel` object to `webui.json`.
+ *
+ * When `exit_kind` is absent (an old bookmark, a direct POST) the kind is derived
+ * from the presence of `tunnel`, which keeps the route backward compatible.
  *
  * @param {Record<string, unknown>} body
  * @returns {{tag: string, type: string, port: number, servers: string[],
@@ -103,8 +112,17 @@ export function parseProxyForm(body) {
   }
 
   const reference = String(body.tunnel ?? '').trim();
+  const postedKind =
+    body.exit_kind === 'tunnel' || body.exit_kind === 'singbox' ? body.exit_kind : null;
+  const kind = postedKind ?? (reference.length > 0 ? 'tunnel' : 'singbox');
+
   let tunnel;
-  if (reference.length > 0) {
+  if (kind === 'tunnel') {
+    if (reference.length === 0) {
+      throw new ConfigError(
+        "режим 'Tunnel' выбран, но туннель не указан: выберите туннель или переключитесь на 'Sing-box'",
+      );
+    }
     const slash = reference.indexOf('/');
     if (slash <= 0 || slash === reference.length - 1) {
       throw new ConfigError(`туннель '${reference}' должен быть в виде provider/file`);
@@ -120,7 +138,9 @@ export function parseProxyForm(body) {
     tag,
     type,
     port: port(body.port),
-    servers: selection(body.servers),
+    // Exactly one branch is read: the hidden one may still be in the body when the
+    // form is posted without the script, and mixing the two is refused by the core.
+    servers: kind === 'tunnel' ? [] : selection(body.servers),
     tunnel,
     note: String(body.note ?? '').trim(),
     pinned: checkbox(body.pinned),

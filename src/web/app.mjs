@@ -395,7 +395,12 @@ export function createApp(options = {}) {
     const kind = requested.includes(':') ? requested.slice(0, requested.indexOf(':')) : requested;
 
     try {
-      return {key: requested, panel: buildPanel(model, requested, extra), extra};
+      const panel = buildPanel(model, requested, extra);
+      // «Система» is a GROUP with two child nodes now: a bare or unknown key must
+      // point at a REAL node, so the tree highlight and `HX-Push-Url` name the
+      // child, never the page-less group.
+      const key = panel.kind === 'system' ? panelKey('system', String(panel.tab)) : requested;
+      return {key, panel, extra};
     } catch (error) {
       if (!(error instanceof ConfigError)) throw error;
 

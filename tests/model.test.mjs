@@ -549,11 +549,18 @@ describe('stale references and the tree', () => {
     assert.deepEqual(settings.children.map((child) => child.kind), ['singbox', 'amnezia']);
     assert.equal(settings.group, true);
 
-    // «Система» is ONE node without children: the journal, the server test and the
-    // watchdog are TABS of that panel now (`system:singbox`, `system:amnezia`,
-    // `system:watchdog`), not tree nodes.
+    // «Система» is a GROUP like «Настройки»: no page of its own, two child nodes.
+    // The journal, the server test and the watchdog live INSIDE the sing-box child
+    // (`system:singbox`), not as tree nodes of their own.
     const system = model.treeSpec().children.find((child) => child.kind === 'system');
-    assert.deepEqual(system.children, []);
+    assert.equal(system.group, true);
+    assert.deepEqual(
+      system.children.map((child) => [child.key, child.title]),
+      [
+        ['system:singbox', 'Sing-Box'],
+        ['system:amnezia', 'Amnezia'],
+      ],
+    );
   });
 
   test('server tags come from the links file of the settings directory', () => {
