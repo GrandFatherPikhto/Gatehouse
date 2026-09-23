@@ -783,3 +783,77 @@ describe('parity with the core (NEW)', () => {
     assert.equal(loaded.document.version, DOCUMENT_VERSION);
   });
 });
+
+describe('explicit sources: {kind, name, path} (NEW)', () => {
+  test('a legacy folder entry is converted to an explicit source on open', () => {
+    const dir = makeTempDir();
+    writeLinksFile(dir);
+    const file = path.join(dir, 'webui.json');
+    fs.writeFileSync(file, canonicalJson(flatDocument({sources: ['vpnd']})), 'utf8');
+
+    const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
+
+    assert.deepEqual(model.document.sources, [
+      {kind: 'links', name: 'vpnd', path: path.join(dir, 'sources', 'vpnd', 'links.txt')},
+    ]);
+    assert.match(model.sourcesMigrationNotice, /переведён в новый формат/);
+    assert.equal(model.sourcesInfo().providers[0].kind, 'links');
+  });
+
+  test('a folder holding links and tunnels splits into two sources', () => {
+    const dir = makeTempDir();
+    writeLinksFile(dir);
+    fs.writeFileSync(path.join(dir, 'sources', 'vpnd', 'de.conf'), 'x', 'utf8');
+    const file = path.join(dir, 'webui.json');
+    fs.writeFileSync(file, canonicalJson(flatDocument({sources: ['vpnd']})), 'utf8');
+
+    const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
+
+    assert.deepEqual(
+      model.document.sources.map((source) => [source.kind, source.name]),
+      [
+        ['links', 'vpnd'],
+        ['tunnels', 'vpnd'],
+      ],
+    );
+  });
+
+  test('addSource validates the origin, refuses a duplicate and leaves the file alone', () => {
+    const dir = makeTempDir();
+    const links = writeLinksFile(dir);
+    const tunnels = path.join(dir, 'sources', 'hidemyname');
+    fs.mkdirSync(tunnels, {recursive: true});
+    fs.writeFileSync(path.join(tunnels, 'de.conf'), 'x', 'utf8');
+    const file = path.join(dir, 'webui.json');
+    fs.writeFileSync(file, canonicalJson(flatDocument({sources: []})), 'utf8');
+    const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
+
+    model.addSource('vpnd', links, 'links');
+    assert.deepEqual(model.sources(), [{kind: 'links', name: 'vpnd', path: links}]);
+
+    assert.throws(
+      () => model.addSource('vpnd', tunnels, 'tunnels'),
+      (error) => error instanceof ConfigError && /уже указан/.test(error.message),
+    );
+    assert.throws(
+      () => model.addSource('ghost', path.join(dir, 'nope.txt'), 'links'),
+      (error) => error instanceof ConfigError && /не найден или это не файл/.test(error.message),
+    );
+    assert.throws(
+      () => model.addSource('bad', links, 'tunnels'),
+      (error) => error instanceof ConfigError && /не найден или это не каталог/.test(error.message),
+    );
+    assert.throws(
+      () => model.addSource('bad-kind', links, 'nope'),
+      (error) => error instanceof ConfigError && /неизвестный тип источника/.test(error.message),
+    );
+
+    model.addSource('hidemyname', tunnels, 'tunnels');
+    assert.equal(model.tunnelSourceDir('hidemyname'), tunnels);
+    assert.equal(model.sources().length, 2);
+
+    model.removeSource('vpnd');
+    assert.equal(model.sources().length, 1);
+    assert.ok(fs.existsSync(links), 'the owner\'s links file is untouched');
+  });
+});

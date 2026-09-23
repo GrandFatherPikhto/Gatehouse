@@ -444,15 +444,15 @@ export function createApp(options = {}) {
     // The fields of the removed Watchdog are still in the FILE until the owner
     // saves, so the line about them stays on every panel until then. It goes into
     // the notice channel that already exists — one line, no new UI, and nothing is
-    // rewritten behind the owner's back.
-    if (model.removedNotice !== null) {
+    // rewritten behind the owner's back. The sources-migration line lives by the
+    // same rule: the file still carries the bare folder names until a save.
+    for (const line of [model.removedNotice, model.sourcesMigrationNotice]) {
+      if (line === null) continue;
       const previous = withNotices.notice;
       withNotices = {
         ...withNotices,
         notice:
-          typeof previous === 'string' && previous.length > 0
-            ? `${previous} ${model.removedNotice}`
-            : model.removedNotice,
+          typeof previous === 'string' && previous.length > 0 ? `${previous} ${line}` : line,
       };
     }
 
@@ -964,14 +964,24 @@ export function createApp(options = {}) {
       const name = String(req.body.name ?? '').trim();
 
       switch (action) {
-        case 'add':
-          model.addSource(name);
-          return {key: 'providers', notice: `Источник '${name}' добавлен — не забудьте сохранить`};
+        case 'add': {
+          // The kind decides what the path has to be, and the model refuses a path
+          // that does not exist or is not what the kind claims: a links source must
+          // be a readable file, a tunnels source a directory.
+          const kind = String(req.body.kind ?? '').trim();
+          const target = String(req.body.path ?? '').trim();
+          model.addSource(name, target, kind);
+          const label = kind === 'tunnels' ? 'Каталог туннелей' : 'Файл ссылок';
+          return {
+            key: 'providers',
+            notice: `${label} '${target}' добавлен как провайдер '${name}' — не забудьте сохранить`,
+          };
+        }
         case 'remove':
           model.removeSource(name);
           return {
             key: 'providers',
-            notice: `Источник '${name}' убран из списка — папка на диске не тронута, не забудьте сохранить`,
+            notice: `Источник '${name}' убран из списка — файл на диске не тронут, не забудьте сохранить`,
           };
         default:
           throw new ConfigError(`неизвестное действие '${action}'`);

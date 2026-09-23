@@ -41,7 +41,14 @@ import {
   validateInterfaceName,
   validateTunnelLabel,
 } from '../core/normalize.mjs';
-import {readSources, resolveSourcesRoot, sourceNames} from '../core/sources.mjs';
+import {
+  LEGACY_KIND,
+  LINKS_FILENAME,
+  TUNNEL_EXTENSION,
+  readSources,
+  resolveSourcesRoot,
+  sourceSpecs,
+} from '../core/sources.mjs';
 import {
   applyTunnelConfig,
   listTunnelConfigNames,
@@ -329,6 +336,14 @@ export class ProjectModel {
      */
     this.lastMigration = null;
     /**
+     * Warnings of the last `open` that converted legacy bare-string `sources`
+     * entries into explicit objects. `null` when there was nothing to convert; the
+     * web layer shows the lines once and a save makes them true no more.
+     *
+     * @type {{warnings: string[]}|null}
+     */
+    this.lastSourcesMigration = null;
+    /**
      * Names of the fields of the removed Watchdog that were in the file at load
      * time. The web layer shows one line about them while they are still listed
      * here; a save clears the list, because after a save they are gone from the
@@ -360,6 +375,19 @@ export class ProjectModel {
    */
   get removedNotice() {
     return this.lastRemoved.length === 0 ? null : removedSettingsMessage(this.lastRemoved);
+  }
+
+  /**
+   * The lines the editor shows about `sources` entries converted on the last
+   * open, or `null` when there were none. They live until a save, exactly like the
+   * removed-fields notice: the file still carries the old form until then.
+   *
+   * @type {string|null}
+   */
+  get sourcesMigrationNotice() {
+    return this.lastSourcesMigration === null || this.lastSourcesMigration.warnings.length === 0
+      ? null
+      : this.lastSourcesMigration.warnings.join(' ');
   }
 
   /** Marks the document as changed (reference: `mark_dirty`). */
@@ -397,6 +425,7 @@ export class ProjectModel {
     this.document = newDocument();
     this.path = target ? path.resolve(target) : null;
     this.lastMigration = null;
+    this.lastSourcesMigration = null;
     this.lastRemoved = [];
     this.markClean();
     return this.document;
@@ -442,6 +471,11 @@ export class ProjectModel {
     }
 
     this.path = resolved;
+    // A document written before the explicit sources carries bare folder names.
+    // They are converted in memory (the reader understands both forms), and the
+    // notice tells the owner to save so the file catches up.
+    const sourcesMigration = this.#migrateSourceEntries();
+    this.lastSourcesMigration = sourcesMigration.length > 0 ? {warnings: sourcesMigration} : null;
     this.markClean();
     return this.document;
   }
@@ -473,8 +507,10 @@ export class ProjectModel {
     const snapshot = takeSnapshot(this.path, this.stateDir, {keep: this.snapshotKeep});
     writeAtomic(this.path, canonicalJson(this.document));
     // Whatever the Watchdog left behind is gone from the file now, so the line the
-    // editor shows about it must go as well.
+    // editor shows about it must go as well. Same for the sources migration
+    // notice: the file carries the explicit objects after this save.
     this.lastRemoved = [];
+    this.lastSourcesMigration = null;
     this.markClean();
     return {
       path: this.path,
@@ -529,9 +565,140 @@ export class ProjectModel {
     return this.document;
   }
 
-  /** Provider folder names listed in the document. */
+  /** Source specs of the document: `{kind, name, path}` objects. */
   sources() {
-    return sourceNames(this.document.sources);
+    return sourceSpecs(this.document.sources);
+  }
+
+  /**
+   * One source by its provider name, or `null`. Two entries may share a name only
+   * in a document migrated from the folder layout (a folder holding both
+   * `links.txt` and `*.conf` splits into a links and a tunnels source); when a
+   * kind is given it decides between them.
+   *
+   * @param {string} name
+   * @param {string} [kind]
+   * @returns {{kind: string, name: string, path: string}|null}
+   */
+  sourceByName(name, kind) {
+    const target = String(name ?? '').trim();
+    return (
+      this.sources().find(
+        (spec) => spec.name === target && (kind === undefined || spec.kind === kind),
+      ) ?? null
+    );
+  }
+
+  /**
+   * Absolute directory of a tunnels source, or `null` when no source of that name
+   * holds tunnel configs. A legacy folder under the sources root is accepted too.
+   *
+   * @param {string} name
+   * @returns {string|null}
+   */
+  tunnelSourceDir(name) {
+    const spec = this.sourceByName(name);
+    if (spec === null) return null;
+    if (spec.kind === 'tunnels') return this.#resolveSourcePath(spec.path);
+    if (spec.kind === LEGACY_KIND) return path.join(this.resolvedSourcesRoot(), spec.path);
+    return null;
+  }
+
+  /**
+   * Stored `sources` entries as they are: strings and objects alike. The writer
+   * must never turn a legacy string into an object it did not migrate, so adding
+   * or removing one entry goes through this list, not through `sources()`.
+   *
+   * @returns {unknown[]}
+   */
+  #rawSources() {
+    const value = this.document.sources;
+    return Array.isArray(value) ? [...value] : [];
+  }
+
+  /**
+   * Provider name of a stored source entry, whatever form it has.
+   *
+   * @param {unknown} item
+   * @returns {string}
+   */
+  #sourceNameOf(item) {
+    if (typeof item === 'string') return item.trim();
+    if (isMapping(item) && typeof item.name === 'string') return item.name.trim();
+    return '';
+  }
+
+  /**
+   * Resolves a stored source path: absolute as is, relative against the settings
+   * directory — the same rule `output_file` follows.
+   *
+   * @param {string} target
+   * @returns {string}
+   */
+  #resolveSourcePath(target) {
+    return path.isAbsolute(target) ? target : path.join(this.settingsDir, target);
+  }
+
+  /**
+   * Converts legacy bare-string `sources` entries into explicit objects, in
+   * place, by inspecting the folder under the sources root. Returns the warnings
+   * to show, empty when nothing was converted.
+   *
+   * The folder name is kept as the provider name. A folder holding `links.txt`
+   * becomes a `links` source, one holding `*.conf` a `tunnels` source; a folder
+   * holding BOTH becomes two entries with the same name, because the two kinds
+   * are different things and merging them would lose one of them. A folder that
+   * is missing or holds neither is left as a string, so the reader keeps
+   * reporting it honestly.
+   *
+   * @returns {string[]}
+   */
+  #migrateSourceEntries() {
+    const raw = this.document.sources;
+    if (!Array.isArray(raw)) return [];
+    const warnings = [];
+    const converted = [];
+    for (const item of raw) {
+      if (typeof item !== 'string') {
+        converted.push(item);
+        continue;
+      }
+      const name = item.trim();
+      if (name.length === 0) continue;
+      const dir = path.join(this.resolvedSourcesRoot(), name);
+      const linksPath = path.join(dir, LINKS_FILENAME);
+      let entries = [];
+      try {
+        entries = fs
+          .readdirSync(dir)
+          .filter((entry) => entry.endsWith(TUNNEL_EXTENSION))
+          .sort();
+      } catch {
+        // a missing folder stays a legacy entry: the reader reports it
+      }
+      // A directory named `links.txt` is not a links file: it stays a legacy
+      // folder entry, which the reader then diagnoses as unreadable.
+      let hasLinks = false;
+      try {
+        hasLinks = fs.existsSync(linksPath) && fs.statSync(linksPath).isFile();
+      } catch {
+        hasLinks = false;
+      }
+      if (!hasLinks && entries.length === 0) {
+        converted.push(item);
+        continue;
+      }
+      if (hasLinks) converted.push({kind: 'links', name, path: linksPath});
+      if (entries.length > 0) converted.push({kind: 'tunnels', name, path: dir});
+      const parts = [];
+      if (hasLinks) parts.push('файл ссылок');
+      if (entries.length > 0) parts.push('каталог туннелей');
+      warnings.push(
+        `Источник '${name}' переведён в новый формат (${parts.join(' и ')}): сохраните изменения`,
+      );
+    }
+    this.document.sources = converted;
+    return warnings;
   }
 
   /** Reference: `output_file`. */
@@ -725,63 +892,68 @@ export class ProjectModel {
   }
 
   /**
-   * Adds one provider folder to `sources`.
+   * Adds one explicit source to `sources`.
    *
-   * The folder is NOT created on disk: `sources` is a configuration list, and the
-   * tool does not write to the owner's data directories. A name that is already
-   * listed is refused instead of duplicated, and an empty name is refused at all —
-   * the panel offers the folders that really exist under the root, so a typo
-   * cannot get in through the UI.
+   * The path is stored exactly as typed and is NOT touched on disk: the tool reads
+   * the owner's data directories, never writes to them. What is checked is that
+   * the origin really is what it claims to be — a readable FILE for `kind:
+   * 'links'`, a DIRECTORY for `kind: 'tunnels'` — because adding a source that
+   * cannot be read only moves the failure to generation time.
    *
-   * @param {string} name
-   * @returns {string[]} The new list.
+   * @param {string} name Provider label; unique across all sources.
+   * @param {string} sourcePath Path to the links file or the tunnel directory.
+   * @param {string} kind `links` or `tunnels`.
+   * @returns {Array<Record<string, unknown>>} The new list.
    */
-  addSource(name) {
-    const clean = String(name ?? '').trim();
-    if (clean.length === 0) throw new ConfigError('имя источника не может быть пустым');
-    const names = this.sources();
-    if (names.includes(clean)) throw new ConfigError(`источник '${clean}' уже указан в sources`);
-    this.document.sources = [...names, clean];
+  addSource(name, sourcePath, kind) {
+    const cleanName = String(name ?? '').trim();
+    const cleanPath = String(sourcePath ?? '').trim();
+    if (cleanName.length === 0) throw new ConfigError('имя провайдера не может быть пустым');
+    if (cleanPath.length === 0) throw new ConfigError('путь источника не может быть пустым');
+    if (kind !== 'links' && kind !== 'tunnels') {
+      throw new ConfigError(
+        `неизвестный тип источника '${String(kind ?? '')}' (ожидается links|tunnels)`,
+      );
+    }
+    if (this.#rawSources().some((item) => this.#sourceNameOf(item) === cleanName)) {
+      throw new ConfigError(`источник '${cleanName}' уже указан в sources`);
+    }
+
+    const resolved = this.#resolveSourcePath(cleanPath);
+    if (kind === 'links') {
+      if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+        throw new ConfigError(`файл ссылок не найден или это не файл: ${resolved}`);
+      }
+      try {
+        fs.accessSync(resolved, fs.constants.R_OK);
+      } catch {
+        throw new ConfigError(`файл ссылок недоступен для чтения: ${resolved}`);
+      }
+    } else if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+      throw new ConfigError(`каталог конфигов не найден или это не каталог: ${resolved}`);
+    }
+
+    this.document.sources = [...this.#rawSources(), {kind, name: cleanName, path: cleanPath}];
     this.markDirty();
     return this.document.sources;
   }
 
   /**
-   * Drops one provider folder from `sources`. The folder itself is left on disk:
-   * removing an entry means "do not read it", never "delete the owner's files".
-   * The list may become empty, which is a normal state the tree reports.
+   * Drops one source from `sources`. The file or directory itself is left alone:
+   * removing an entry means "do not read it", never "delete the owner's data".
    *
    * @param {string} name
-   * @returns {string[]} The new list.
+   * @returns {Array<Record<string, unknown>>} The new list.
    */
   removeSource(name) {
     const clean = String(name ?? '').trim();
-    const names = this.sources();
-    if (!names.includes(clean)) throw new ConfigError(`источник '${clean}' не указан в sources`);
-    this.document.sources = names.filter((item) => item !== clean);
+    const raw = this.#rawSources();
+    if (!raw.some((item) => this.#sourceNameOf(item) === clean)) {
+      throw new ConfigError(`источник '${clean}' не указан в sources`);
+    }
+    this.document.sources = raw.filter((item) => this.#sourceNameOf(item) !== clean);
     this.markDirty();
     return this.document.sources;
-  }
-
-  /**
-   * Folders that exist under the sources root but are not listed in `sources`.
-   * This is what the "add" picker offers, so the owner never types a folder name.
-   *
-   * @returns {string[]} Sorted folder names.
-   */
-  availableSources() {
-    const root = this.resolvedSourcesRoot();
-    let entries;
-    try {
-      entries = fs.readdirSync(root, {withFileTypes: true});
-    } catch {
-      return [];
-    }
-    const listed = new Set(this.sources());
-    return entries
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !listed.has(entry.name))
-      .map((entry) => entry.name)
-      .sort();
   }
 
   /**
@@ -1229,11 +1401,16 @@ export class ProjectModel {
   sourcesInfo() {
     const warnings = [];
     const root = this.resolvedSourcesRoot();
-    const read = readSources(this.document.sources, root, warnings);
+    const read = readSources(
+      this.document.sources,
+      {root, baseDir: this.settingsDir},
+      warnings,
+    );
     const broken = read.providers.filter((provider) => provider.error !== null);
 
     return {
       sources: read.providers.map((provider) => provider.name),
+      specs: this.sources(),
       root,
       providers: read.providers,
       outbounds: read.outbounds,
@@ -1264,14 +1441,15 @@ export class ProjectModel {
     if (provider.length === 0 || file.length === 0) {
       throw new ConfigError('не указан источник или файл туннеля');
     }
-    if (!this.sources().includes(provider)) {
-      throw new ConfigError(`источник '${provider}' не указан в поле sources`);
+    const dir = this.tunnelSourceDir(provider);
+    if (dir === null) {
+      throw new ConfigError(`источник туннелей '${provider}' не указан в поле sources`);
     }
     if (path.extname(file) !== '.conf') {
       throw new ConfigError(`'${file}' не похож на конфиг туннеля (.conf)`);
     }
 
-    const filePath = path.join(this.resolvedSourcesRoot(), provider, file);
+    const filePath = path.join(dir, file);
     if (!fs.existsSync(filePath)) {
       throw new ConfigError(`файл туннеля ${filePath} не найден`);
     }

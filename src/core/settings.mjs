@@ -304,7 +304,8 @@ export function generateConfigFile(settingsPath, options = {}) {
  *
  * `linksOverride` is the CLI `--links` flag: a single file, read exactly as the
  * version-2 code did, so a script that pins one list keeps working. Otherwise the
- * providers of `sources` are read through the sources root.
+ * sources of the document are read: an explicit `path` resolves against the
+ * settings directory, a legacy folder entry against the sources root.
  *
  * @param {Record<string, unknown>} settings
  * @param {string} settingsDir
@@ -318,10 +319,12 @@ function readOutbounds(settings, settingsDir, linksOverride, warnings) {
   }
 
   const root = resolveSourcesRoot(settingsDir);
-  const read = readSources(settings.sources, root, warnings);
+  const read = readSources(settings.sources, {root, baseDir: settingsDir}, warnings);
   if (read.outbounds.length === 0) {
+    const broken = read.providers.filter((provider) => provider.error !== null);
+    const reason = broken.length > 0 ? `\n  - ${broken.map((provider) => provider.error).join('\n  - ')}` : '';
     throw new ConfigError(
-      `не найдено ни одного выхода в источниках (${root}): проверьте поле sources и файлы ${'links.txt'}`,
+      `не найдено ни одного выхода в источниках: проверьте поле sources${reason}`,
     );
   }
   return read.outbounds;

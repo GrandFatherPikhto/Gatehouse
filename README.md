@@ -132,13 +132,18 @@ absolute `output_file` makes the sandbox aim at the host's real
 `/etc/sing-box/config.json`:
 
 ```json
-"sources": ["vpnd"],
+"sources": [
+  { "kind": "links", "name": "vpnd",
+    "path": "sources/vpnd/links.txt" }
+],
 "output_file": "etc/sing-box/config.json"
 ```
 
-`sources` holds provider FOLDER names resolved under `GATEHOUSE_SOURCES`
-(`dev/root/sources` by default), so it needs no rewrite as long as the folder sits
-there.
+A source is one explicit origin: `kind: "links"` is a single links file, `kind:
+"tunnels"` a directory of `*.conf`. `path` is stored as typed; a relative path
+resolves against the directory of `webui.json`, so the sample above needs no
+rewrite as long as `dev/root/sources/vpnd/links.txt` sits there. An absolute path
+copied from the router has to be rewritten, exactly like `output_file`.
 
 Edit this **while the server is stopped**. It keeps the settings in memory and
 writes them back when you save, so a change made underneath a running instance
@@ -183,7 +188,7 @@ node tools/generate.mjs --settings webui.json \
 | --- | --- |
 | `--settings PATH` | settings file, `webui.json` by default |
 | `--output PATH` | where to write `config.json` (overrides `output_file`) |
-| `--links PATH` | read one links file instead of the `sources` folders |
+| `--links PATH` | read one links file instead of the configured `sources` |
 | `--listen-ip IP` | listen address (overrides `listen_ip`) |
 | `--exclude-from-auto PREFIX...` | tag prefixes kept out of `auto-select` |
 | `--warnings-file PATH` | write the collected warnings as JSON |
@@ -248,20 +253,26 @@ preview with the policy-routing switch.
   their names), replaces `links_file` with `sources` and bumps the version. The
   core does not read the old form and says so, so the CLI can never generate from a
   half-migrated document.
-* **Sources are provider folders, not one links file.** `sources` lists folder
-  names under the sources root (`GATEHOUSE_SOURCES`, default
-  `<dir of webui.json>/sources`); the folder name IS the provider name. A folder
-  holds `links.txt` (outbounds), tunnel configs `*.conf` (listed only), or both.
-  The links are merged into one list, and **a provider label appears only when two
-  providers hand out the same name**, so a single-source project keeps its tags and
-  `config.json` stays byte-identical. A collision inside one file is a warning: it
-  is an error in the provider's own file and the owner has to know. On the
-  «Провайдеры» panel the list is edited row by row: a folder is added by picking
-  one found under the root and removed by the button on its own row; the folders
-  are re-read on every render. Clicking a provider opens its contents: a links
-  folder shows the servers it hands out, a tunnels folder shows its `.conf` files,
-  each opening the normalisation preview. No action touches the files on disk:
-  "remove" means "do not read it", never "delete the owner's folder".
+* **A source is an explicit origin, not one shared links file.** `sources` lists
+  objects `{kind, name, path}`: `kind: "links"` is a single FILE of VLESS links
+  (outbounds), `kind: "tunnels"` a DIRECTORY of `*.conf` (listed only, never
+  turned into outbounds). `path` is stored as typed; a relative path resolves
+  against the directory of `webui.json`. The links are merged into one list, and
+  **a provider label appears only when two sources hand out the same name**, so a
+  single-source project keeps its tags and `config.json` stays byte-identical. A
+  collision inside one file is a warning: it is an error in the provider's own
+  file and the owner has to know. On the «Провайдеры» panel the list is edited row
+  by row: a source is added by choosing its TYPE (a Sing-Box links file or an
+  Amnezia tunnels directory), typing the path and the provider name, and removed
+  by the button on its own row. The add is refused with a sentence when the path
+  does not exist or is not what the kind claims — a links source must be a
+  readable file, a tunnels source a directory. Clicking a provider opens the panel
+  named after it: a Sing-Box source shows the servers it hands out, an Amnezia
+  source its `.conf` files, each opening the normalisation preview. No action
+  touches the files on disk: "remove" means "do not read it", never "delete the
+  owner's file". A document written before this form (bare folder names under
+  `GATEHOUSE_SOURCES`) is still read; the editor converts those entries into
+  objects on open and says so.
 * **A tunnel is enabled with «включить», and only then does it become a proxy.**
   The normaliser `src/core/normalize.mjs` is a pure function: it adds `Table = off`,
   drops `DNS =`, and copies `AllowedIPs` plus the obfuscation (`Jc/Jmin/Jmax`,
@@ -543,7 +554,10 @@ against [`src/schemas/webui.schema.json`](src/schemas/webui.schema.json) with
   "version": 2,
   "note": "Reality transport, primary",
   "listen_ip": "10.95.2.1",
-  "sources": ["vpnd", "hidemyname"],
+  "sources": [
+    { "kind": "links", "name": "vpnd", "path": "/var/lib/gatehouse/sources/vpnd/links.txt" },
+    { "kind": "tunnels", "name": "hidemyname", "path": "/var/lib/gatehouse/sources/hidemyname" }
+  ],
   "output_file": "/etc/sing-box/config.json",
   "exclude_from_auto": ["🇷🇺"],
   "log": { "level": "info", "timestamp": true },
@@ -566,9 +580,13 @@ Rules of the format:
   `profiles`, no `defaults`, no `active`. The editor migrates an old-form file and
   keeps a snapshot; the core refuses it with a message naming the editor, so
   generation never runs from a half-migrated document.
-* **`sources` is a list of provider folder names** under the sources root. A folder
-  may hold `links.txt`, `*.conf`, or both; a tunnel config becomes an exit only
-  through a proxy carrying a `tunnel` descriptor (see below).
+* **`sources` is a list of explicit origins**, `{kind, name, path}`. `kind:
+  "links"` is one links file, `kind: "tunnels"` one directory of `*.conf`; `path`
+  is stored as typed (a relative one resolves against the settings directory). A
+  bare string is the legacy form of a provider folder under `GATEHOUSE_SOURCES`
+  and stays readable for a file written by an older build; the editor converts it
+  into an object on open. A tunnel config becomes an exit only through a proxy
+  carrying a `tunnel` descriptor (see below).
 * **`tunnels` lists the enabled tunnels.** Each entry carries `provider`, `file`,
   `name` (human-readable, up to 255 characters), `interface` (the `<file name>.conf`
   of the amnezia directory and the kernel interface, at most 15 characters) and an

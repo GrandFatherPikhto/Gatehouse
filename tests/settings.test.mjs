@@ -314,7 +314,9 @@ test('fixtures: the committed settings.json is schema-valid and complete', () =>
 
   assert.equal(document.version, 2);
   assert.equal(settingsDir, FIXTURES_DIR);
-  assert.deepEqual(settings.sources, ['vpnd']);
+  assert.deepEqual(settings.sources, [
+    {kind: 'links', name: 'vpnd', path: 'sources/vpnd/links.txt'},
+  ]);
   assert.equal(settings.proxies.length, 2);
   assert.deepEqual(settings.exclude_from_auto, ['🇷🇺']);
 });

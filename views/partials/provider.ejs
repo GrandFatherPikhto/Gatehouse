@@ -4,9 +4,10 @@
 <h2><%= panel.title %></h2>
 
 <p>
-  Папка: <code><%= panel.provider.path %></code><br>
-  Содержимое: <%= panel.provider.kind %> · записей: <%= panel.provider.count %> ·
-  изменён: <%= panel.provider.mtime ?? '—' %>
+  Тип: <strong><%= panel.kindLabel %></strong><br>
+  <%= panel.provider.type === 'file' ? 'Файл' : 'Каталог' %>:
+  <code><%= panel.provider.path %></code><br>
+  Записей: <%= panel.provider.count %> · изменён: <%= panel.provider.mtime ?? '—' %>
 </p>
 
 <% if (panel.provider.error) { %>
@@ -80,7 +81,7 @@
      panel.provider.tags.length === 0 &&
      panel.provider.entries.length === 0
    ) { %>
-  <p class="hint">Папка пуста: ни файла ссылок, ни конфигов туннелей.</p>
+  <p class="hint">Источник пуст: ни ссылок, ни конфигов туннелей.</p>
 <% } %>
 
 <p>

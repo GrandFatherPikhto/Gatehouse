@@ -20,11 +20,36 @@
       "minLength": 1
     },
     "sources": {
-      "description": "Provider folders under the sources root (GATEHOUSE_SOURCES, default <dir of webui.json>/sources). The folder name IS the provider name; a folder may hold links.txt, tunnel configs (*.conf), or both.",
+      "description": "Origins the config is built from. An object names ONE explicit origin: kind 'links' is a single file of VLESS links turned into sing-box outbounds, kind 'tunnels' is a directory of AmneziaWG/WireGuard *.conf listed but never turned into outbounds. `path` is stored as typed; a relative path resolves against the directory of webui.json. A bare string is the legacy form of a provider folder under GATEHOUSE_SOURCES and is converted into an object by the editor on open.",
       "type": "array",
       "items": {
-        "type": "string",
-        "minLength": 1
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "name", "path"],
+            "properties": {
+              "kind": {
+                "description": "What the source is: a links file for sing-box, or a directory of tunnel configs for Amnezia.",
+                "enum": ["links", "tunnels"]
+              },
+              "name": {
+                "description": "Provider label: the group heading of the System panel and the suffix of a colliding outbound tag.",
+                "type": "string",
+                "minLength": 1
+              },
+              "path": {
+                "description": "Path of the links file (kind=links) or of the tunnel directory (kind=tunnels). Relative paths resolve against the directory of webui.json.",
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          {
+            "type": "string",
+            "minLength": 1
+          }
+        ]
       }
     },
     "tunnels": {

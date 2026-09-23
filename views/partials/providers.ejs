@@ -1,26 +1,29 @@
-<%# Providers: the folders under the sources root. The folder name IS the provider
-    name; a folder may hold links.txt (turned into outbounds), tunnel configs
-    (*.conf, listed but NEVER turned into outbounds), or both.
-    The list is edited as a LIST — a folder is added from the ones that exist, or
-    removed by the button on its row; the folder on disk is never touched.
-    One provider is exactly one row. %>
+<%# Providers: the origins the config is built from. A source is ONE explicit
+    origin, chosen by the owner:
+      * «Ссылки Sing-Box» — a single file of VLESS links turned into outbounds;
+      * «Туннели Amnezia» — a directory of `*.conf` listed but NEVER turned into
+        outbounds.
+    The path is stored as typed; a relative one resolves against the settings
+    directory. The tool reads the origin and never writes to it: removing an
+    entry means "do not read it", not "delete the owner's files". %>
 <h2><%= panel.title %></h2>
 
 <p class="hint">
-  Корень источников: <code><%= panel.info.root %></code>
-  (переопределяется переменной <code>GATEHOUSE_SOURCES</code>).
-  Новую папку создают на диске; список и содержимое папок перечитываются при
-  каждом открытии вкладки.
+  Источник — это либо <strong>один файл со ссылками</strong> (аутбаунды
+  Sing-Box), либо <strong>каталог конфигов туннелей</strong> Amnezia
+  (<code>*.conf</code>). Путь можно указать абсолютным или относительным — он
+  разрешается от каталога настроек <code><%= panel.baseDir %></code>.
+  Инструмент читает источник и никогда в него не пишет.
 </p>
 
 <h3>Подключённые источники</h3>
 <% if (panel.info.providers.length === 0) { %>
-  <p class="hint">Источники не заданы: добавьте папку ниже.</p>
+  <p class="hint">Источники не заданы: добавьте файл ссылок или каталог туннелей ниже.</p>
 <% } else { %>
   <table class="list">
     <thead>
       <tr>
-        <th>провайдер</th><th>содержимое</th><th>записей</th><th>изменён</th>
+        <th>провайдер</th><th>тип</th><th>путь</th><th>записей</th><th>изменён</th>
         <th>туннели (в конфиг не попадают)</th><th>состояние</th><th></th>
       </tr>
     </thead>
@@ -35,7 +38,8 @@
                hx-swap="innerHTML"
                hx-push-url="true"><code><%= provider.name %></code></a>
           </td>
-          <td><%= provider.kind %></td>
+          <td><%= provider.kindLabel %></td>
+          <td><code><%= provider.path %></code></td>
           <td><%= provider.count %></td>
           <td><%= provider.mtime ?? '—' %></td>
           <td>
@@ -43,9 +47,9 @@
               —
             <% } else { %>
               <% for (const entry of provider.entries) { %>
-                <% const key = `tunnel:${provider.name}/${entry}`; %>
-                <a href="/panel/<%= encodeURIComponent(key) %>"
-                   hx-get="/panel/<%= encodeURIComponent(key) %>"
+                <% const entryKey = `tunnel:${provider.name}/${entry}`; %>
+                <a href="/panel/<%= encodeURIComponent(entryKey) %>"
+                   hx-get="/panel/<%= encodeURIComponent(entryKey) %>"
                    hx-target="#panel"
                    hx-swap="innerHTML"
                    hx-push-url="true"><%= entry %></a><% if (entry !== provider.entries[provider.entries.length - 1]) { %>, <% } %>
@@ -56,7 +60,7 @@
             <% if (provider.error) { %>
               <span class="error"><%= provider.error %></span>
             <% } else { %>
-              ок
+              ✔ ок
             <% } %>
           </td>
           <td>
@@ -73,25 +77,36 @@
 <% } %>
 
 <h3>Добавить источник</h3>
-<% if (panel.available.length === 0) { %>
-  <p class="hint">
-    Под корнем нет папок, которых ещё нет в списке. Создайте папку на диске и
-    нажмите «Перечитать».
-  </p>
-<% } else { %>
-  <form hx-post="/providers" hx-target="#panel" hx-swap="innerHTML" method="post" action="/providers" class="inline">
-    <input type="hidden" name="action" value="add">
-    <label for="source-name">папка</label>
-    <select id="source-name" name="name">
-      <% for (const name of panel.available) { %>
-        <option value="<%= name %>"><%= name %></option>
-      <% } %>
-    </select>
-    <button type="submit">Добавить</button>
-  </form>
-<% } %>
+<p class="hint">
+  Выберите тип источника и укажите путь. Файл ссылок, который прочитался,
+  отмечается галочкой; если файла нет или он не читается — под формой будет
+  ошибка, и в список ничего не попадёт. Для каталога Amnezia читается список
+  <code>*.conf</code> и создаётся панель провайдера.
+</p>
+<form hx-post="/providers" hx-target="#panel" hx-swap="innerHTML" method="post" action="/providers">
+  <input type="hidden" name="action" value="add">
+  <fieldset>
+    <legend>тип источника</legend>
+    <label class="check">
+      <input type="radio" name="kind" value="links" checked>
+      ссылки Sing-Box (файл)
+    </label>
+    <label class="check">
+      <input type="radio" name="kind" value="tunnels">
+      туннели Amnezia (каталог)
+    </label>
+  </fieldset>
+  <label>имя провайдера
+    <input type="text" name="name" maxlength="255" size="30" placeholder="vpnd">
+  </label>
+  <label>путь к файлу или каталогу
+    <input type="text" name="path" maxlength="1024" size="60"
+           placeholder="sources/vpnd/links.txt">
+  </label>
+  <button type="submit">Добавить</button>
+</form>
 <%# The merged outbound list is deliberately NOT shown here: it belongs to the
-    folder that produced it. Open a provider to see the servers that one hands out. %>
+    provider that produced it. Open a provider to see the servers it hands out. %>
 
 <% if (panel.info.warnings.length > 0) { %>
   <h3>Предупреждения</h3>

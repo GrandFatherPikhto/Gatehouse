@@ -200,11 +200,17 @@ function node(key, title, kind, extra = {}) {
  * @returns {string} Empty for a readable folder.
  */
 export function providerDiagnosis(provider) {
+  // The noun follows the shape of the origin: a links file, a tunnels directory,
+  // or a legacy folder under the sources root.
+  const noun =
+    provider.type === 'file' ? ['файл', 'не найден', 'недоступен']
+      : provider.type === 'folder' ? ['папка', 'не найдена', 'недоступна']
+        : ['каталог', 'не найден', 'недоступен'];
   switch (provider.state) {
     case 'missing':
-      return `[!] папка не найдена: ${provider.path}`;
+      return `[!] ${noun[0]} ${noun[1]}: ${provider.path}`;
     case 'unreadable':
-      return `[!] папка недоступна: ${provider.path}`;
+      return `[!] ${noun[0]} ${noun[2]}: ${provider.path}`;
     case 'empty':
       return `[!] пусто: ${provider.path}`;
     default:

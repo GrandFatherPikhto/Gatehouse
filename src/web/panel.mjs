@@ -35,6 +35,27 @@ export const SYSTEM_TABS = Object.freeze(['singbox', 'amnezia']);
 export const BUILTIN_OUTBOUNDS = Object.freeze(['auto-select', 'direct']);
 
 /**
+ * Human name of a source kind, for the Providers panel and the tree: what the
+ * origin FEEDS, not what it holds. `mixed` only ever comes from a legacy folder
+ * that carries `links.txt` and `*.conf` together.
+ *
+ * @param {unknown} kind
+ * @returns {string}
+ */
+export function sourceKindLabel(kind) {
+  switch (kind) {
+    case 'links':
+      return 'Sing-Box';
+    case 'tunnels':
+      return 'Amnezia';
+    case 'mixed':
+      return 'Sing-Box + Amnezia';
+    default:
+      return '—';
+  }
+}
+
+/**
  * Routes of the edit form of a panel, in application order. A panel has ONE form
  * element (`id="panel-form"`) and every «Применить» button on the panel sends it
  * whole, so a panel may legitimately have several routes.
@@ -207,15 +228,28 @@ export function buildPanel(model, key, extra = {}) {
         regeneration: extra.regeneration ?? null,
       };
 
-    case 'providers':
+    case 'providers': {
+      const info = model.sourcesInfo();
       return {
         ...base,
         title: 'Провайдеры',
-        info: model.sourcesInfo(),
-        // Folders that exist under the root but are not listed yet: the "add"
-        // control offers them, so a folder name is picked, never typed.
-        available: model.availableSources(),
+        // The kind label is a presentation decision, added here and not in the
+        // model: the reader reports `links`/`tunnels`, the panel says what they
+        // feed (Sing-Box / Amnezia).
+        info: {
+          ...info,
+          providers: info.providers.map((provider) => ({
+            ...provider,
+            kindLabel: sourceKindLabel(provider.kind),
+          })),
+        },
+        // A relative path resolves against the settings directory, so the form
+        // shows where a bare path would land. The sources root is where a legacy
+        // folder entry used to live.
+        baseDir: model.settingsDir,
+        sourcesRoot: model.resolvedSourcesRoot(),
       };
+    }
 
     case 'provider': {
       const info = model.sourcesInfo();
@@ -225,6 +259,9 @@ export function buildPanel(model, key, extra = {}) {
         ...base,
         title: `Источник: ${name}`,
         provider,
+        // What the origin FEEDS: Sing-Box for a links file, Amnezia for a tunnel
+        // directory. It is a label of the panel, not of the folder.
+        kindLabel: sourceKindLabel(provider.kind),
         // One row per `.conf`: the «включить» mark and the two editable names.
         tunnelRows: model.providerTunnelRows(name),
       };

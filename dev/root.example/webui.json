@@ -3,7 +3,11 @@
   "note": "Anonymised sample of the dev sandbox model.",
   "listen_ip": "127.0.0.1",
   "sources": [
-    "vpnd"
+    {
+      "kind": "links",
+      "name": "vpnd",
+      "path": "sources/vpnd/links.txt"
+    }
   ],
   "output_file": "etc/sing-box/config.json",
   "exclude_from_auto": [
