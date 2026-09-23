@@ -15,8 +15,6 @@
      port: pick('port', stored.port),
      note: pick('note', stored.note ?? ''),
      pinned: ticked('pinned', stored.pinned === true),
-     watch: ticked('watch', stored.watch === true),
-     watch_url: pick('watch_url', stored.watch_url ?? ''),
    }; %>
 <%# The tunnel selector: one `<select>` carrying `provider/file`, plus the
     interface name. An empty select means an ordinary proxy with a server pool.
@@ -55,7 +53,7 @@
   </fieldset>
 
   <fieldset>
-    <legend>Выход и сторож</legend>
+    <legend>Выход</legend>
     <label class="check">
       <input type="checkbox" name="pinned" value="1" <%= proxy.pinned === true ? 'checked' : '' %>>
       выход зафиксирован
@@ -66,24 +64,6 @@
       зафиксирован выход — снимите отметку, если нужен пул», молча список не
       обрезается. Ядро этот ключ отбрасывает: в <code>config.json</code> он не
       попадает. Рядом поле <code>note</code> — там запишите причину закрепления.
-    </p>
-    <label class="check">
-      <input type="checkbox" name="watch" value="1" <%= proxy.watch === true ? 'checked' : '' %>>
-      следить за связью
-    </label>
-    <p class="hint">
-      Сторож проверяет тот же путь, по которому ходит приложение: инбаунд →
-      правило маршрута → пул → сервер. Закрытие соединений затрагивает только этот
-      прокси; перезапуск демона — все шесть сразу. Сам сторож включается общим
-      рубильником в разделе «Сторож».
-    </p>
-    <label for="watch_url">watch_url</label>
-    <input type="text" id="watch_url" name="watch_url" value="<%= proxy.watch_url ?? '' %>" size="60">
-    <p class="hint">
-      Пусто — нейтральная цель <code><%= panel.defaultWatchUrl %></code>, она
-      доказывает живость туннеля и только. Адрес самого сервиса диагностирует
-      точнее, но тогда каждые десять минут с выходного IP владельца к сервису
-      идёт автоматический запрос: по умолчанию такого не делается.
     </p>
   </fieldset>
 

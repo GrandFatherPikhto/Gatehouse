@@ -268,7 +268,6 @@ export function treeSpec(options = {}) {
       missingFull = built.full;
     }
     if (proxy.pinned === true) marks.push('[🔒] выход зафиксирован');
-    if (proxy.watch === true) marks.push('[👁] сторож');
 
     // §5.4: a proxy on a stopped tunnel is a silently dead port. The mark names
     // the consequence — "the port does not work" — not the fact ("the tunnel is
@@ -347,8 +346,9 @@ export function treeSpec(options = {}) {
       node('proxies', `Прокси (${proxyNodes.length})`, 'proxies', {children: proxyNodes}),
       node('routes', `Маршруты (${routeNodes.length})`, 'routes', {children: routeNodes}),
       // The host layer. It edits nothing, so the node carries no stale mark, and
-      // its former children — journal, server test, watchdog — are TABS of this
-      // one panel now (`system:singbox`, `system:amnezia`, `system:watchdog`).
+      // its former children — the journal and the server test — are TABS of this
+      // one panel now (`system:singbox`, `system:amnezia`). The watchdog tab went
+      // away with the watchdog itself.
       node('system', 'Система', 'system'),
     ],
   });

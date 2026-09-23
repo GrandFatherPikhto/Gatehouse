@@ -19,7 +19,6 @@ import express from 'express';
 import {ConfigError} from '../core/errors.mjs';
 import {ProjectModel} from '../model/project.mjs';
 import {restoreLatestConfig, snapshotConfig} from '../model/storage.mjs';
-import {API_SECRET_VAR} from '../core/build.mjs';
 import {
   PRIORITY_LEVELS,
   SystemError,
@@ -36,7 +35,6 @@ import {
   tunnelUnitName,
 } from '../system/index.mjs';
 import {removeTunnelConfig} from '../system/tunnel-file.mjs';
-import {Watchdog} from '../watchdog/watchdog.mjs';
 import {TOKEN_COOKIE, extractToken, tokenMatches} from './auth.mjs';
 import * as forms from './forms.mjs';
 import {
@@ -101,7 +99,6 @@ const ROUTE_FIELDS = Object.freeze({
   '/dns': ['dns'],
   '/output': ['output_file'],
   '/amnezia': ['amnezia_dir'],
-  '/watchdog': ['interval_seconds'],
   '/general': [
     'listen_ip',
     'urltest_url',
@@ -195,48 +192,6 @@ export function createApp(options = {}) {
     // A document migrated by `model.open` is announced once, on the first render.
     migrationNoticeShown: false,
   };
-
-  // The API secret is read from the environment of the process and never from a
-  // request; the panel is only told whether it is present. Both the generator and
-  // the watchdog use the same value.
-  const apiSecret =
-    typeof systemEnv[API_SECRET_VAR] === 'string' ? systemEnv[API_SECRET_VAR] : '';
-
-  /**
-   * Builds the read-only descriptor the watchdog works from. It reads the model,
-   * never writes it: the watchdog has no way to reach `webui.json` at all.
-   *
-   * @returns {Record<string, unknown>}
-   */
-  const watchdogContext = () => {
-    const body = model.body();
-    return {
-      watchdog: body.watchdog,
-      api: {
-        enabled: body.clash_api?.enabled === true,
-        controller: body.clash_api?.controller,
-        secret: apiSecret,
-      },
-      listenIp: model.listenIp,
-      proxies: model.watchedProxies(),
-    };
-  };
-
-  // `options.watchdog` lets a test inject its own object; `null` disables the
-  // background loop entirely. The loop is unref'ed, so it never keeps a process
-  // alive and a short test run never waits for it.
-  const watchdog =
-    options.watchdog !== undefined
-      ? options.watchdog
-      : new Watchdog({env: systemEnv, context: watchdogContext});
-  if (watchdog !== null && options.watchdog === undefined) {
-    try {
-      watchdog.start();
-    } catch {
-      // A broken document must not stop the editor from opening.
-    }
-  }
-  state.watchdog = watchdog;
 
   // ------------------------------------------------------------------
   // Tunnels: runtime state and rights (parts 1 and 2 of the task)
@@ -481,6 +436,21 @@ export function createApp(options = {}) {
       withNotices = {...extra, notice: lines.join(' ')};
     }
 
+    // The fields of the removed Watchdog are still in the FILE until the owner
+    // saves, so the line about them stays on every panel until then. It goes into
+    // the notice channel that already exists — one line, no new UI, and nothing is
+    // rewritten behind the owner's back.
+    if (model.removedNotice !== null) {
+      const previous = withNotices.notice;
+      withNotices = {
+        ...withNotices,
+        notice:
+          typeof previous === 'string' && previous.length > 0
+            ? `${previous} ${model.removedNotice}`
+            : model.removedNotice,
+      };
+    }
+
     // The panel builders get the runtime state of the host layer, not a way to
     // run anything: `buildPanel` only arranges what the routes already did.
     const enriched = {
@@ -497,8 +467,7 @@ export function createApp(options = {}) {
       // Tunnel rows of the System panel. Assembled here, from the cached runtime
       // state and the sudoers rights, so the panel builders stay pure.
       tunnels: tunnelPanelRows(),
-      watchdog: state.watchdog === null ? undefined : state.watchdog.snapshot(),
-      auth: {tokenRequired: token.length > 0, apiSecretPresent: apiSecret.length > 0},
+      auth: {tokenRequired: token.length > 0},
     };
     const resolved = resolvePanel(key, enriched);
     return {
@@ -699,10 +668,6 @@ export function createApp(options = {}) {
       case '/output':
         model.setOutputFile(String(body.output_file ?? '').trim());
         return {applied: true, key: 'output'};
-      case '/watchdog':
-        model.applyWatchdog(forms.parseWatchdogForm(body));
-        model.applyClashApi(forms.parseClashApiForm(body));
-        return {applied: true, key: 'watchdog'};
       case '/general': {
         model.applyGeneral(forms.parseGeneralForm(body));
         return {applied: true, key: 'general'};
@@ -1407,51 +1372,6 @@ export function createApp(options = {}) {
       if (!res.writableEnded) res.end();
     }
   });
-
-  // ------------------------------------------------------------------
-  // Watchdog and the external API
-  // ------------------------------------------------------------------
-  //
-  // The watchdog itself lives in the process and runs on its own clock; these
-  // routes only edit its settings (through the model, like any other form), ask
-  // for one pass right now, or forget the accumulated state. Not one of them lets
-  // the watchdog write the config: they write `webui.json` on the owner's command,
-  // which is a different thing entirely.
-
-  app.post(
-    '/watchdog',
-    mutation('system:watchdog', (req) => {
-      applyEditForm('system', req);
-      return {
-        // The form carries the panel key, so applying the settings keeps the owner
-        // on the tab they were editing instead of dropping them on the first one.
-        key: panelFromBody(req, 'system:watchdog'),
-        notice: 'Настройки сторожа применены — не забудьте сохранить',
-      };
-    }),
-  );
-
-  app.post(
-    '/watchdog/check',
-    mutation('system:watchdog', async () => {
-      const run = await watchdog.checkAll();
-      return {
-        key: 'system:watchdog',
-        notice:
-          run.skipped === 'disabled'
-            ? 'Сторож выключен общим рубильником: проверок не было'
-            : `Проверено прокси: ${run.checked}`,
-      };
-    }),
-  );
-
-  app.post(
-    '/watchdog/reset',
-    mutation('system:watchdog', () => {
-      watchdog.reset();
-      return {key: 'system:watchdog', notice: 'Состояние сторожа сброшено'};
-    }),
-  );
 
   // ------------------------------------------------------------------
   // Fallbacks

@@ -141,17 +141,22 @@ describe('the «Система» tabs (NEW)', () => {
     }
   });
 
-  test('the watchdog tab carries the only edit form of the panel', async () => {
+  test('the removed watchdog tab falls back to the first one, and its routes are gone', async () => {
     const editor = await startEditor();
     try {
+      // A stale bookmark must not render an empty page: an unknown tab name already
+      // means the first tab, and there is no third tab any more.
       const html = await (await fetch(`${editor.base}/panel/system:watchdog`)).text();
 
-      assert.match(html, /class="tab active"[^>]*>Сторож</);
-      assert.match(html, /Общий рубильник/);
-      assert.equal(html.split('id="panel-form"').length - 1, 1, 'exactly one edit form');
-      assert.match(html, /hx-include="#panel-form"/, 'the header Save binds to it');
-      assert.match(html, /name="panel" value="system:watchdog"/);
-      assert.doesNotMatch(html, /hx-post="\/check"/);
+      assert.match(html, /class="tab active"[^>]*>Sing-box</);
+      assert.equal(html.split('id="panel-form"').length - 1, 0, 'no tab has an edit form');
+      assert.doesNotMatch(html, /Сторож/);
+      assert.doesNotMatch(html, /Общий рубильник/);
+
+      // The routes went with the watchdog: 404, not a silent no-op.
+      assert.equal((await post(editor.base, '/watchdog/check')).status, 404);
+      assert.equal((await post(editor.base, '/watchdog', {enabled: '1'})).status, 404);
+      assert.equal((await post(editor.base, '/watchdog/reset')).status, 404);
     } finally {
       await editor.close();
     }
@@ -184,16 +189,6 @@ describe('the «Система» tabs (NEW)', () => {
       await post(editor.base, '/tunnels', GRAZ_MARK);
       const toggled = await post(editor.base, '/tunnel/toggle', {name: 'hmn-graz4', up: '1'});
       assert.equal(pushed(toggled), '/panel/system:amnezia', 'the tunnel belongs to amnezia');
-
-      const applied = await post(editor.base, '/watchdog', {
-        panel: 'system:watchdog',
-        enabled: '1',
-        interval_seconds: '600',
-        failures_before_action: '2',
-        pause_seconds: '1800',
-        max_restarts_per_day: '3',
-      });
-      assert.equal(pushed(applied), '/panel/system:watchdog', 'the form names its own tab');
     } finally {
       await editor.close();
     }

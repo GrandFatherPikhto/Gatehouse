@@ -21,7 +21,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import {hasTableOff} from '../core/normalize.mjs';
+import {tunnelConfigRefusal} from '../core/normalize.mjs';
 
 /** Snapshot prefix separator: `<name>.conf` + `.` + label. */
 const SNAPSHOT_SEPARATOR = '.';
@@ -96,19 +96,61 @@ export function readTunnelConfig(amneziaDir, name) {
 /**
  * The refusal of the start-up fuse, worded by its consequence.
  *
+ * Every wording below names what would have happened, not which rule was broken:
+ * the owner is one click away from losing their own link to the router, so the
+ * message has to say what is at stake. A hook gets its own wording with the line
+ * quoted verbatim — the owner has to see exactly what command was stopped.
+ *
  * It is a refusal and not a warning on purpose: the price of the mistake is the
  * owner's link to the router, so there must be no "start anyway". No flag, no
  * setting and no request may bypass it — see `tunnelAction` of the system layer.
  *
  * @param {string} filePath
+ * @param {{code: string, line: string|null}} refusal Verdict of `tunnelConfigRefusal`.
  * @returns {string}
  */
-export function unsafeTunnelMessage(filePath) {
-  return (
-    'Запуск отменён: этот конфиг уведёт в туннель весь трафик роутера, включая ваше ' +
-    `подключение к нему. В файле ${filePath} нет 'Table = off'. Откройте туннель в ` +
-    '«Провайдерах» и примените нормализованный конфиг.'
-  );
+export function unsafeTunnelMessage(filePath, refusal) {
+  switch (refusal.code) {
+    case 'hook':
+      return (
+        'Запуск отменён: в файле есть команда, которую awg-quick выполнит от root: ' +
+        `\u2039${refusal.line}\u203a (${filePath}). Откройте туннель в «Провайдерах» и ` +
+        'примените нормализованный конфиг: строки-команды он удаляет.'
+      );
+    case 'saveconfig':
+      return (
+        'Запуск отменён: этот конфиг разрешает awg-quick переписать себя от root ' +
+        `(\u2039${refusal.line}\u203a в ${filePath}). Откройте туннель в «Провайдерах» и ` +
+        'примените нормализованный конфиг: строку SaveConfig он удаляет.'
+      );
+    case 'table-value':
+      return (
+        'Запуск отменён: этот конфиг уведёт в туннель весь трафик роутера, включая ваше ' +
+        `подключение к нему. В файле ${filePath} строка \u2039${refusal.line}\u203a — awg-quick ` +
+        "берёт последнее значение Table, а не 'off'. Откройте туннель в «Провайдерах» и " +
+        'примените нормализованный конфиг.'
+      );
+    case 'interface-header':
+      return (
+        'Запуск отменён: этот конфиг уведёт в туннель весь трафик роутера, включая ваше ' +
+        `подключение к нему. В файле ${filePath} заголовок секции написан как ` +
+        `\u2039${refusal.line}\u203a, а awg-quick ищет ровно [Interface]. Откройте туннель в ` +
+        '«Провайдерах» и примените нормализованный конфиг.'
+      );
+    case 'interface-sections':
+      return (
+        'Запуск отменён: этот конфиг уведёт в туннель весь трафик роутера, включая ваше ' +
+        `подключение к нему. В файле ${filePath} больше одной секции [Interface], и ` +
+        'awg-quick учтёт все: какая из них задаёт Table, не определить. Такой файл кладут ' +
+        'руками — разберите его и примените нормализованный конфиг.'
+      );
+    default:
+      return (
+        'Запуск отменён: этот конфиг уведёт в туннель весь трафик роутера, включая ваше ' +
+        `подключение к нему. В файле ${filePath} нет 'Table = off'. Откройте туннель в ` +
+        '«Провайдерах» и примените нормализованный конфиг.'
+      );
+  }
 }
 
 /**
@@ -118,6 +160,9 @@ export function unsafeTunnelMessage(filePath) {
  * The check is done at start time, not only at write time: between writing and
  * starting the file may have been replaced, dropped in by hand or left over from
  * earlier times. A missing file is a refusal too — there is nothing to start.
+ *
+ * Six reasons to refuse, one pass over the text, one parse — the same parse the
+ * normaliser uses, so the two can never disagree (see `tunnelConfigRefusal`).
  *
  * @param {string} amneziaDir
  * @param {string} name
@@ -133,8 +178,14 @@ export function tunnelStartupGuard(amneziaDir, name) {
       reason: `Запуск отменён: файл ${file.path} не найден — запускать нечего.`,
     };
   }
-  if (!hasTableOff(file.text ?? '')) {
-    return {safe: false, path: file.path, exists: true, reason: unsafeTunnelMessage(file.path)};
+  const refusal = tunnelConfigRefusal(file.text ?? '');
+  if (refusal !== null) {
+    return {
+      safe: false,
+      path: file.path,
+      exists: true,
+      reason: unsafeTunnelMessage(file.path, refusal),
+    };
   }
   return {safe: true, path: file.path, exists: true, reason: null};
 }

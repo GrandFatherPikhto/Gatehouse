@@ -20,7 +20,7 @@ import path from 'node:path';
 
 import Ajv from 'ajv';
 
-import {API_SECRET_VAR, buildConfig} from './build.mjs';
+import {buildConfig} from './build.mjs';
 import {ConfigError, DEFAULT_SETTINGS_FILE, isMapping} from './errors.mjs';
 import {readSources, resolveSourcesRoot} from './sources.mjs';
 import {parseLinks} from './vless.mjs';
@@ -41,6 +41,17 @@ const validateAgainstSchema = ajv.compile(SCHEMA);
 export const LEGACY_KEYS = Object.freeze(['profiles', 'defaults', 'active', 'links_file']);
 
 /**
+ * Top-level keys that belonged to the Watchdog, which left the project (part B of
+ * techdocs/plan_2026_09_23_gatehouse_fuse_and_no_watchdog.md). The live
+ * `webui.json` still carries them and the schema is strict, so they are dropped
+ * before validation instead of breaking the load.
+ */
+export const REMOVED_KEYS = Object.freeze(['watchdog', 'clash_api']);
+
+/** Keys of a proxy that the Watchdog wrote, dropped with the rest. */
+export const REMOVED_PROXY_KEYS = Object.freeze(['watch', 'watch_url']);
+
+/**
  * True for a version-1 document with the profile envelope. The editor uses the
  * same predicate to decide whether a file has to be migrated.
  *
@@ -49,6 +60,56 @@ export const LEGACY_KEYS = Object.freeze(['profiles', 'defaults', 'active', 'lin
  */
 export function isLegacyDocument(data) {
   return isMapping(data) && LEGACY_KEYS.some((key) => Object.hasOwn(data, key));
+}
+
+/**
+ * Drops the fields of the removed Watchdog, IN PLACE, and returns their names.
+ *
+ * One function for both entry points — `loadSettings` here and `ProjectModel.open`
+ * — so the editor and `tools/generate.mjs` can never disagree about which fields
+ * are stale (part B.2 of the task). Nothing else is touched: the document is not
+ * rewritten, `version` is not bumped, and the fields disappear from the file only
+ * on the next ordinary save.
+ *
+ * @param {unknown} data Parsed document, modified in place.
+ * @returns {string[]} Names of the dropped fields, in document order.
+ */
+export function dropRemovedSettings(data) {
+  if (!isMapping(data)) return [];
+
+  const dropped = [];
+
+  for (const key of REMOVED_KEYS) {
+    if (!Object.hasOwn(data, key)) continue;
+    delete data[key];
+    dropped.push(key);
+  }
+
+  if (Array.isArray(data.proxies)) {
+    data.proxies.forEach((proxy, index) => {
+      if (!isMapping(proxy)) return;
+      for (const key of REMOVED_PROXY_KEYS) {
+        if (!Object.hasOwn(proxy, key)) continue;
+        delete proxy[key];
+        dropped.push(`proxies[${index}].${key}`);
+      }
+    });
+  }
+
+  return dropped;
+}
+
+/**
+ * The one line the editor shows and `tools/generate.mjs` prints to stderr.
+ *
+ * @param {string[]} dropped
+ * @returns {string}
+ */
+export function removedSettingsMessage(dropped) {
+  return (
+    `убраны устаревшие поля Сторожа: ${dropped.join(', ')}; ` +
+    'сохраните, чтобы они исчезли из файла'
+  );
 }
 
 /**
@@ -82,9 +143,11 @@ export function validateSettings(data, source = DEFAULT_SETTINGS_FILE) {
  * Reference: `load_settings` (which threw ConfigError for a missing file).
  *
  * @param {string} settingsPath
+ * @param {{dropped?: string[]}} [options] `dropped` collects the names of the
+ *   removed fields, for the caller that has to report them.
  * @returns {Record<string, unknown>} Parsed settings.
  */
-export function loadSettings(settingsPath) {
+export function loadSettings(settingsPath, options = {}) {
   if (!fs.existsSync(settingsPath)) {
     throw new ConfigError(`файл настроек ${settingsPath} не найден`);
   }
@@ -102,6 +165,13 @@ export function loadSettings(settingsPath) {
     throw new ConfigError(`ошибка чтения JSON ${settingsPath}: ${error.message}`);
   }
 
+  // The fields of the removed Watchdog go BEFORE the schema sees them: the owner's
+  // file on the router still carries `watchdog`, `clash_api` and the per-proxy
+  // `watch` / `watch_url`, and the schema is strict. The file itself is not
+  // rewritten — the fields disappear on the next ordinary save.
+  const dropped = dropRemovedSettings(data);
+  if (Array.isArray(options.dropped)) options.dropped.push(...dropped);
+
   validateSettings(data, settingsPath);
   return data;
 }
@@ -116,10 +186,13 @@ export function loadSettings(settingsPath) {
  * gone there is nothing to merge, only noise to drop.
  *
  * @param {string} settingsPath
- * @returns {{settings: Record<string, unknown>, settingsDir: string, raw: Record<string, unknown>}}
+ * @returns {{settings: Record<string, unknown>, settingsDir: string,
+ *   raw: Record<string, unknown>, dropped: string[]}} `dropped` names the fields
+ *   of the removed Watchdog that were in the file.
  */
 export function loadEffectiveSettings(settingsPath) {
-  const raw = loadSettings(settingsPath);
+  const dropped = [];
+  const raw = loadSettings(settingsPath, {dropped});
   const settings = {};
 
   for (const [key, value] of Object.entries(raw)) {
@@ -139,6 +212,7 @@ export function loadEffectiveSettings(settingsPath) {
     settings,
     settingsDir: path.dirname(path.resolve(settingsPath)),
     raw,
+    dropped,
   };
 }
 
@@ -187,12 +261,16 @@ export function writeJson(filePath, config) {
  * Reference: `generate_config_file` — same override order, same error cases.
  *
  * @param {string} settingsPath
- * @param {{output?: string, links?: string, listenIp?: string, excludeFromAuto?: unknown[], warnings?: string[], apiSecret?: string}} [options]
+ * @param {{output?: string, links?: string, listenIp?: string, excludeFromAuto?: unknown[], warnings?: string[], runningTunnels?: Set<string>}} [options]
  * @returns {{outputFile: string, stats: Record<string, unknown>, warnings: string[], config: Record<string, unknown>}}
  */
 export function generateConfigFile(settingsPath, options = {}) {
   const warnings = options.warnings || [];
-  const {settings, settingsDir} = loadEffectiveSettings(settingsPath);
+  const {settings, settingsDir, dropped} = loadEffectiveSettings(settingsPath);
+
+  // The fields the Watchdog left behind are named in stderr, and generation goes
+  // on: the owner has to be told, but a stale field is not a reason to fail.
+  if (dropped.length > 0) warnings.push(removedSettingsMessage(dropped));
 
   const outputFile = resolvePath(
     settingsDir,
@@ -210,15 +288,10 @@ export function generateConfigFile(settingsPath, options = {}) {
       : {...settings, exclude_from_auto: override};
 
   const outbounds = readOutbounds(settings, settingsDir, options.links, warnings);
-  // The API secret lives in the environment and is looked up here, in the one
-  // place every caller (CLI and web editor) goes through. `options.apiSecret` is
-  // the injection point for a test; the environment is what a service uses.
-  const apiSecret = options.apiSecret ?? process.env[API_SECRET_VAR] ?? '';
   // `runningTunnels` is the set of tunnel interfaces the caller found up in
   // systemd. It only feeds the §5.4 warning about a proxy on a stopped tunnel;
   // `undefined` means "not asked", which adds no warning.
   const [config, stats] = buildConfig(effective, outbounds, listenIp, warnings, {
-    apiSecret,
     runningTunnels: options.runningTunnels,
   });
   writeJson(outputFile, config);

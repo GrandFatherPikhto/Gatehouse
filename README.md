@@ -22,12 +22,10 @@ maintains that settings file. It is built in three stages:
   command, and it always uses `execFile`/`spawn` with an argument array.
   [`deploy/`](deploy/README.md:1) holds the unit, the sudoers rule, the polkit
   alternative and the order of deployment as ready-to-apply files.
-* **continuation — a pinned exit and a liveness watchdog**: a `pinned` flag on a
-  proxy forbids a pool, and a watchdog checks each `watch: true` proxy through its
-  own inbound, closes that proxy's connections on a failure and — only with the
-  second-rung switch on — restarts the daemon. Implemented:
-  [`src/watchdog/watchdog.mjs`](src/watchdog/watchdog.mjs:1) and
-  [`src/watchdog/clash.mjs`](src/watchdog/clash.mjs:1).
+* **continuation — a pinned exit**: a `pinned` flag on a proxy forbids a pool, so an
+  exit whose geography the service on the far end watches cannot be moved by an
+  accidental save. The background liveness watchdog and the external HTTP API of the
+  daemon were removed together — see below.
 * **tunnel lifecycle — enable, file, unit, exit**: a tunnel stops being a picture.
   Ticking «включить» next to a `.conf` in «Провайдеры» normalises the config and
   writes `<file name>.conf` into the amnezia directory, recording the two names in
@@ -217,7 +215,6 @@ from a request:
 | `GATEHOUSE_SINGBOX` | `/usr/local/bin/sing-box` | binary used by `check` and `tools fetch` |
 | `GATEHOUSE_SYSTEMCTL` | `/usr/bin/systemctl` | `systemctl`; this path must match the sudoers rule |
 | `GATEHOUSE_JOURNALCTL` | `/usr/bin/journalctl` | `journalctl` |
-| `GATEHOUSE_CURL` | `/usr/bin/curl` | binary the watchdog probes an inbound with |
 | `GATEHOUSE_SUDO` | `/usr/bin/sudo` | `sudo`; the value `none` calls `systemctl` directly (the polkit variant) |
 | `GATEHOUSE_UNIT` | `sing-box` | unit name |
 | `GATEHOUSE_AMNEZIA_DIR` | `/etc/amnezia/amneziawg` | fallback directory of the applied tunnel configs; the `amnezia_dir` field of «Настройки Amnezia» wins, this value is used when it is empty |
@@ -226,7 +223,6 @@ from a request:
 | `GATEHOUSE_TEST_URL` | `https://ipinfo.io` | target of the outbound test |
 | `GATEHOUSE_TEST_TIMEOUT` | `8000` | timeout of one outbound test, ms |
 | `GATEHOUSE_TEST_CONCURRENCY` | `4` | outbound tests running at once |
-| `GATEHOUSE_API_SECRET` | *(empty)* | secret of `experimental.clash_api`. **Never stored in `webui.json`**; the generator refuses to enable the API without it |
 
 The path of the settings file comes from the environment and from nowhere else.
 There is deliberately no "open file" box in the UI: a path arriving from the
@@ -234,8 +230,8 @@ browser at a process that writes files is a path traversal waiting to happen.
 
 One tree node per screen: Провайдеры (source folders and their tunnels), Настройки —
 a group with two children, Прокси → tag, Маршруты → name, and Система, which is ONE
-panel with three tabs: Sing-box (schema check, daemon restart, rollback, the journal
-and the server test), Amnezia (the tunnel rows grouped by provider) and Сторож. A tab
+panel with two tabs: Sing-box (schema check, daemon restart, rollback, the journal
+and the server test) and Amnezia (the tunnel rows grouped by provider). A tab
 is carried by the panel key (`system:amnezia`), so it is a real address that can be
 bookmarked and works without script. «Настройки Sing-Box» collects every sing-box
 setting on one page (the old Общие, DNS and Вывод); «Настройки Amnezia» holds the
@@ -445,13 +441,34 @@ The generator accepts an optional `tunnelStates`/`runningTunnels` argument that
 only feeds the §5.4 warning; when it is absent the core invents no warning. All of
 this is additive: without a tunnel proxy the output is byte-identical to before.
 
-## Pinned exit, external API and the watchdog
+### Before a tunnel is started: the fuse
+
+Starting a tunnel from the editor (`enable --now`, and the restart button) is
+refused unless the config on disk says the right thing by the very rules `awg-quick`
+uses to read it — the comment is cut at `#`, keys are compared without case, and a
+repeated key keeps its LAST value:
+
+* exactly one `[Interface]` section, and written exactly like that;
+* at least one `table` key in it, and every one of them `off`;
+* no `preup`, `postup`, `predown` or `postdown` line — except the exact
+  `PostUp`/`PreDown` pair the normaliser writes for policy routing
+  (`ip rule add|del from <IPv4> table 200`);
+* no `saveconfig` with anything but `false`.
+
+A provider file with `PostUp = curl … | sh` is refused with that line quoted in
+full: `awg-quick` runs hooks through bash **as root**, so a file from a provider is
+a script. There is no "start anyway" flag, and stopping a tunnel is never blocked.
+For the same reason the normaliser deletes the provider's hooks and `SaveConfig`,
+and leaves exactly one `Table = off` in `[Interface]` — the fuse and the normaliser
+share one parse, so a config the normaliser accepted always passes the fuse.
+
+## Pinned exit
 
 The owner's channel is throttled by DPI now and then: connections to the server
 stick, and a restart helps — **on the same server**. Which server is not a free
 choice: several proxies are deliberately glued to one country, because the service
 on the far end watches where the login comes from. `claude-http` is fixed to
-`🇨🇾 Cyprus - Limassol`, and the tool now defends that on two levels.
+`🇨🇾 Cyprus - Limassol`, and the tool defends that on its own.
 
 * **`pinned: true` on a proxy forbids a pool.** The proxy form carries «выход
   зафиксирован»; with it on, a save that would leave two or more servers is refused
@@ -463,48 +480,15 @@ on the far end watches where the login comes from. `claude-http` is fixed to
   does not change — a test asserts that. This is protection from the owner's own
   future slip, not a sing-box mechanism: from the outside a pinned proxy cannot be
   moved anyway.
-* **The external HTTP API is opt-in and loopback only.** `clash_api` in
-  `webui.json` is off by default. When it is on, the generator adds
-  `experimental.clash_api` with `external_controller` and a secret; with it off the
-  output stays byte-identical to the reference. `external_controller` may only name
-  `127.0.0.1` — on the router the WAN address lives on the same host, and an open
-  API is full control of the daemon from the internet — and the secret comes from
-  `GATEHOUSE_API_SECRET`, never from `webui.json`, which would put it into the
-  snapshots and the backups. An enabled API with an empty secret is a refusal with
-  a sentence, like the token rule above. This is the first deliberate divergence
-  from the Python reference, which cannot emit such a block.
-* **The watchdog checks through the inbound.** It runs `curl -x http://…` (or
-  `socks5h://…` for a socks inbound) against the local inbound of a proxy, because
-  that is the road the application takes: inbound → route rule → pool → server.
-  `tools fetch` checks an outbound only and would walk past a problem anywhere else.
-  The default target is `https://www.gstatic.com/generate_204` — a neutral endpoint
-  that exists for liveness checks and has no quota — not `ipinfo.io`, which is an
-  API with a monthly limit and is the target of the **manual** server test, where
-  seeing the city is the point. A target can be set per proxy next to `watch`; the
-  hint next to the field states the trade plainly: a service address diagnoses
-  better but puts an automatic request from the owner's exit IP on a fixed schedule.
-  By default that does not happen.
-* **The ladder and its fuses.** After two consecutive failures it closes the
-  connections of **that** proxy only, through `GET /connections` + `DELETE
-  /connections/<id>`; if the next check fails again it restarts the daemon, and only
-  with the second-rung switch on. The second rung is global: it drops the
-  connections of every proxy at once, and the panel says so. `api group select` is
-  never used — moving a pinned proxy to another server is exactly what must not
-  happen. The fuses: a 10-minute interval, two failures before acting, a 30-minute
-  pause between actions on one proxy, at most three restarts a day and then «сдаюсь»
-  until the owner resets it, a global switch (off means nothing runs even for a
-  `watch: true` proxy), and `watch: true` which is off by default.
-* **The watchdog cannot write the config.** It lives in the editor process, outside
-  `src/system/`, and its only powers are closing connections and restarting the
-  daemon; it reads the settings and never writes `webui.json` or `config.json`. The
-  chosen server lives in the config, so a watchdog that cannot touch the config
-  cannot move the exit under any circumstances — a test checks the hashes of both
-  files before and after a full pass. Every decision is logged (the service writes
-  to journald) and kept in a 20-event history in the panel: without it the watchdog
-  is a black box doing something at night. The second rung is off until the owner's
-  spike confirms that closing connections without a restart does not restore the
-  link; the commands for that spike are in
-  [`techdocs/done_2026_09_14_pinned_exit_and_watchdog.md`](techdocs/done_2026_09_14_pinned_exit_and_watchdog.md).
+
+The liveness watchdog and the external HTTP API of the daemon (`clash_api`) were
+**removed** from the project: a background loop that restarts the daemon on a clock
+was judged a bigger risk than the problem it solved, and nothing replaced it. A
+`webui.json` that still carries `watchdog`, `clash_api` or a per-proxy `watch` /
+`watch_url` loads normally: those fields are dropped before validation, named in one
+line in the editor — and in the `stderr` of `tools/generate.mjs` — and leave the file
+on the next ordinary save. See
+[`techdocs/plan_2026_09_23_gatehouse_fuse_and_no_watchdog.md`](techdocs/plan_2026_09_23_gatehouse_fuse_and_no_watchdog.md).
 
 ## Authentication and security
 
@@ -592,17 +576,17 @@ Rules of the format:
   default (`🇷🇺`), shown checked.
 * **`note` is a comment for humans** — in a profile and in a proxy. The core
   ignores it and it never reaches `config.json`.
-* **`pinned`, `watch` and `watch_url` on a proxy, and the `watchdog` section, are
-  editor-only.** The core drops them, so `config.json` is unaffected; the model
-  enforces the pinned rule and the watchdog reads the section.
+* **`pinned` on a proxy is editor-only.** The core drops it, so `config.json` is
+  unaffected; the rule "a pinned proxy has at most one server" is enforced by the
+  model.
 * **`tunnel` on a proxy is a real descriptor, not a comment.** It carries
   `provider`, `file` and `interface`; such a proxy may not list `servers` (the
   model and the core both refuse the combination — one tunnel, one exit) and the
   generator emits an inbound plus a `direct` outbound with `bind_interface`. The
   proxy tag names the outbound; the inbound is `<tag>-in`.
-* **`clash_api` is the one section that reaches `config.json`.** Off by default;
-  when on it becomes `experimental.clash_api`. The secret is deliberately not a key
-  of the file — it comes from the environment.
+* **`version` does not move when fields leave the file.** The shape of the document
+  does not change — only optional keys go — so `version` stays `2`, and the file is
+  rewritten by the first ordinary save, with a snapshot.
 * **proxy types are `socks`, `http`, `mixed`**, declared once in
   [`src/core/errors.mjs`](src/core/errors.mjs:1) (`PROXY_TYPES`) and repeated in
   the schema `enum`; a test fails if the two ever drift apart.
@@ -646,10 +630,8 @@ placeholders, so the golden file carries no secrets.
 | [`src/web/app.mjs`](src/web/app.mjs:1) | Express app: routes, form parsing, fragments |
 | [`src/web/server.mjs`](src/web/server.mjs:1) | `npm start`: environment, listen address |
 | [`src/web/panel.mjs`](src/web/panel.mjs:1) | view models handed to the templates |
-| [`src/system/index.mjs`](src/system/index.mjs:1) | system boundary: `checkConfig`, `restartSingBox`, `tailJournal`, `testOutbound`, `testOutbounds`, `testInbound`, `geositeLookup`, the tunnel verbs `tunnelState`/`enableTunnel`/`disableTunnel`/`restartTunnel` and the sudoers reader |
-| [`src/system/tunnel-file.mjs`](src/system/tunnel-file.mjs:1) | applying a normalised tunnel config: 0600 write, snapshot only on change, «изменений нет» |
-| [`src/watchdog/watchdog.mjs`](src/watchdog/watchdog.mjs:1) | liveness watchdog: fuses, the two-rung ladder, the 20-event history |
-| [`src/watchdog/clash.mjs`](src/watchdog/clash.mjs:1) | Clash-compatible HTTP API client: list and close connections of one inbound |
+| [`src/system/index.mjs`](src/system/index.mjs:1) | system boundary: `checkConfig`, `restartSingBox`, `tailJournal`, `testOutbound`, `testOutbounds`, `geositeLookup`, the tunnel verbs `tunnelState`/`enableTunnel`/`disableTunnel`/`restartTunnel` and the sudoers reader |
+| [`src/system/tunnel-file.mjs`](src/system/tunnel-file.mjs:1) | applying a normalised tunnel config: 0600 write, snapshot only on change, «изменений нет», the start-up fuse |
 | [`src/web/auth.mjs`](src/web/auth.mjs:1) | token transport, loopback check, the startup refusal |
 | [`deploy/`](deploy/README.md:1) | systemd unit, sudoers and polkit variants, deployment notes |
 | [`views/`](views/layout.ejs:1), [`public/`](public/app.css:1) | EJS templates, stylesheet, favicon, vendored htmx |

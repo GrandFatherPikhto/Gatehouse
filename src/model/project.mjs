@@ -27,15 +27,17 @@ import path from 'node:path';
 
 import {ConfigError, DEFAULT_EXCLUDE, PROXY_TYPES, isMapping} from '../core/errors.mjs';
 import {
+  dropRemovedSettings,
   generateConfigFile,
   isLegacyDocument,
+  removedSettingsMessage,
   resolvePath,
   validateSettings,
 } from '../core/settings.mjs';
 import {
-  hasTableOff,
   normalizeTunnel,
   suggestTunnelName,
+  tunnelConfigRefusal,
   validateInterfaceName,
   validateTunnelLabel,
 } from '../core/normalize.mjs';
@@ -48,7 +50,6 @@ import {
   tunnelConfigPath,
 } from '../system/tunnel-file.mjs';
 import {asList, isTunnelProxy, requireMapping, urltestBlock, validateProxies} from '../core/validate.mjs';
-import {normalizeClashApi, normalizeProxy, normalizeWatchdog} from '../watchdog/watchdog.mjs';
 import {staleMap, treeSpec as buildTree} from './stale.mjs';
 import {
   DEFAULT_SNAPSHOT_KEEP,
@@ -327,6 +328,15 @@ export class ProjectModel {
      * @type {{snapshot: string|null, warnings: string[]}|null}
      */
     this.lastMigration = null;
+    /**
+     * Names of the fields of the removed Watchdog that were in the file at load
+     * time. The web layer shows one line about them while they are still listed
+     * here; a save clears the list, because after a save they are gone from the
+     * file and the line would be a lie.
+     *
+     * @type {string[]}
+     */
+    this.lastRemoved = [];
     this.#dirty = false;
     if (options.path) this.open(options.path);
   }
@@ -337,6 +347,19 @@ export class ProjectModel {
   /** True when the in-memory document differs from the file on disk. */
   get dirty() {
     return this.#dirty;
+  }
+
+  /**
+   * The one line the editor shows about the fields of the removed Watchdog, or
+   * `null` when the loaded file had none.
+   *
+   * It lives until a save on purpose: the fields are still in the file until then,
+   * and the line says so. After a save the list is empty and the line is gone.
+   *
+   * @type {string|null}
+   */
+  get removedNotice() {
+    return this.lastRemoved.length === 0 ? null : removedSettingsMessage(this.lastRemoved);
   }
 
   /** Marks the document as changed (reference: `mark_dirty`). */
@@ -374,6 +397,7 @@ export class ProjectModel {
     this.document = newDocument();
     this.path = target ? path.resolve(target) : null;
     this.lastMigration = null;
+    this.lastRemoved = [];
     this.markClean();
     return this.document;
   }
@@ -396,6 +420,9 @@ export class ProjectModel {
 
     if (isLegacyDocument(raw)) {
       const {document, warnings} = migrateLegacyDocument(raw, resolved);
+      // A version-1 file kept the Watchdog fields per profile, so the migration
+      // may carry them along: they are dropped from its RESULT as well.
+      this.lastRemoved = dropRemovedSettings(document);
       validateSettings(document, resolved);
       const snapshot = takeSnapshot(resolved, this.stateDir, {keep: this.snapshotKeep});
       writeAtomic(resolved, canonicalJson(document));
@@ -405,6 +432,10 @@ export class ProjectModel {
       };
       this.document = document;
     } else {
+      // Dropped BEFORE validation, through the same function the core uses, so the
+      // editor and `tools/generate.mjs` agree on what is stale. In place, and
+      // without rewriting the file: the fields leave it on the next ordinary save.
+      this.lastRemoved = dropRemovedSettings(raw);
       validateSettings(raw, resolved);
       this.document = raw;
       this.lastMigration = null;
@@ -441,6 +472,9 @@ export class ProjectModel {
 
     const snapshot = takeSnapshot(this.path, this.stateDir, {keep: this.snapshotKeep});
     writeAtomic(this.path, canonicalJson(this.document));
+    // Whatever the Watchdog left behind is gone from the file now, so the line the
+    // editor shows about it must go as well.
+    this.lastRemoved = [];
     this.markClean();
     return {
       path: this.path,
@@ -858,75 +892,6 @@ export class ProjectModel {
   }
 
   // ------------------------------------------------------------------
-  // Watchdog and the external API of the daemon
-  //
-  // Both sections are ordinary settings of the document: the owner edits them
-  // through a form, and the watchdog process only ever READS them. That is the
-  // point of the rule — a watchdog that cannot write the config cannot move a
-  // pinned exit, whatever it decides to do at night.
-  // ------------------------------------------------------------------
-
-  /**
-   * The `watchdog` section with every default filled in.
-   *
-   * @returns {Record<string, unknown>}
-   */
-  watchdogValues() {
-    return normalizeWatchdog(this.document.watchdog);
-  }
-
-  /**
-   * Writes the watchdog form into the document, field by field.
-   *
-   * @param {{enabled?: boolean, interval_seconds?: number, failures_before_action?: number,
-   *   pause_seconds?: number, max_restarts_per_day?: number, restart_enabled?: boolean}} values
-   */
-  applyWatchdog(values = {}) {
-    if (!isMapping(this.document.watchdog)) this.document.watchdog = {};
-    const body = this.document.watchdog;
-    for (const key of Object.keys(values)) {
-      if (values[key] !== undefined) body[key] = values[key];
-    }
-    this.markDirty();
-  }
-
-  /**
-   * The `clash_api` section with every default filled in.
-   *
-   * @returns {Record<string, unknown>}
-   */
-  clashApiValues() {
-    return normalizeClashApi(this.document.clash_api);
-  }
-
-  /**
-   * Writes the API form into the document. The SECRET is deliberately not a
-   * field here: it comes from `GATEHOUSE_API_SECRET` and never lands in
-   * `webui.json`, its snapshots or a backup.
-   *
-   * @param {{enabled?: boolean, controller?: string}} values
-   */
-  applyClashApi(values = {}) {
-    if (!isMapping(this.document.clash_api)) this.document.clash_api = {};
-    const body = this.document.clash_api;
-    for (const key of Object.keys(values)) {
-      if (values[key] !== undefined) body[key] = values[key];
-    }
-    this.markDirty();
-  }
-
-  /**
-   * Every proxy of the document in the shape the watchdog uses.
-   *
-   * @returns {Array<Record<string, unknown>>}
-   */
-  watchedProxies() {
-    return this.proxies()
-      .filter((proxy) => isMapping(proxy))
-      .map((proxy) => normalizeProxy(proxy));
-  }
-
-  // ------------------------------------------------------------------
   // DNS  (a JSON text field on purpose: the schema moves too fast)
   // ------------------------------------------------------------------
 
@@ -1053,8 +1018,6 @@ export class ProjectModel {
       tunnel: candidate.tunnel,
       note: candidate.note,
       pinned: candidate.pinned,
-      watch: candidate.watch,
-      watch_url: candidate.watch_url,
     });
     this.#assertPinned(entry);
     const error = this.validateProxyCandidate(entry, null);
@@ -1526,10 +1489,17 @@ export class ProjectModel {
         ? stored?.policy_routing === true
         : options.policyRouting === true;
 
+    // The invariant of §A.4 checked at the only moment it can be: the normalised
+    // text goes to disk only if it passes the same fuse that will later guard the
+    // start of the unit. A normaliser that accepted something the fuse refuses
+    // cannot write that file — and the refusal says which reason fired.
     const preview = this.tunnelPreview(provider, file, {name: iface, label, policyRouting});
-    if (!hasTableOff(preview.text)) {
+    const refusal = tunnelConfigRefusal(preview.text);
+    if (refusal !== null) {
       throw new ConfigError(
-        `нормализованный конфиг туннеля '${label}' не содержит 'Table = off': записывать его нельзя`,
+        `нормализованный конфиг туннеля '${label}' не проходит предохранитель ` +
+          `(${refusal.code}${refusal.line === null ? '' : `: ${refusal.line}`}): ` +
+          'записывать его нельзя',
       );
     }
 
@@ -1848,15 +1818,14 @@ export class ProjectModel {
   }
 
   /**
-   * Normalises a proxy into the shape the core expects: `servers`, `note`,
-   * `pinned`, `watch` and `watch_url` are only written when they carry something,
-   * which keeps `webui.json` free of empty noise and keeps an untouched save a
-   * no-op. Reference: `upsert_proxy` (the three new keys are editor-only and never
-   * reach `config.json` — `validateProxies` of the core drops them).
+   * Normalises a proxy into the shape the core expects: `servers`, `note` and
+   * `pinned` are only written when they carry something, which keeps `webui.json`
+   * free of empty noise and keeps an untouched save a no-op. Reference:
+   * `upsert_proxy` (`pinned` is editor-only and never reaches `config.json` —
+   * `validateProxies` of the core drops it).
    *
    * @param {{tag?: unknown, type?: unknown, port?: unknown, servers?: unknown,
-   *   tunnel?: unknown, note?: unknown, pinned?: unknown, watch?: unknown,
-   *   watch_url?: unknown}} candidate
+   *   tunnel?: unknown, note?: unknown, pinned?: unknown}} candidate
    * @returns {Record<string, unknown>}
    */
   #proxyEntry(candidate) {
@@ -1893,10 +1862,6 @@ export class ProjectModel {
       entry.note = candidate.note;
     }
     if (candidate.pinned === true) entry.pinned = true;
-    if (candidate.watch === true) entry.watch = true;
-    if (typeof candidate.watch_url === 'string' && candidate.watch_url.length > 0) {
-      entry.watch_url = candidate.watch_url;
-    }
     return entry;
   }
 

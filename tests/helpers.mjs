@@ -172,7 +172,6 @@ export function fakeSystemEnv(overrides = {}) {
     GATEHOUSE_SINGBOX: path.join(bin, 'sing-box'),
     GATEHOUSE_SYSTEMCTL: path.join(bin, 'systemctl'),
     GATEHOUSE_JOURNALCTL: path.join(bin, 'journalctl'),
-    GATEHOUSE_CURL: path.join(bin, 'curl'),
     GATEHOUSE_SUDO: path.join(bin, 'systemctl'),
     GATEHOUSE_UNIT: 'sing-box',
     GATEHOUSE_TEST_URL: 'https://ipinfo.io',

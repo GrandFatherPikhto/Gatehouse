@@ -3,7 +3,8 @@
 // The defect: the header button posted only `panel` to `/save`, so a checkbox or a
 // field that had not been sent through "Применить" was thrown away while the notice
 // still said «Сохранено». Every panel with an edit form was affected; the owner hit
-// it on the watchdog checkbox.
+// it on a checkbox. The checkbox used here is `pinned` — the one the proxy form still
+// carries now that the watchdog is gone.
 //
 // All checks here are on the route level: the browser sequence "edit a field →
 // press Сохранить" lives only in the markup, and no earlier test reproduced it.
@@ -104,13 +105,13 @@ describe('«Сохранить» applies the open edit form', () => {
         port: '54330',
         servers: [FI_TAG],
         note: '',
-        watch: '1',
+        pinned: '1',
       });
       const html = await response.text();
 
       const proxy = storedDocument(editor.settingsFile).proxies.find((item) => item.tag === 'claude-http');
-      assert.equal(proxy.watch, true, 'the watchdog flag reached webui.json');
-      assert.match(html, /name="watch" value="1" checked/, 'the redrawn form shows it ticked');
+      assert.equal(proxy.pinned, true, 'the flag reached webui.json');
+      assert.match(html, /name="pinned" value="1" checked/, 'the redrawn form shows it ticked');
       assert.doesNotMatch(html, /Нечего сохранять/);
     } finally {
       await editor.close();
@@ -208,7 +209,7 @@ describe('«Сохранить» applies the open edit form', () => {
           type: 'http',
           port: '54330',
           servers: [FI_TAG],
-          watch: '1',
+          pinned: '1',
         },
         false,
       );
@@ -219,7 +220,7 @@ describe('«Сохранить» applies the open edit form', () => {
         `/panel/${encodeURIComponent('proxy:claude-http')}`,
       );
       const proxy = storedDocument(editor.settingsFile).proxies.find((item) => item.tag === 'claude-http');
-      assert.equal(proxy.watch, true, 'the change still happened');
+      assert.equal(proxy.pinned, true, 'the change still happened');
     } finally {
       await editor.close();
     }

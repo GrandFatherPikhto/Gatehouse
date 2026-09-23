@@ -8,7 +8,6 @@
 
 import {ConfigError, DEFAULT_EXCLUDE, PROXY_TYPES, isMapping} from '../core/errors.mjs';
 import {listConfigSnapshots} from '../model/storage.mjs';
-import {DEFAULT_WATCH_URL} from '../system/index.mjs';
 
 /** Keys of the tree, without a name part. */
 export const PANEL_KINDS = Object.freeze([
@@ -29,7 +28,7 @@ export const PANEL_KINDS = Object.freeze([
  * (`system:singbox`), so a tab is a real address: it can be bookmarked, and with
  * JavaScript off it is simply a link.
  */
-export const SYSTEM_TABS = Object.freeze(['singbox', 'amnezia', 'watchdog']);
+export const SYSTEM_TABS = Object.freeze(['singbox', 'amnezia']);
 
 /** Outbounds that exist in every generated config. */
 export const BUILTIN_OUTBOUNDS = Object.freeze(['auto-select', 'direct']);
@@ -41,7 +40,7 @@ export const BUILTIN_OUTBOUNDS = Object.freeze(['auto-select', 'direct']);
  *
  * An empty list means the panel has no edit form at all; its «Сохранить» keeps the
  * standalone behaviour. The list is deliberately explicit: the action buttons
- * (`/proxy/remove`, `/generate`, `/watchdog/check` …) are never listed, because a
+ * (`/proxy/remove`, `/generate`, `/tunnel/toggle` …) are never listed, because a
  * wrong entry here would make the save button fire a delete request.
  */
 const EDIT_FORMS = Object.freeze({
@@ -51,10 +50,9 @@ const EDIT_FORMS = Object.freeze({
   // this order, and a refusal anywhere rolls the whole panel back.
   singbox: ['/general', '/dns', '/output'],
   amnezia: ['/amnezia'],
-  // The watchdog settings are the only edit form of the «Система» panel: it is
-  // applied on its tab, and `buildPanel` reports `editForm: false` on the others
-  // so the header button never binds to a form that is not on the page.
-  system: ['/watchdog'],
+  // «Система» has NO edit form any more: the watchdog settings were its only one,
+  // and they left the project together with the watchdog. Its two tabs are
+  // read-only, so `buildPanel` reports `editForm: false` for the whole panel.
 });
 
 /**
@@ -249,7 +247,6 @@ export function buildPanel(model, key, extra = {}) {
         autoPrefixes: autoExcludePrefixes(model),
         linksError: info.error,
         types: PROXY_TYPES,
-        defaultWatchUrl: DEFAULT_WATCH_URL,
         // Tunnels the form may bind this proxy to (§5.1). Empty when no provider
         // folder holds a `*.conf`, and then the selector is not drawn at all.
         tunnels: model.availableTunnels(),
@@ -273,16 +270,6 @@ export function buildPanel(model, key, extra = {}) {
       // tab, so `/panel/system` and a stale bookmark never render nothing.
       const tab = SYSTEM_TABS.includes(name) ? name : SYSTEM_TABS[0];
       const info = model.sourcesInfo();
-      // Runtime state comes from the Watchdog object, handed in by `app.mjs` as
-      // `extra.watchdog`: the panels arrange what it already did and never step a
-      // check themselves.
-      const watchdogState = extra.watchdog ?? {
-        running: false,
-        lastRun: null,
-        restartsLastDay: 0,
-        history: [],
-        proxies: [],
-      };
 
       // ONE panel object carries the fields of every tab: each tab is a partial
       // included by the container, and all of them read from here.
@@ -292,12 +279,13 @@ export function buildPanel(model, key, extra = {}) {
         tab,
         tabs: SYSTEM_TABS.map((item) => ({
           name: item,
-          title: item === 'singbox' ? 'Sing-box' : item === 'amnezia' ? 'Amnezia' : 'Сторож',
+          title: item === 'singbox' ? 'Sing-box' : 'Amnezia',
           key: panelKey('system', item),
         })),
-        // The watchdog settings are the only edit form, and they live on their own
-        // tab: elsewhere there is no `id="panel-form"` for the header to bind to.
-        editForm: tab === 'watchdog',
+        // Neither of the two tabs carries an edit form — they were read-only
+        // before, and the watchdog form went away with the watchdog — so the header
+        // save button must never appear on this panel.
+        editForm: false,
 
         // --- Sing-box: check, restart, rollback, journal, server test ---
         configPath: model.resolvedOutputPath(),
@@ -330,14 +318,9 @@ export function buildPanel(model, key, extra = {}) {
         // state read from systemd and the sudoers rights. The app assembles it. ---
         tunnels: extra.tunnels ?? [],
 
-        // --- Watchdog ---
-        config: model.watchdogValues(),
-        api: model.clashApiValues(),
-        // The secret itself never travels: only whether the environment carries it.
-        secretPresent: Boolean(extra.auth?.apiSecretPresent),
-        defaultWatchUrl: DEFAULT_WATCH_URL,
+        // The listen address is shown on the Sing-box tab: the server test builds
+        // its URL out of it.
         listenIp: model.listenIp,
-        state: watchdogState,
       };
     }
 

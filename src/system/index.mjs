@@ -62,17 +62,6 @@ import {tunnelStartupGuard} from './tunnel-file.mjs';
 
 /** Default path of the sing-box binary. */
 export const DEFAULT_SINGBOX_PATH = '/usr/local/bin/sing-box';
-/** Default path of `curl`, used by the watchdog to reach an inbound. */
-export const DEFAULT_CURL_PATH = '/usr/bin/curl';
-/**
- * Target of the watchdog check by default. `generate_204` answers 204 with an
- * empty body and exists for exactly this purpose. `ipinfo.io` is deliberately NOT
- * the default: it is an API with a monthly quota, while the watchdog probes it on
- * a fixed schedule and would spend tens of thousands of requests a month.
- */
-export const DEFAULT_WATCH_URL = 'https://www.gstatic.com/generate_204';
-/** How long one inbound check may take, in milliseconds. */
-export const DEFAULT_WATCH_TIMEOUT = 8000;
 /** Default path of `systemctl`. */
 export const DEFAULT_SYSTEMCTL_PATH = '/usr/bin/systemctl';
 /** Default path of `journalctl`. */
@@ -168,7 +157,6 @@ export function systemConfig(env = process.env, overrides = {}) {
 
   return Object.freeze({
     singbox: read('GATEHOUSE_SINGBOX', DEFAULT_SINGBOX_PATH),
-    curl: read('GATEHOUSE_CURL', DEFAULT_CURL_PATH),
     systemctl: read('GATEHOUSE_SYSTEMCTL', DEFAULT_SYSTEMCTL_PATH),
     journalctl: read('GATEHOUSE_JOURNALCTL', DEFAULT_JOURNALCTL_PATH),
     sudo: read('GATEHOUSE_SUDO', DEFAULT_SUDO_PATH),
@@ -1059,74 +1047,6 @@ export async function testOutbounds(tags, options = {}) {
     results: results.filter((result) => result !== undefined),
     aborted: Boolean(options.signal?.aborted),
     concurrency,
-  };
-}
-
-/**
- * Probes the path the application really uses: inbound → route rule → pool →
- * server, by sending `curl` through the local inbound of a proxy.
- *
- * This is NOT `tools fetch`. That one starts its own sing-box and checks an
- * outbound only, so a problem anywhere else on the path (the inbound is not
- * listening, the route rule sends the traffic elsewhere) stays invisible. The
- * reference `curl_test` did it through the inbound, and that part of it was
- * right.
- *
- * The proxy scheme follows the inbound type: `http` and `mixed` speak HTTP
- * CONNECT, `socks` speaks SOCKS5 and the `h` in `socks5h` makes the name travel
- * to the far end instead of being resolved locally.
- *
- * @param {{env?: Record<string, string|undefined>, listenIp?: string, port?: number,
- *   proxyType?: string, url?: string, timeout?: number, curl?: string,
- *   signal?: AbortSignal}} options `proxyType` is the inbound type
- *   (`socks`|`http`|`mixed`); the rest have sensible defaults.
- * @returns {Promise<{ok: boolean, code: number|null, timedOut: boolean,
- *   error: string|null, stdout: string, stderr: string, url: string,
- *   listenIp: string, port: number, proxyUrl: string, args: string[]}>}
- */
-export async function testInbound(options = {}) {
-  const config = systemConfig(options.env, options);
-  const file = options.curl ?? config.curl;
-  const listenIp = options.listenIp ?? '127.0.0.1';
-  const port = Number(options.port);
-  const url = options.url ?? DEFAULT_WATCH_URL;
-  const timeout = positive(options.timeout, DEFAULT_WATCH_TIMEOUT);
-  const scheme = options.proxyType === 'socks' ? 'socks5h' : 'http';
-  const proxyUrl = `${scheme}://${listenIp}:${port}`;
-
-  // `--max-time` counts seconds, while the timeout here is milliseconds; rounding
-  // up avoids a zero that would abort the transfer immediately.
-  const seconds = Math.max(1, Math.ceil(timeout / 1000));
-  const args = [
-    '-x',
-    proxyUrl,
-    '-s',
-    '-S',
-    '-o',
-    '/dev/null',
-    '-w',
-    '%{http_code}',
-    '--max-time',
-    String(seconds),
-    String(url),
-  ];
-
-  const result = await run(file, args, {timeout, env: options.env, signal: options.signal});
-  const status = Number.parseInt(result.stdout.trim(), 10);
-
-  return {
-    ok: result.ok,
-    code: result.code,
-    timedOut: result.timedOut || result.code === 28,
-    error: result.error,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    url: String(url),
-    listenIp: String(listenIp),
-    port,
-    proxyUrl,
-    status: Number.isFinite(status) ? status : null,
-    args,
   };
 }
 
