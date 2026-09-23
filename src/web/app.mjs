@@ -92,7 +92,7 @@ const ROUTE_FIELDS = Object.freeze({
   '/proxy': ['tag', 'type', 'port'],
   '/route': ['name', 'outbound'],
   '/dns': ['dns'],
-  '/links': ['links_file'],
+  '/providers': ['sources'],
   '/output': ['output_file'],
   '/watchdog': ['interval_seconds'],
   '/general': [
@@ -513,9 +513,9 @@ export function createApp(options = {}) {
       case '/dns':
         model.applyDns(String(body.dns ?? ''));
         return {applied: true, key: 'dns'};
-      case '/links':
-        model.setLinksFile(String(body.links_file ?? '').trim());
-        return {applied: true, key: 'links'};
+      case '/providers':
+        model.setSources(forms.lines(body.sources));
+        return {applied: true, key: 'providers'};
       case '/output':
         model.setOutputFile(String(body.output_file ?? '').trim());
         return {applied: true, key: 'output'};
@@ -616,14 +616,38 @@ export function createApp(options = {}) {
   );
 
   // ------------------------------------------------------------------
-  // Links file and output
+  // Tunnel normalisation preview (reads a file, changes nothing)
   // ------------------------------------------------------------------
 
   app.post(
-    '/links',
-    mutation('links', (req) => {
-      applyEditForm('links', req);
-      return {key: 'links', notice: 'Путь к файлу ссылок применён — не забудьте сохранить'};
+    '/tunnel',
+    mutation(
+      (req) => `tunnel:${String(req.body.provider ?? '')}/${String(req.body.file ?? '')}`,
+      (req) => {
+        const provider = String(req.body.provider ?? '').trim();
+        const file = String(req.body.file ?? '').trim();
+        const preview = model.tunnelPreview(provider, file, {
+          name: String(req.body.name ?? ''),
+          policyRouting: forms.checkbox(req.body.policyRouting),
+        });
+        return {
+          key: `tunnel:${provider}/${file}`,
+          tunnel: preview,
+          notice: 'Предпросмотр: показано, что будет изменено. Ничего не применено и не записано.',
+        };
+      },
+    ),
+  );
+
+  // ------------------------------------------------------------------
+  // Sources and output
+  // ------------------------------------------------------------------
+
+  app.post(
+    '/providers',
+    mutation('providers', (req) => {
+      applyEditForm('providers', req);
+      return {key: 'providers', notice: 'Список источников применён — не забудьте сохранить'};
     }),
   );
 
@@ -919,7 +943,7 @@ export function createApp(options = {}) {
       return;
     }
 
-    const info = model.linksInfo();
+    const info = model.sourcesInfo();
     if (info.error !== null) {
       writeEvent(res, 'refused', {message: info.error});
       res.end();

@@ -13,13 +13,14 @@ import {DEFAULT_WATCH_URL} from '../system/index.mjs';
 /** Keys of the tree, without a name part. */
 export const PANEL_KINDS = Object.freeze([
   'general',
-  'links',
+  'providers',
   'output',
   'proxies',
   'routes',
   'dns',
   'proxy',
   'route',
+  'tunnel',
   'system',
   'journal',
   'tests',
@@ -44,7 +45,7 @@ const EDIT_FORMS = Object.freeze({
   route: ['/route'],
   dns: ['/dns'],
   output: ['/output'],
-  links: ['/links'],
+  providers: ['/providers'],
   watchdog: ['/watchdog'],
   general: ['/general'],
 });
@@ -116,7 +117,7 @@ export function panelUrl(key) {
  * @returns {string[]}
  */
 export function knownOutbounds(model) {
-  const tags = model.linksInfo().tags;
+  const tags = model.sourcesInfo().tags;
   const pools = model.proxyTags().map((tag) => `pool-${tag}`);
   return [...BUILTIN_OUTBOUNDS, ...tags, ...pools];
 }
@@ -169,8 +170,8 @@ export function buildPanel(model, key, extra = {}) {
     case 'general':
       return {...base, title: 'Общие', values: model.generalValues()};
 
-    case 'links':
-      return {...base, title: 'Файл ссылок', info: model.linksInfo()};
+    case 'providers':
+      return {...base, title: 'Провайдеры', info: model.sourcesInfo()};
 
     case 'output':
       return {
@@ -193,7 +194,7 @@ export function buildPanel(model, key, extra = {}) {
     case 'proxy': {
       const proxy = model.getProxy(name);
       if (proxy === null) throw new ConfigError(`прокси '${name}' не найден`);
-      const info = model.linksInfo();
+      const info = model.sourcesInfo();
       return {
         ...base,
         title: `Прокси: ${name}`,
@@ -253,8 +254,17 @@ export function buildPanel(model, key, extra = {}) {
         snapshot: extra.journal ?? null,
       };
 
+    case 'tunnel':
+      // The preview is computed by the ROUTE (it reads a file) and handed in as
+      // `extra.tunnel`. Without it the panel only says where to pick a tunnel.
+      return {
+        ...base,
+        title: name === null ? 'Нормализация туннеля' : `Туннель: ${name}`,
+        preview: extra.tunnel ?? null,
+      };
+
     case 'tests': {
-      const info = model.linksInfo();
+      const info = model.sourcesInfo();
       return {
         ...base,
         title: 'Тест серверов',

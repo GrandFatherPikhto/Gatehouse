@@ -19,6 +19,9 @@ export const FI_UUID = '11111111-1111-1111-1111-111111111111';
 export const NL_UUID = '22222222-2222-2222-2222-222222222222';
 export const RU_UUID = '33333333-3333-3333-3333-333333333333';
 
+/** Provider folder used by every temporary project. */
+export const LINKS_PROVIDER = 'vpnd';
+
 /**
  * Builds a VLESS link the way providers hand them out.
  * Reference: `vless_link()` in conftest.py of the reference project.
@@ -49,13 +52,13 @@ export const DEFAULT_LINKS = `${[
 ].join('\n')}\n`;
 
 /**
- * Minimal flat settings body (version 2): 3 servers, 2 proxies (one with its own
- * pool). Reference: `DEFAULT_SETTINGS` in conftest.py, without the profile
- * envelope that version 2 removed.
+ * Minimal flat settings body (version 2, sources): 3 servers, 2 proxies (one
+ * with its own pool). Reference: `DEFAULT_SETTINGS` in conftest.py, without the
+ * profile envelope and with the single links file replaced by one provider.
  */
 export const DEFAULT_SETTINGS_BODY = {
   listen_ip: '127.0.0.1',
-  links_file: 'links.txt',
+  sources: [LINKS_PROVIDER],
   output_file: 'config.json',
   exclude_from_auto: ['🇷🇺'],
   urltest: {url: 'https://gstatic.com', interval: '3m', tolerance: 50},
@@ -81,14 +84,16 @@ export function makeTempDir(prefix = 'singbox-test-') {
 }
 
 /**
- * Writes links.txt into a directory.
+ * Writes the links file of the default provider: `<dir>/sources/vpnd/links.txt`.
  *
  * @param {string} dir
  * @param {string|Buffer} [content]
  * @returns {string} Path of the written file.
  */
 export function writeLinksFile(dir, content = DEFAULT_LINKS) {
-  const file = path.join(dir, 'links.txt');
+  const providerDir = path.join(dir, 'sources', LINKS_PROVIDER);
+  fs.mkdirSync(providerDir, {recursive: true});
+  const file = path.join(providerDir, 'links.txt');
   fs.writeFileSync(file, content);
   return file;
 }
@@ -118,7 +123,7 @@ export function writeSettings(dir, overrides = {}, extra = {}) {
 }
 
 /**
- * A temp directory with links.txt and a webui.json next to it.
+ * A temp directory with the provider links file and a webui.json next to it.
  * Reference: the `settings_file` fixture (settings.yaml next to links.txt).
  *
  * @param {Record<string, unknown>} [overrides]

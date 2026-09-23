@@ -19,9 +19,13 @@
       "type": "string",
       "minLength": 1
     },
-    "links_file": {
-      "type": "string",
-      "minLength": 1
+    "sources": {
+      "description": "Provider folders under the sources root (GATEHOUSE_SOURCES, default <dir of webui.json>/sources). The folder name IS the provider name; a folder may hold links.txt, tunnel configs (*.conf), or both.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
     },
     "output_file": {
       "type": "string",

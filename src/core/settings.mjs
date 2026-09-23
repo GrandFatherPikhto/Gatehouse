@@ -22,6 +22,7 @@ import Ajv from 'ajv';
 
 import {API_SECRET_VAR, buildConfig} from './build.mjs';
 import {ConfigError, DEFAULT_SETTINGS_FILE, isMapping} from './errors.mjs';
+import {readSources, resolveSourcesRoot} from './sources.mjs';
 import {parseLinks} from './vless.mjs';
 
 const SCHEMA_URL = new URL('../schemas/webui.schema.json', import.meta.url);
@@ -37,7 +38,7 @@ const validateAgainstSchema = ajv.compile(SCHEMA);
  * file may carry a stale version number, while the shape is what really breaks
  * the flat loader.
  */
-export const LEGACY_KEYS = Object.freeze(['profiles', 'defaults', 'active']);
+export const LEGACY_KEYS = Object.freeze(['profiles', 'defaults', 'active', 'links_file']);
 
 /**
  * True for a version-1 document with the profile envelope. The editor uses the
@@ -59,9 +60,9 @@ export function isLegacyDocument(data) {
 export function validateSettings(data, source = DEFAULT_SETTINGS_FILE) {
   if (isLegacyDocument(data)) {
     throw new ConfigError(
-      `${source}: это webui.json старого формата (version 1, с profiles/defaults). ` +
+      `${source}: это webui.json старого формата (profiles/defaults или поле links_file). ` +
         'Откройте файл один раз в редакторе GateHouse: он развернёт единственный профиль, ' +
-        'поднимет version до 2 и сохранит снимок прежней версии. ' +
+        'заменит links_file на sources, поднимет version до 2 и сохранит снимок. ' +
         'Генератор по такому файлу не работает, чтобы не мигрировать его наполовину.',
     );
   }
@@ -193,7 +194,6 @@ export function generateConfigFile(settingsPath, options = {}) {
   const warnings = options.warnings || [];
   const {settings, settingsDir} = loadEffectiveSettings(settingsPath);
 
-  const linksFile = resolvePath(settingsDir, options.links || settings.links_file || 'links.txt');
   const outputFile = resolvePath(
     settingsDir,
     options.output || settings.output_file || 'config.json',
@@ -209,7 +209,7 @@ export function generateConfigFile(settingsPath, options = {}) {
       ? settings
       : {...settings, exclude_from_auto: override};
 
-  const outbounds = parseLinks(linksFile, warnings);
+  const outbounds = readOutbounds(settings, settingsDir, options.links, warnings);
   // The API secret lives in the environment and is looked up here, in the one
   // place every caller (CLI and web editor) goes through. `options.apiSecret` is
   // the injection point for a test; the environment is what a service uses.
@@ -218,6 +218,34 @@ export function generateConfigFile(settingsPath, options = {}) {
   writeJson(outputFile, config);
 
   return {outputFile, stats, warnings, config};
+}
+
+/**
+ * Reads the outbounds of a generation run.
+ *
+ * `linksOverride` is the CLI `--links` flag: a single file, read exactly as the
+ * version-2 code did, so a script that pins one list keeps working. Otherwise the
+ * providers of `sources` are read through the sources root.
+ *
+ * @param {Record<string, unknown>} settings
+ * @param {string} settingsDir
+ * @param {string|undefined} linksOverride
+ * @param {string[]} warnings
+ * @returns {Array<Record<string, unknown>>}
+ */
+function readOutbounds(settings, settingsDir, linksOverride, warnings) {
+  if (typeof linksOverride === 'string' && linksOverride.length > 0) {
+    return parseLinks(resolvePath(settingsDir, linksOverride), warnings);
+  }
+
+  const root = resolveSourcesRoot(settingsDir);
+  const read = readSources(settings.sources, root, warnings);
+  if (read.outbounds.length === 0) {
+    throw new ConfigError(
+      `не найдено ни одного выхода в источниках (${root}): проверьте поле sources и файлы ${'links.txt'}`,
+    );
+  }
+  return read.outbounds;
 }
 
 export {SCHEMA, DEFAULT_SETTINGS_FILE};

@@ -186,26 +186,44 @@ function node(key, title, kind, extra = {}) {
 }
 
 /**
- * Diagnoses of the links file, keyed by the state `linksInfo` reports. The
- * difference runs on the SOURCE, not on the number: a file that was read and
- * happens to list none of the proxies' servers still produces the per-proxy
- * fourth message, while a file that was never read produces one of the first
- * three and nothing else.
+ * Diagnoses of one provider folder, keyed by the state the sources reader
+ * reports. The difference runs on the SOURCE, not on the number: a folder that
+ * was read and happens to list none of the proxies' servers still produces the
+ * per-proxy fourth message, while a folder that was never read produces one of
+ * the first three and nothing else.
  *
- * @param {'ok'|'missing'|'unreadable'|'empty'} state
- * @param {string} linksPath
- * @returns {string} Empty for `ok`.
+ * @param {Record<string, unknown>} provider
+ * @returns {string} Empty for a readable folder.
  */
-export function linksDiagnosis(state, linksPath) {
-  switch (state) {
+export function providerDiagnosis(provider) {
+  switch (provider.state) {
     case 'missing':
-      return `[!] файл ссылок не найден: ${linksPath}`;
+      return `[!] папка не найдена: ${provider.path}`;
     case 'unreadable':
-      return `[!] файл ссылок недоступен: ${linksPath}`;
+      return `[!] папка недоступна: ${provider.path}`;
     case 'empty':
-      return `[!] в файле ссылок нет ни одной ссылки: ${linksPath}`;
+      return `[!] пусто: ${provider.path}`;
     default:
       return '';
+  }
+}
+
+/**
+ * Human readable kind of a provider folder, for its tree label.
+ *
+ * @param {unknown} kind
+ * @returns {string}
+ */
+function providerKindLabel(kind) {
+  switch (kind) {
+    case 'links':
+      return 'ссылки';
+    case 'tunnels':
+      return 'туннели';
+    case 'mixed':
+      return 'ссылки+туннели';
+    default:
+      return 'нет';
   }
 }
 
@@ -215,16 +233,15 @@ export function linksDiagnosis(state, linksPath) {
  * The profile level is gone, so the tree is flat: one `general` node holds every
  * setting that used to be split between the active profile and `defaults`.
  *
- * @param {{document: unknown, allTags?: string[], title?: string, linksFile?: string,
- *   linksPath?: string, linksState?: 'ok'|'missing'|'unreadable'|'empty',
- *   linksError?: string|null, outputFile?: string}} options
+ * @param {{document: unknown, allTags?: string[], title?: string, sourcesRoot?: string,
+ *   providers?: Array<Record<string, unknown>>, outputFile?: string}} options
  * @returns {Record<string, unknown>} Root node.
  */
 export function treeSpec(options = {}) {
   const document = isMapping(options.document) ? options.document : {};
   const allTags = asList(options.allTags).filter((tag) => typeof tag === 'string');
   const stale = staleMap(document, allTags);
-  const linksFile = options.linksFile ?? 'links.txt';
+  const providers = Array.isArray(options.providers) ? options.providers : [];
 
   const proxyNodes = [];
   for (const proxy of asList(document.proxies)) {
@@ -268,21 +285,32 @@ export function treeSpec(options = {}) {
     );
   }
 
-  // The tree carries the honest diagnosis: the reason parsing failed (a path, a
-  // permission, an empty file) belongs in the node, where the owner looks, and
-  // not only in the panel.
-  const linksMark = linksDiagnosis(
-    options.linksState ?? (options.linksError ? 'unreadable' : 'ok'),
-    options.linksPath ?? linksFile,
-  );
+  // Every provider folder is a node of its own, with the honest diagnosis in it:
+  // the reason a folder yielded nothing (a path, a permission, an empty folder)
+  // belongs where the owner looks, not only in the panel. Tunnels are listed
+  // here and never become outbounds.
+  const providerNodes = providers.map((provider) => {
+    const mark = providerDiagnosis(provider);
+    const label = `${String(provider.name)} (${providerKindLabel(provider.kind)}, ${provider.count})`;
+    return node(`providers:${String(provider.name)}`, mark === '' ? label : `${label}  ${mark}`, 'providers', {
+      stale: mark !== '',
+      detail: String(provider.name),
+      mark,
+    });
+  });
+
+  const noSources = providers.length === 0;
+  const providersTitle = `Провайдеры (${providers.length})`;
+  const providersMark = noSources ? '[!] источники не заданы' : '';
 
   return node('root', options.title ?? 'webui.json', 'root', {
     children: [
       node('general', 'Общие', 'general'),
-      node('links', `Файл ссылок: ${linksFile}`, 'links', {
-        stale: linksMark !== '',
-        detail: linksFile,
-        mark: linksMark,
+      node('providers', providersTitle, 'providers', {
+        stale: providersMark !== '',
+        detail: String(options.sourcesRoot ?? ''),
+        mark: providersMark,
+        children: providerNodes,
       }),
       node('output', `Вывод: ${String(options.outputFile ?? 'config.json')}`, 'output'),
       node('proxies', `Прокси (${proxyNodes.length})`, 'proxies', {children: proxyNodes}),

@@ -212,6 +212,10 @@ const EDITABLE_ACTION_FORMS = Object.freeze({
   // GETs the panel again. It is an action form, not an edit form — there is
   // nothing to save, so it must not be `id="panel-form"`.
   journal: [{route: '/panel/journal', hidden: null}],
+  // The tunnel preview only shows what the normaliser WOULD change: it has a name
+  // field and the single policy-routing checkbox, and posting it recomputes the
+  // preview. There is no apply, so it is an action form too.
+  tunnel: [{route: '/tunnel', hidden: null}],
 });
 
 /**

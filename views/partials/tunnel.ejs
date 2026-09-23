@@ -1,0 +1,48 @@
+<%# Preview of the tunnel normaliser (§7.3, §8.12 of the architecture).
+    Built around the diff, not around checkboxes: the mandatory fixes (Table = off,
+    dropping DNS =, the interface name) carry no checkbox — the only sane value is
+    known in advance and a checkbox would mean "break the router". Exactly one
+    checkbox is about FUTURE USE (handing the tunnel out through 3proxy too), and
+    there is no apply button: this screen only shows what would change. %>
+<h2><%= panel.title %></h2>
+
+<% if (!panel.preview) { %>
+  <p class="hint">
+    Выберите туннель на вкладке «Провайдеры»: у папки-источника перечислены её
+    <code>.conf</code>. Предпросмотр ничего не применяет и никуда не пишет.
+  </p>
+<% } else { %>
+  <p>Файл: <code><%= panel.preview.path %></code></p>
+
+  <h3>Изменено <%= panel.preview.changes.length %> строк</h3>
+  <ul class="changes">
+    <% for (const change of panel.preview.changes) { %>
+      <li>
+        <code><%= change.kind === 'add' ? '+' : change.kind === 'remove' ? '−' : '~' %> <%= change.line %></code>
+        — <%= change.why %>
+      </li>
+    <% } %>
+  </ul>
+
+  <p class="hint">без изменений: <%= panel.preview.preserved.join(', ') %></p>
+
+  <form hx-post="/tunnel" hx-target="#panel" hx-swap="innerHTML" method="post" action="/tunnel">
+    <input type="hidden" name="provider" value="<%= panel.preview.provider %>">
+    <input type="hidden" name="file" value="<%= panel.preview.file %>">
+
+    <label for="name">имя интерфейса</label>
+    <input type="text" id="name" name="name" value="<%= panel.preview.name %>" maxlength="15">
+    <p class="hint">не длиннее 15 символов; выводится в имени интерфейса</p>
+
+    <label class="check">
+      <input type="checkbox" name="policyRouting" value="1" <%= panel.preview.changes.some((change) => change.line.startsWith('PostUp')) ? 'checked' : '' %>>
+      отдаётся также через 3proxy по адресу источника
+      <span class="hint">(добавит PostUp/PreDown с ip rule)</span>
+    </label>
+
+    <button type="submit">Пересчитать предпросмотр</button>
+  </form>
+
+  <h3>Результат</h3>
+  <pre><%= panel.preview.text %></pre>
+<% } %>

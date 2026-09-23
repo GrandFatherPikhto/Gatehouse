@@ -53,6 +53,8 @@ UMask=0027
 # `systemctl cat`, поэтому секрета в юните быть не должно.
 Environment=GATEHOUSE_SETTINGS=/etc/gatehouse/webui.json
 Environment=GATEHOUSE_STATE_DIR=/var/lib/gatehouse
+# Provider folders live under /var/lib (personal lists), not under /etc.
+Environment=GATEHOUSE_SOURCES=/var/lib/gatehouse/sources
 Environment=GATEHOUSE_HOST=10.95.2.1
 Environment=GATEHOUSE_PORT=9090
 Environment=GATEHOUSE_CONFIG=/etc/sing-box/config.json

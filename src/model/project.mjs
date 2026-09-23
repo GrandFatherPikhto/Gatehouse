@@ -32,8 +32,9 @@ import {
   resolvePath,
   validateSettings,
 } from '../core/settings.mjs';
+import {normalizeTunnel} from '../core/normalize.mjs';
+import {readSources, resolveSourcesRoot, sourceNames} from '../core/sources.mjs';
 import {asList, requireMapping, urltestBlock, validateProxies} from '../core/validate.mjs';
-import {parseLinks} from '../core/vless.mjs';
 import {normalizeClashApi, normalizeProxy, normalizeWatchdog} from '../watchdog/watchdog.mjs';
 import {staleMap, treeSpec as buildTree} from './stale.mjs';
 import {
@@ -46,7 +47,6 @@ import {
 
 /* Defaults of the reference (generator/model.py). */
 export const DEFAULT_LISTEN_IP = '127.0.0.1';
-export const DEFAULT_LINKS_FILE = 'links.txt';
 export const DEFAULT_OUTPUT_FILE = 'config.json';
 export const DEFAULT_URLTEST_URL = 'https://gstatic.com';
 export const DEFAULT_URLTEST_INTERVAL = '3m';
@@ -89,7 +89,7 @@ export function newDocument() {
   return {
     version: DOCUMENT_VERSION,
     listen_ip: DEFAULT_LISTEN_IP,
-    links_file: DEFAULT_LINKS_FILE,
+    sources: [],
     output_file: DEFAULT_OUTPUT_FILE,
     exclude_from_auto: [...DEFAULT_EXCLUDE],
     urltest: {
@@ -105,59 +105,84 @@ export function newDocument() {
 }
 
 /**
- * Flattens a version-1 document (the `defaults`/`profiles`/`active` envelope)
- * into the version-2 shape.
+ * Migrates a version-1 or pre-sources document into the current shape.
  *
- * The migration is deliberately narrow, because it runs once, on one known file:
- *   * more than one profile is NOT guessed — the owner picked which one is
- *     active for a reason and dropping the others silently could throw away
- *     real settings, so the file is refused with the names in the message;
- *   * a single profile body is spread onto the top level;
- *   * a non-empty `defaults` is merged underneath it (the profile is stronger,
- *     top level only, exactly like the old core merge) with one warning per
- *     migrated key, so the owner can see what moved.
+ * Two incompatible changes are folded into this one pass, because both mean
+ * "open the file once in the editor":
  *
- * @param {Record<string, unknown>} data Parsed version-1 document.
+ *   * the `defaults`/`profiles`/`active` envelope is flattened. More than one
+ *     profile is NOT guessed — the owner picked the active one for a reason —
+ *     so the file is refused with the names; a single body is spread on top of a
+ *     merged `defaults` (the profile is stronger), with one warning per migrated
+ *     key;
+ *   * a `links_file` string becomes `sources: [<parent folder>]`, the folder
+ *     name being the provider name. A bare file name carries no provider name,
+ *     so it maps to 'default' with a warning telling the owner where the file
+ *     has to move.
+ *
+ * @param {Record<string, unknown>} data Parsed legacy document.
  * @param {string} [source] File name used in the messages.
  * @returns {{document: Record<string, unknown>, warnings: string[]}}
  */
 export function migrateLegacyDocument(data, source = 'webui.json') {
-  const profiles = isMapping(data.profiles) ? data.profiles : {};
-  const names = Object.keys(profiles);
-
-  if (names.length === 0) {
-    throw new ConfigError(
-      `${source}: это документ старого формата, но без профилей: мигрировать нечего. ` +
-        'Схема webui.json версии 2 их больше не знает — приведите файл к плоскому виду вручную.',
-    );
-  }
-  if (names.length > 1) {
-    throw new ConfigError(
-      `${source}: в файле несколько профилей (${names.join(', ')}) — автоматически развернуть ` +
-        'можно только один. Выберите активный, удалите остальные руками и откройте файл снова: ' +
-        'молча выбросить чужие настройки хуже, чем остановиться.',
-    );
-  }
-
-  const name = names[0];
-  const body = isMapping(profiles[name]) ? profiles[name] : {};
-  const defaults = isMapping(data.defaults) ? data.defaults : {};
   const warnings = [];
+  let merged;
 
-  for (const key of Object.keys(defaults)) {
-    if (Object.hasOwn(body, key)) {
-      warnings.push(
-        `Предупреждение: ключ '${key}' из defaults перекрыт значением профиля '${name}' и не перенесён`,
+  if (isMapping(data.profiles)) {
+    const profiles = data.profiles;
+    const names = Object.keys(profiles);
+
+    if (names.length === 0) {
+      throw new ConfigError(
+        `${source}: это документ старого формата, но без профилей: мигрировать нечего. ` +
+          'Схема webui.json версии 2 их больше не знает — приведите файл к плоскому виду вручную.',
       );
+    }
+    if (names.length > 1) {
+      throw new ConfigError(
+        `${source}: в файле несколько профилей (${names.join(', ')}) — автоматически развернуть ` +
+          'можно только один. Выберите активный, удалите остальные руками и откройте файл снова: ' +
+          'молча выбросить чужие настройки хуже, чем остановиться.',
+      );
+    }
+
+    const name = names[0];
+    const body = isMapping(profiles[name]) ? profiles[name] : {};
+    const defaults = isMapping(data.defaults) ? data.defaults : {};
+
+    for (const key of Object.keys(defaults)) {
+      if (Object.hasOwn(body, key)) {
+        warnings.push(
+          `Предупреждение: ключ '${key}' из defaults перекрыт значением профиля '${name}' и не перенесён`,
+        );
+      } else {
+        warnings.push(`Предупреждение: ключ '${key}' из defaults перенесён на верхний уровень`);
+      }
+    }
+
+    merged = {...defaults, ...body};
+    delete merged.profiles;
+    delete merged.defaults;
+    delete merged.active;
+  } else {
+    merged = {...data};
+  }
+
+  if (typeof merged.links_file === 'string' && merged.links_file.length > 0) {
+    const linksFile = merged.links_file;
+    const folder = path.dirname(linksFile);
+    const provider = folder === '.' || folder === '' ? 'default' : path.basename(folder);
+    delete merged.links_file;
+    if (Array.isArray(merged.sources) && merged.sources.length > 0) {
+      warnings.push(`Предупреждение: поле links_file '${linksFile}' отброшено в пользу sources`);
     } else {
-      warnings.push(`Предупреждение: ключ '${key}' из defaults перенесён на верхний уровень`);
+      merged.sources = [provider];
+      warnings.push(
+        `Предупреждение: links_file '${linksFile}' заменён на sources: ['${provider}']` +
+          (provider === 'default' ? `; положите файл в <sources>/${provider}/links.txt` : ''),
+      );
     }
   }
-
-  const merged = {...defaults, ...body};
-  delete merged.profiles;
-  delete merged.defaults;
-  delete merged.active;
 
   return {document: {version: DOCUMENT_VERSION, ...merged}, warnings};
 }
@@ -386,7 +411,7 @@ export class ProjectModel {
   }
 
   // ------------------------------------------------------------------
-  // Effective settings  (reference: links_file / output_file / listen_ip)
+  // Effective settings  (reference: output_file / listen_ip)
   // ------------------------------------------------------------------
 
   /**
@@ -399,10 +424,9 @@ export class ProjectModel {
     return this.document;
   }
 
-  /** Reference: `links_file`. */
-  get linksFile() {
-    const value = this.document.links_file;
-    return typeof value === 'string' && value.length > 0 ? value : DEFAULT_LINKS_FILE;
+  /** Provider folder names listed in the document. */
+  sources() {
+    return sourceNames(this.document.sources);
   }
 
   /** Reference: `output_file`. */
@@ -427,9 +451,9 @@ export class ProjectModel {
     return this.path !== null && fs.existsSync(this.path);
   }
 
-  /** Reference: `resolved_links_path`. */
-  resolvedLinksPath() {
-    return resolvePath(this.settingsDir, this.linksFile);
+  /** Root the provider folders resolve against (`GATEHOUSE_SOURCES` or `<dir>/sources`). */
+  resolvedSourcesRoot() {
+    return resolveSourcesRoot(this.settingsDir);
   }
 
   /** Reference: `resolved_output_path`. */
@@ -475,15 +499,16 @@ export class ProjectModel {
   }
 
   /**
-   * Reference: `set_links_file`.
+   * Replaces the provider list.
    *
-   * @param {string} value
+   * @param {unknown} value
    */
-  setLinksFile(value) {
-    if (typeof value !== 'string' || value.length === 0) {
-      throw new ConfigError('links_file должен быть непустой строкой');
+  setSources(value) {
+    const names = sourceNames(value);
+    if (names.length === 0) {
+      throw new ConfigError('sources должен быть непустым списком имён папок');
     }
-    this.document.links_file = value;
+    this.document.sources = names;
     this.markDirty();
   }
 
@@ -954,81 +979,79 @@ export class ProjectModel {
   // ------------------------------------------------------------------
 
   /**
-   * Reads the links file of the document.
-   * Reference: `load_server_tags` — the error is returned, not thrown, because a
-   * missing links file is a normal state of a fresh project.
+   * Reads every provider of the document and merges the links.
    *
-   * `state` is the honest classification of WHY there are no tags, and it is what
-   * the tree turns into one of the four diagnoses of the task: a missing file, an
-   * unreadable one, an empty one, or a read file that simply does not list some
-   * names. "The file was not read" and "the servers disappeared" are different
-   * news, and the tree says which one it is instead of guessing from an empty
-   * list.
+   * The error is returned, not thrown: a missing or empty folder is a normal
+   * state that the tree marks with an honest per-provider diagnosis. `tags` are
+   * the merged outbound tags, carrying a provider label only on a name collision
+   * between providers — which is what keeps a single-source project's
+   * `config.json` byte-identical.
    *
-   * @returns {{file: string, path: string, exists: boolean,
-   *   state: 'ok'|'missing'|'unreadable'|'empty', tags: string[],
-   *   error: string|null, warnings: string[]}}
+   * @returns {{sources: string[], root: string, providers: Array<Record<string, unknown>>,
+   *   outbounds: Array<Record<string, unknown>>, tags: string[], error: string|null,
+   *   warnings: string[]}}
    */
-  linksInfo() {
-    const file = this.linksFile;
-    const resolved = this.resolvedLinksPath();
+  sourcesInfo() {
     const warnings = [];
+    const root = this.resolvedSourcesRoot();
+    const read = readSources(this.document.sources, root, warnings);
+    const broken = read.providers.filter((provider) => provider.error !== null);
 
-    if (!fs.existsSync(resolved)) {
-      return {
-        file,
-        path: resolved,
-        exists: false,
-        state: 'missing',
-        tags: [],
-        error: `файл ссылок ${resolved} не найден`,
-        warnings,
-      };
+    return {
+      sources: read.providers.map((provider) => provider.name),
+      root,
+      providers: read.providers,
+      outbounds: read.outbounds,
+      tags: read.tags,
+      error: broken.length > 0 ? broken.map((provider) => provider.error).join('\n') : null,
+      warnings,
+    };
+  }
+
+  /**
+   * Runs the tunnel normaliser over one `*.conf` of a provider, for the preview.
+   *
+   * It READS a file and changes nothing: no apply, no write to
+   * `/etc/amnezia/amneziawg/`, no `awg-quick@` (task §6.3). The interface name is
+   * an input because a WireGuard config carries none; it is validated here and
+   * falls back to the file's stem when empty.
+   *
+   * @param {string} providerName
+   * @param {string} fileName
+   * @param {{name?: string, policyRouting?: boolean}} [options]
+   * @returns {Record<string, unknown>}
+   */
+  tunnelPreview(providerName, fileName, options = {}) {
+    const provider = String(providerName ?? '').trim();
+    const file = path.basename(String(fileName ?? '').trim());
+    if (provider.length === 0 || file.length === 0) {
+      throw new ConfigError('не указан источник или файл туннеля');
+    }
+    if (!this.sources().includes(provider)) {
+      throw new ConfigError(`источник '${provider}' не указан в поле sources`);
+    }
+    if (path.extname(file) !== '.conf') {
+      throw new ConfigError(`'${file}' не похож на конфиг туннеля (.conf)`);
     }
 
-    try {
-      fs.accessSync(resolved, fs.constants.R_OK);
-    } catch {
-      return {
-        file,
-        path: resolved,
-        exists: true,
-        state: 'unreadable',
-        tags: [],
-        error: `файл ссылок ${resolved} недоступен для чтения`,
-        warnings,
-      };
+    const filePath = path.join(this.resolvedSourcesRoot(), provider, file);
+    if (!fs.existsSync(filePath)) {
+      throw new ConfigError(`файл туннеля ${filePath} не найден`);
     }
 
-    try {
-      const outbounds = parseLinks(resolved, warnings);
-      return {
-        file,
-        path: resolved,
-        exists: true,
-        state: 'ok',
-        tags: outbounds.map((outbound) => outbound.tag),
-        error: null,
-        warnings,
-      };
-    } catch (error) {
-      if (!(error instanceof ConfigError)) throw error;
-      const empty = /валидных VLESS-ссылок не обнаружено/.test(error.message);
-      return {
-        file,
-        path: resolved,
-        exists: true,
-        state: empty ? 'empty' : 'unreadable',
-        tags: [],
-        error: error.message,
-        warnings,
-      };
-    }
+    const requested = typeof options.name === 'string' ? options.name.trim() : '';
+    const fallback = path.basename(file, '.conf').slice(0, 15);
+    const result = normalizeTunnel(fs.readFileSync(filePath, 'utf8'), {
+      name: requested.length > 0 ? requested : fallback,
+      policyRouting: options.policyRouting === true,
+    });
+
+    return {provider, file, path: filePath, ...result};
   }
 
   /** Reference: `load_server_tags`, reduced to what most callers need. */
   loadServerTags() {
-    const info = this.linksInfo();
+    const info = this.sourcesInfo();
     return {tags: info.tags, error: info.error};
   }
 
@@ -1049,15 +1072,13 @@ export class ProjectModel {
    * @returns {Record<string, unknown>}
    */
   treeSpec() {
-    const info = this.linksInfo();
+    const info = this.sourcesInfo();
     return buildTree({
       document: this.document,
       allTags: info.tags,
       title: this.displayName,
-      linksFile: info.file,
-      linksPath: info.path,
-      linksState: info.state,
-      linksError: info.error,
+      sourcesRoot: info.root,
+      providers: info.providers,
       outputFile: this.outputFile,
     });
   }

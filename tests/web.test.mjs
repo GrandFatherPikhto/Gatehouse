@@ -163,7 +163,7 @@ describe('pages and static files', () => {
 
       const html = await response.text();
       assert.match(html, /Общие/);
-      assert.match(html, /Файл ссылок: links.txt/);
+      assert.match(html, /Провайдеры \(1\)/);
       assert.match(html, /href="\/static\/app.css"/);
       // No CDN: the bundle must be referenced on our own host.
       assert.match(html, /src="\/static\/vendor\/htmx\.min\.js"/);
@@ -479,14 +479,14 @@ describe('saving and generating from the UI', () => {
   });
 
   test('generation reports the core error without a stack trace', async () => {
-    const editor = await startEditor({overrides: {links_file: 'nowhere.txt'}});
+    const editor = await startEditor({overrides: {sources: ['nowhere']}});
     try {
       await post(editor.base, '/save', {panel: 'output'});
 
       const response = await post(editor.base, '/generate', {});
 
       assert.equal(response.status, 200);
-      assert.match(await response.text(), /файл ссылок/);
+      assert.match(await response.text(), /источник/);
     } finally {
       await editor.close();
     }

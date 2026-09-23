@@ -19,7 +19,7 @@ webui.json
 *.txt
 # ...except the synthetic test fixture: without it the suite cannot run
 # from a clean clone (this exact problem already bit the Python project).
-!tests/fixtures/links.txt
+!tests/fixtures/sources/vpnd/links.txt
 # ...and the sandbox sample, which is synthetic and safe to commit.
 !dev/root.example/links.txt
 

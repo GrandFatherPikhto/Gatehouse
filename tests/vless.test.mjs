@@ -14,7 +14,7 @@ import {ConfigError} from '../src/core/errors.mjs';
 import {BOM_WARNING, dedupTags, getFirst, parseLinks, parseVless, unquote} from '../src/core/vless.mjs';
 import {ALL_TAGS, FI_TAG, FIXTURES_DIR, makeTempDir, NL_TAG, vlessLink} from './helpers.mjs';
 
-const FIXTURE_LINKS = path.join(FIXTURES_DIR, 'links.txt');
+const FIXTURE_LINKS = path.join(FIXTURES_DIR, 'sources', 'vpnd', 'links.txt');
 
 // Reference: test_parse_vless_reality
 test('parseVless: reality transport', () => {

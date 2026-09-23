@@ -1,0 +1,79 @@
+<%# Providers: the folders under the sources root. The folder name IS the provider
+    name; a folder may hold links.txt (turned into outbounds), tunnel configs
+    (*.conf, listed but NEVER turned into outbounds), or both. A provider label
+    appears in a tag only when two providers hand out the same name. %>
+<h2><%= panel.title %></h2>
+
+<form id="panel-form" class="form" hx-post="/providers" hx-target="#panel" hx-swap="innerHTML" method="post" action="/providers">
+  <fieldset>
+    <legend>Источники</legend>
+    <label for="sources">sources</label>
+    <textarea id="sources" name="sources" rows="5" cols="40"><%= panel.info.sources.join('\n') %></textarea>
+    <p class="hint">
+      По одному имени папки в строке. Корень: <code><%= panel.info.root %></code>
+      (переопределяется переменной <code>GATEHOUSE_SOURCES</code>).
+    </p>
+  </fieldset>
+  <button type="submit">Применить</button>
+</form>
+
+<h3>Прочитано</h3>
+<% if (panel.info.providers.length === 0) { %>
+  <p class="hint">Источники не заданы: добавьте имя папки выше.</p>
+<% } else { %>
+  <table class="list">
+    <thead>
+      <tr><th>провайдер</th><th>содержимое</th><th>записей</th><th>изменён</th><th>состояние</th></tr>
+    </thead>
+    <tbody>
+      <% for (const provider of panel.info.providers) { %>
+        <tr class="<%= provider.error ? 'stale' : '' %>">
+          <td><code><%= provider.name %></code></td>
+          <td><%= provider.kind %></td>
+          <td><%= provider.count %></td>
+          <td><%= provider.mtime ?? '—' %></td>
+          <td>
+            <% if (provider.error) { %>
+              <span class="error"><%= provider.error %></span>
+            <% } else { %>
+              ок
+            <% } %>
+          </td>
+        </tr>
+        <% if (provider.entries.length > 0) { %>
+          <tr>
+            <td colspan="5" class="muted">
+              туннели (в конфиг не попадают):
+              <% for (const entry of provider.entries) { %>
+                <% const key = `tunnel:${provider.name}/${entry}`; %>
+                <a href="/panel/<%= encodeURIComponent(key) %>"
+                   hx-get="/panel/<%= encodeURIComponent(key) %>"
+                   hx-target="#panel"
+                   hx-swap="innerHTML"
+                   hx-push-url="true"><%= entry %></a><% if (entry !== provider.entries[provider.entries.length - 1]) { %>, <% } %>
+              <% } %>
+            </td>
+          </tr>
+        <% } %>
+      <% } %>
+    </tbody>
+  </table>
+<% } %>
+
+<% if (panel.info.outbounds.length > 0) { %>
+  <h3>Выходы (<%= panel.info.outbounds.length %>)</h3>
+  <ul class="tags">
+    <% for (const outbound of panel.info.outbounds) { %>
+      <li><%= outbound.tag %></li>
+    <% } %>
+  </ul>
+<% } %>
+
+<% if (panel.info.warnings.length > 0) { %>
+  <h3>Предупреждения</h3>
+  <ul class="warnings">
+    <% for (const warning of panel.info.warnings) { %>
+      <li><%= warning %></li>
+    <% } %>
+  </ul>
+<% } %>

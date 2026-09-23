@@ -218,18 +218,32 @@ The path of the settings file comes from the environment and from nowhere else.
 There is deliberately no "open file" box in the UI: a path arriving from the
 browser at a process that writes files is a path traversal waiting to happen.
 
-One tree node per screen: Профили (list, active profile, create, rename,
-duplicate, remove), Общие, Значения по умолчанию, Файл ссылок, Вывод,
-Прокси → tag, Маршруты → name, DNS, and under Система: Журнал, Тест серверов,
-Сторож.
+One tree node per screen: Общие, Провайдеры (source folders and their tunnels),
+Вывод, Прокси → tag, Маршруты → name, DNS, and under Система: Журнал,
+Тест серверов, Сторож. A tunnel config has its own normalisation preview screen.
 
-* **«Общие» writes the active profile, «Значения по умолчанию» writes `defaults`.**
-  A profile key overrides the same-named key of `defaults`, top level only, so
-  every shared field shows where its value comes from — "задано в профиле" or
-  "унаследовано из defaults" — next to a button that drops the key from the
-  profile. A key that merely happens to equal the default is NOT removed
-  automatically: that would break the byte-for-byte round-trip of an untouched
-  file.
+* **`webui.json` is flat; the profile level is gone.** The body used to be split
+  between the active profile and `defaults`, but there was exactly one profile and
+  `defaults` was empty, so there was nobody to inherit from. Format `version: 2`
+  is one level, and «Общие» is a single panel. The editor migrates an old file
+  itself: it snapshots it, flattens the single profile (several are refused with
+  their names), replaces `links_file` with `sources` and bumps the version. The
+  core does not read the old form and says so, so the CLI can never generate from a
+  half-migrated document.
+* **Sources are provider folders, not one links file.** `sources` lists folder
+  names under the sources root (`GATEHOUSE_SOURCES`, default
+  `<dir of webui.json>/sources`); the folder name IS the provider name. A folder
+  holds `links.txt` (outbounds), tunnel configs `*.conf` (listed only), or both.
+  The links are merged into one list, and **a provider label appears only when two
+  providers hand out the same name**, so a single-source project keeps its tags and
+  `config.json` stays byte-identical. A collision inside one file is a warning: it
+  is an error in the provider's own file and the owner has to know.
+* **Tunnels never reach the generated config.** The normaliser
+  `src/core/normalize.mjs` is a pure function: it adds `Table = off`, drops `DNS =`,
+  keeps the interface name within 15 characters, and copies `AllowedIPs` plus the
+  obfuscation (`Jc/Jmin/Jmax`, `S1–S4`, `H1–H4`, `i1`) byte for byte. The screen is
+  a diff preview with exactly one checkbox (policy routing); the mandatory fixes
+  carry none and there is no apply button.
 * **DNS is a JSON text field.** sing-box has 16 kinds of DNS servers, the schema is
   fresh and still moving, and DNS is edited rarely; only "a valid JSON object" is
   checked. Structural forms were deliberately not built.
@@ -249,12 +263,12 @@ duplicate, remove), Общие, Значения по умолчанию, Фай
   every box the server is marked "в auto-select" or "исключён" according to
   `exclude_from_auto`, so the decision to add a server to a pool is taken with the
   facts in front of the owner.
-* **Names may not consist of digits only** — for profiles and for routes alike.
-  JavaScript reorders integer-like object keys, so a profile called `2024` would
-  silently jump to the front of the file and the order of `webui.json` (and of the
-  `routes` section of `config.json`) would stop being predictable. `2024-reality`
-  is fine. The rule lives in the schema; [`src/model/project.mjs`](src/model/project.mjs:1)
-  mirrors it and a test asserts the two agree.
+* **Route names may not consist of digits only.** JavaScript reorders integer-like
+  object keys, so a route called `2024` would silently jump to the front of the file
+  and the order of the `routes` section of `config.json` would stop being
+  predictable. `2024-telegram` is fine. The rule lives in the schema;
+  [`src/model/project.mjs`](src/model/project.mjs:1) mirrors it and a test asserts
+  the two agree.
 * **Saving is atomic and versioned.** The previous version is copied to
   `<state-dir>/snapshots/webui-<ISO>.json` (the last 10 are kept) before the new
   one is written to a temporary file and renamed over the target. `webui.json` is
@@ -269,11 +283,8 @@ duplicate, remove), Общие, Значения по умолчанию, Фай
   button is bound to it twice over, because the header and the form live in
   different parts of the DOM: htmx pulls the fields in with `hx-include`, and
   `form="panel-form"` does the same with JavaScript off. A panel can carry more than
-  one route in that single form — "Значения по умолчанию" posts the general fields to
-  `/general` and the DNS text to `/dns`, and either button applies both, so the trap
-  cannot move one level down; `profiles` marks its note field as the edit form and
-  refuses every other action on that path. A panel with no edit form (`proxies`,
-  `routes`, `system`, `journal`, `tests`) keeps the old standalone button — a broken
+  one route in that single form. A panel with no edit form (`proxies`, `routes`,
+  `system`, `journal`, `tests`, `providers`) keeps the old standalone button — a broken
   `form=` reference would stop it from submitting at all. `/save` applies the form
   through the very same function the panel route uses, so the two can never drift;
   the routes of a panel are applied atomically (a refusal rolls the model back), a
@@ -437,43 +448,35 @@ against [`src/schemas/webui.schema.json`](src/schemas/webui.schema.json) with
 
 ```json
 {
-  "version": 1,
-  "active": "reality",
-  "defaults": {
-    "listen_ip": "10.95.2.1",
-    "log": { "level": "info", "timestamp": true },
-    "urltest": { "url": "https://gstatic.com", "interval": "3m", "tolerance": 50 },
-    "dns": { "servers": [], "rules": [], "final": "dns-local" }
-  },
-  "profiles": {
-    "reality": {
-      "note": "Reality transport, primary",
-      "links_file": "server-lists/vpnd.vless.reality.io.txt",
-      "output_file": "/etc/sing-box/config.json",
-      "exclude_from_auto": ["🇷🇺"],
-      "proxies": [
-        { "tag": "main", "type": "mixed", "port": 54321, "note": "",
-          "servers": ["🇫🇮 Finland - Helsinki 1"] }
-      ],
-      "routes": {
-        "telegram": { "outbound": "🇫🇮 Finland - Helsinki 1",
-                      "domains": ["telegram.org", "t.me"] }
-      }
-    }
+  "version": 2,
+  "note": "Reality transport, primary",
+  "listen_ip": "10.95.2.1",
+  "sources": ["vpnd", "hidemyname"],
+  "output_file": "/etc/sing-box/config.json",
+  "exclude_from_auto": ["🇷🇺"],
+  "log": { "level": "info", "timestamp": true },
+  "urltest": { "url": "https://gstatic.com", "interval": "3m", "tolerance": 50 },
+  "dns": { "servers": [], "rules": [], "final": "dns-local" },
+  "proxies": [
+    { "tag": "main", "type": "mixed", "port": 54321, "note": "",
+      "servers": ["🇫🇮 Finland - Helsinki 1"] }
+  ],
+  "routes": {
+    "telegram": { "outbound": "🇫🇮 Finland - Helsinki 1",
+                  "domains": ["telegram.org", "t.me"] }
   }
 }
 ```
 
 Rules of the format:
 
-* **exactly one profile is active.** Two profiles can never be applied at once:
-  they overlap on ports and sing-box is a single process. `active` is required
-  and must name an existing profile — `ajv` rejects the file otherwise, through a
-  custom `profileMustExist` keyword, because JSON Schema cannot express
-  "`active` must be a key of `profiles`".
-* **a profile key overrides the same-named key of `defaults`**, top level only.
-  Nested `log`/`dns`/`urltest` objects are replaced as a whole, exactly like the
-  reference behaved with a flat YAML file.
+* **there is one document, the profile level is gone:** `version: 2`, no
+  `profiles`, no `defaults`, no `active`. The editor migrates an old-form file and
+  keeps a snapshot; the core refuses it with a message naming the editor, so
+  generation never runs from a half-migrated document.
+* **`sources` is a list of provider folder names** under the sources root. A folder
+  may hold `links.txt`, `*.conf`, or both; tunnel configs are listed but never
+  turned into outbounds.
 * **`note` is a comment for humans** — in a profile and in a proxy. The core
   ignores it and it never reaches `config.json`.
 * **`pinned`, `watch` and `watch_url` on a proxy, and the `watchdog` section, are
@@ -488,8 +491,9 @@ Rules of the format:
 * **the schema complements the core, it does not replace it.** Duplicate tags and
   duplicate ports cannot be expressed in JSON Schema, so `validate_proxies` stays
   the only place catching them.
-* `webui.json` and every `*.txt` are git-ignored: they carry personal lists. The
-  only committed links file is the synthetic `tests/fixtures/links.txt`.
+* `webui.json` and everything under `sources/` are git-ignored: they carry personal
+  keys and lists. The synthetic fixtures are `tests/fixtures/sources/vpnd/links.txt`
+  and `tests/fixtures/tunnel/*.conf`.
 
 ## Golden file acceptance
 

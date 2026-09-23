@@ -1,7 +1,9 @@
 {
   "version": 2,
   "listen_ip": "127.0.0.1",
-  "links_file": "links.txt",
+  "sources": [
+    "vpnd"
+  ],
   "output_file": "config.json",
   "exclude_from_auto": [
     "🇷🇺"
