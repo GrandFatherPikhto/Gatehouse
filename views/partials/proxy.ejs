@@ -194,6 +194,28 @@
   <button type="submit">Применить</button>
 </form>
 
+<%# §2.1: the servers that left the links file. The build already skips them; this
+    row only says so and, with one press, drops them from the document. A separate
+    form (never nested in the edit form) carries the action. When EVERY server is
+    gone the button is not offered: removing them all would turn the proxy into the
+    common pool, which the model refuses. %>
+<% if (panel.missing && panel.missing.count > 0) { %>
+  <p class="hint">
+    <%= panel.missing.count %> серверов нет в списке — при сборке пропускаются.
+  </p>
+  <% if (panel.missing.removable) { %>
+    <form hx-post="/proxy/remove-missing" hx-target="#panel" hx-swap="innerHTML" method="post" action="/proxy/remove-missing">
+      <input type="hidden" name="current" value="<%= current %>">
+      <button type="submit" class="secondary">Убрать отсутствующие</button>
+    </form>
+  <% } else { %>
+    <p class="error">
+      Все серверы этого прокси пропали: порт закрыт. Удалите прокси или найдите
+      пропавший провайдер в «Выходах».
+    </p>
+  <% } %>
+<% } %>
+
 <form hx-post="/proxy/remove" hx-target="#panel" hx-swap="innerHTML" method="post" action="/proxy/remove">
   <input type="hidden" name="current" value="<%= current %>">
   <button type="submit" class="danger" hx-confirm="Удалить прокси '<%= current %>'?">Удалить прокси</button>

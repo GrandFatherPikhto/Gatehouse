@@ -389,6 +389,32 @@ function readOutbounds(settings, settingsDir, linksOverride, warnings, providers
   if (refusal !== null) throw new ConfigError(refusal);
 
   if (read.outbounds.length === 0) {
+    // A document whose proxies still carry a TUNNEL has a real exit even with no
+    // subscription provider: the build closes the ports of the proxies whose
+    // servers are gone (§1.2 of the missing-servers task) and keeps the tunnels.
+    // Refusing here would send the owner back to hand-editing `webui.json` just
+    // because a provider folder was renamed.
+    const proxies = Array.isArray(settings.proxies) ? settings.proxies : [];
+    const hasTunnels = proxies.some((proxy) => isMapping(proxy) && isMapping(proxy.tunnel));
+    // An auto-select-only proxy would follow `route.final`; with no servers that
+    // fallback is `direct`, which would send its traffic straight out — the very
+    // «silently somewhere else» this refusal exists to prevent. Only a document
+    // whose ordinary proxies all pin their own servers (and which the build then
+    // closes with a warning) may proceed on its tunnels alone.
+    const leaksToAutoSelect = proxies.some((proxy) => {
+      if (!isMapping(proxy) || isMapping(proxy.tunnel)) return false;
+      const servers = proxy.servers;
+      if (typeof servers === 'string') return servers.length === 0;
+      return !Array.isArray(servers) || servers.length === 0;
+    });
+    if (hasTunnels && !leaksToAutoSelect) {
+      warnings.push(
+        'Предупреждение: ни одного включённого провайдера со ссылками — ' +
+          'работают только туннельные выходы',
+      );
+      return [];
+    }
+
     const reasons = [];
     if (read.rootState.message !== null) reasons.push(read.rootState.message);
     for (const entry of read.unread) reasons.push(`${entry.id}: ${entry.error}`);

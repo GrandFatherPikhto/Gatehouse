@@ -299,3 +299,40 @@ describe('the path-taking route is gone (NEW)', () => {
     }
   });
 });
+
+// §4 of techdocs/plan_2026_10_02_gatehouse_missing_servers_soft.md: a record whose
+// folder is gone and a found folder of the same content are offered as one rename,
+// and the move carries the whole record over.
+describe('renamed folder: relocation of a missing record (§4)', () => {
+  test('the panel offers the found folder and the move carries the record', async () => {
+    const editor = await startEditor({
+      providers: {
+        vpnd: {enabled: true, kind: 'subscription'},
+        hidemyname: {kind: 'awg'},
+        renamed: {enabled: true, kind: 'subscription', label: 'Old name'},
+      },
+    });
+    try {
+      const html = await panel(editor, 'providers');
+      assert.match(html, /папки нет; возможно, переименована в:/);
+      assert.match(html, /Перенести настройки в second/);
+
+      const moved = await post(editor.base, '/provider/move', {from: 'renamed', to: 'second'});
+      // The notice escapes the apostrophes: match the words, not the punctuation.
+      assert.match(await moved.text(), /перенесены в .*second/);
+
+      assert.equal(editor.model.getProvider('renamed'), null);
+      assert.deepEqual(editor.model.getProvider('second'), {
+        enabled: true,
+        kind: 'subscription',
+        label: 'Old name',
+      });
+      assert.ok(
+        editor.model.providersInfo().tags.includes(GERMANY_TAG),
+        'the moved folder now hands out its server',
+      );
+    } finally {
+      await editor.close();
+    }
+  });
+});

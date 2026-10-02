@@ -103,6 +103,14 @@ export class ProjectModel extends ProjectSession {
     return providers.forgetProvider(this, id);
   }
 
+  /**
+   * Moves the record of a provider whose folder is gone under a discovered folder
+   * of the same content — the usual rename of a folder on the router.
+   */
+  moveProviderSettings(oldId, newId) {
+    return providers.moveProviderSettings(this, oldId, newId);
+  }
+
   // ------------------------------------------------------------------
   // Tunnels (preview, the «нужен» mark, and the inventory)
   // ------------------------------------------------------------------
@@ -254,6 +262,14 @@ export class ProjectModel extends ProjectSession {
   /** Reference: `rename_proxy`. */
   renameProxy(oldTag, newTag) {
     return proxies.renameProxy(this, oldTag, newTag);
+  }
+
+  /**
+   * Drops the servers of a proxy that are no longer in the links file. Explicit
+   * owner action; the build skips them by itself (see `resolveServers`).
+   */
+  dropMissingServers(tag, allTags) {
+    return proxies.dropMissingServers(this, tag, allTags);
   }
 
   // ------------------------------------------------------------------

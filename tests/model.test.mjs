@@ -537,7 +537,10 @@ describe('stale references and the tree', () => {
     const routes = findTreeKind(tree, 'routes');
 
     assert.equal(proxies.children[0].stale, true);
-    assert.match(proxies.children[0].mark, /нет в списке серверов: 🇩🇪 Germany - Berlin/);
+    // The only server of the proxy is gone: the line says the port is closed and
+    // keeps the name in the tooltip.
+    assert.equal(proxies.children[0].mark, '[!] порт закрыт: серверов нет');
+    assert.match(proxies.children[0].full, /🇩🇪 Germany - Berlin/);
     assert.equal(routes.children[0].stale, false, 'a pool- outbound is never stale');
     assert.deepEqual(model.staleMap().get(staleKey('proxies', 'main')), ['🇩🇪 Germany - Berlin']);
   });
@@ -641,19 +644,21 @@ describe('honest tree labels: the cap and the provider diagnoses (NEW)', () => {
     return provider;
   }
 
-  test('twenty missing servers give three names, a count and a full tooltip', () => {
+  test('twenty missing servers give a short count and a full tooltip', () => {
     const missing = Array.from({length: 20}, (_, index) => `Server-${index + 1}`);
     const {dir, model} = openDocument(
-      flatDocument({proxies: [{tag: 'main', type: 'socks', port: 54321, servers: missing}]}),
+      flatDocument({
+        proxies: [{tag: 'main', type: 'socks', port: 54321, servers: [ALL_TAGS[0], ...missing]}],
+      }),
     );
     writeLinksFile(dir);
 
     const proxyNode = findTreeKind(model.treeSpec(), 'proxies').children[0];
 
     assert.equal(LABEL_NAMES_CAP, 3);
-    assert.ok(proxyNode.mark.startsWith('[!] нет в списке серверов: 20 — '));
-    assert.equal(proxyNode.mark.match(/Server-\d+/g).length, 3, 'only three names in the label');
-    assert.ok(proxyNode.mark.endsWith('…'));
+    // The line is short by design: a count, never a list of arbitrary length.
+    assert.equal(proxyNode.mark, '[!] 20 из 21 нет — пропущены');
+    assert.equal(proxyNode.mark.match(/Server-\d+/g), null, 'no names in the label');
     for (const name of missing) {
       assert.ok(proxyNode.full.includes(name), 'the full list stays available');
     }
@@ -741,7 +746,8 @@ describe('honest tree labels: the cap and the provider diagnoses (NEW)', () => {
     assert.equal(outputs.stale, false, 'a read folder is not an error in itself');
 
     const proxyNode = findTreeKind(model.treeSpec(), 'proxies').children[0];
-    assert.match(proxyNode.mark, /нет в списке серверов: Gone-1, Gone-2/);
+    assert.equal(proxyNode.mark, '[!] 2 из 3 нет — пропущены');
+    assert.ok(proxyNode.full.includes('Gone-1, Gone-2'));
   });
 });
 
@@ -941,5 +947,117 @@ describe('migration of the sources field into providers (NEW)', () => {
     model.setProviderEnabled('ghost', true);
     model.forgetProvider('ghost');
     assert.equal(model.getProvider('ghost'), null);
+  });
+});
+
+// NEW §5.5 and §5.6 of techdocs/plan_2026_10_02_gatehouse_missing_servers_soft.md:
+// the two explicit owner actions around a server that vanished.
+describe('missing servers: explicit actions (§2 of the plan)', () => {
+  test('dropMissingServers removes only the gone names and keeps the order', () => {
+    const {dir, model} = openDocument(
+      flatDocument({
+        proxies: [
+          {
+            tag: 'apps-http',
+            type: 'http',
+            port: 54323,
+            servers: ['🇩🇪 Germany - Berlin', ALL_TAGS[0], '🇦🇶 Antarctica', ALL_TAGS[1]],
+          },
+        ],
+      }),
+    );
+    writeLinksFile(dir);
+
+    const removed = model.dropMissingServers('apps-http', model.providersInfo().tags);
+
+    assert.equal(removed, 2);
+    assert.deepEqual(model.getProxy('apps-http').servers, [ALL_TAGS[0], ALL_TAGS[1]]);
+    assert.equal(model.dirty, true, 'the document is dirty, a save is needed');
+  });
+
+  test('dropMissingServers refuses to empty the whole list', () => {
+    const {dir, model} = openDocument(
+      flatDocument({
+        proxies: [{tag: 'ru-proxy', type: 'socks', port: 54325, servers: ['🇦🇶 Antarctica']}],
+      }),
+    );
+    writeLinksFile(dir);
+
+    assert.throws(
+      () => model.dropMissingServers('ru-proxy', model.providersInfo().tags),
+      (error) =>
+        error instanceof ConfigError && /не остаётся ни одного сервера/.test(error.message),
+    );
+    assert.deepEqual(model.getProxy('ru-proxy').servers, ['🇦🇶 Antarctica'], 'nothing changed');
+  });
+
+  test('moveProviderSettings moves the record under the renamed folder', () => {
+    const dir = makeTempDir();
+    // The folder was renamed on the router: the record still says `vpnd`, while
+    // the folder on disk is `vpnd-reality` and carries the same links.
+    fs.mkdirSync(path.join(dir, 'providers', 'vpnd-reality'), {recursive: true});
+    fs.writeFileSync(
+      path.join(dir, 'providers', 'vpnd-reality', 'links.txt'),
+      'vless://11111111-1111-1111-1111-111111111111@fi.example.com:443#Server\n',
+      'utf8',
+    );
+    const file = path.join(dir, 'webui.json');
+    fs.writeFileSync(
+      file,
+      canonicalJson(
+        flatDocument({
+          providers: {vpnd: {enabled: true, kind: 'subscription', label: 'Directly'}},
+          proxies: [{tag: 'apps-http', type: 'http', port: 54323, servers: ['Server']}],
+        }),
+      ),
+      'utf8',
+    );
+    const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
+
+    assert.equal(model.providersInfo().tags.length, 0, 'the record points at a gone folder');
+
+    model.moveProviderSettings('vpnd', 'vpnd-reality');
+
+    assert.equal(model.getProvider('vpnd'), null);
+    assert.deepEqual(model.getProvider('vpnd-reality'), {
+      enabled: true,
+      kind: 'subscription',
+      label: 'Directly',
+    });
+    assert.deepEqual(model.providersInfo().tags, ['Server'], 'the proxy finds its server again');
+  });
+
+  test('moveProviderSettings refuses a collision and leaves the document untouched', () => {
+    const dir = makeTempDir();
+    // Both folders hand out the SAME server name, and `vpnd-ws` is enabled.
+    for (const id of ['vpnd-reality', 'vpnd-ws']) {
+      fs.mkdirSync(path.join(dir, 'providers', id), {recursive: true});
+      fs.writeFileSync(
+        path.join(dir, 'providers', id, 'links.txt'),
+        'vless://11111111-1111-1111-1111-111111111111@fi.example.com:443#Server\n',
+        'utf8',
+      );
+    }
+    const file = path.join(dir, 'webui.json');
+    fs.writeFileSync(
+      file,
+      canonicalJson(
+        flatDocument({
+          providers: {
+            vpnd: {enabled: true, kind: 'subscription'},
+            'vpnd-ws': {enabled: true, kind: 'subscription'},
+          },
+        }),
+      ),
+      'utf8',
+    );
+    const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
+    const before = model.toText();
+
+    assert.throws(
+      () => model.moveProviderSettings('vpnd', 'vpnd-reality'),
+      (error) => error instanceof ConfigError && /одинаковых имён/.test(error.message),
+    );
+    assert.equal(model.toText(), before, 'a refused move changes nothing');
   });
 });

@@ -61,20 +61,6 @@ export function summarizeNames(names, cap = LABEL_NAMES_CAP) {
 }
 
 /**
- * Builds the mark of a missing-server reference from the server names alone.
- *
- * @param {string[]} names
- * @returns {{mark: string, full: string}}
- */
-function missingServersMark(names) {
-  const summary = summarizeNames(names);
-  return {
-    mark: `[!] нет в списке серверов: ${summary.shown}`,
-    full: `[!] нет в списке серверов: ${summary.full}`,
-  };
-}
-
-/**
  * Finds references to server tags that are not in the current links file.
  * Reference: `find_stale_refs` — same two places, same shape of the location
  * string (`proxies.<tag>.servers` / `routes.<name>.outbound`).
@@ -279,9 +265,18 @@ export function treeSpec(options = {}) {
     const marks = [];
     let missingFull = '';
     if (missing.length > 0) {
-      const built = missingServersMark(missing);
-      marks.push(built.mark);
-      missingFull = built.full;
+      // The line stays short on purpose: the count and the total say how much of
+      // the exit is still there, and the names travel in `full` (the tooltip),
+      // never in the tree line itself.
+      const total = asList(proxy.servers).filter(
+        (server) => typeof server === 'string' && server.length > 0,
+      ).length;
+      if (total > 0 && missing.length >= total) {
+        marks.push('[!] порт закрыт: серверов нет');
+      } else {
+        marks.push(`[!] ${missing.length} из ${total} нет — пропущены`);
+      }
+      missingFull = `[!] нет в списке серверов: ${missing.join(', ')}`;
     }
     if (proxy.pinned === true) marks.push('[🔒] выход зафиксирован');
 

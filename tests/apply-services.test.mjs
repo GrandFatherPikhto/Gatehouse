@@ -15,6 +15,7 @@ import {parseSubscriptionHeaders, subscriptionExpiry} from '../src/core/vless.mj
 import {startServer} from '../src/web/server.mjs';
 import {
   DEFAULT_LINKS,
+  FI_TAG,
   FIXTURES_DIR,
   fakeSystemEnv,
   makeTempDir,
@@ -577,6 +578,35 @@ describe('«Применить» takes the open panel form (§1)', () => {
       const withoutForm = await (await fetch(`${editor.base}/panel/system:singbox`)).text();
       assert.match(withoutForm, /hx-post="\/apply"/);
       assert.doesNotMatch(withoutForm, /hx-include="#panel-form"/);
+    } finally {
+      await editor.close();
+    }
+  });
+});
+
+// §5.4 of techdocs/plan_2026_10_02_gatehouse_missing_servers_soft.md: a partial
+// loss of servers must not stop Apply; the bar warns and the document stays.
+describe('missing servers on the apply bar (§3 of the plan)', () => {
+  test('/apply applies with a warning and keeps the missing names in webui.json', async () => {
+    const missing = '🇩🇪 Germany - Berlin';
+    const editor = await startEditor({
+      overrides: {
+        proxies: [
+          {tag: 'main-socks', type: 'socks', port: 54321},
+          {tag: 'apps-http', type: 'http', port: 54323, servers: [FI_TAG, missing]},
+        ],
+      },
+    });
+    try {
+      const html = await (await post(editor.base, '/apply')).text();
+
+      assert.match(html, /apply-warning/);
+      assert.match(html, /Применено, с предупреждениями/);
+      assert.match(html, /1 из 2 серверов нет в списке — пропущены/);
+
+      const document = JSON.parse(fs.readFileSync(editor.settingsFile, 'utf8'));
+      const proxy = document.proxies.find((item) => item.tag === 'apps-http');
+      assert.deepEqual(proxy.servers, [FI_TAG, missing], 'the names stay for a later rename');
     } finally {
       await editor.close();
     }

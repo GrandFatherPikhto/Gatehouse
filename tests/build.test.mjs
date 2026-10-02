@@ -73,19 +73,33 @@ test('buildPools: proxies without servers get no pool', () => {
   assert.deepEqual(buildPools(proxies, [...ALL_TAGS], null), []);
 });
 
-// Reference: test_build_pools_unknown_server_error_lists_available
-test('buildPools: an unknown server lists the available ones', () => {
-  const proxies = validateProxies([proxy({servers: [FI_TAG, '🇦🇶 Antarctica']})]);
+// NEW: a server that left the links file is skipped, not a refusal (§1.1). One
+// line per proxy, with the count and never the names.
+test('buildPools: a missing server is skipped with one count-only warning', () => {
+  const proxies = validateProxies([proxy({servers: [FI_TAG, '🇦🇶 Antarctica', '🇩🇪 Berlin']})]);
+  const warnings = [];
 
-  assert.throws(
-    () => buildPools(proxies, [...ALL_TAGS], null),
-    (error) => {
-      assert.ok(error instanceof ConfigError);
-      assert.match(error.message, /🇦🇶 Antarctica/);
-      assert.match(error.message, /Доступные серверы/);
-      assert.match(error.message, new RegExp(FI_TAG));
-      return true;
-    },
+  const pools = buildPools(proxies, [...ALL_TAGS], null, warnings);
+
+  assert.deepEqual(pools[0].outbounds, [FI_TAG]);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /прокси 'main-socks': 2 из 3 серверов нет в списке — пропущены/);
+  assert.doesNotMatch(warnings[0], /Antarctica|Berlin/);
+});
+
+// NEW: a proxy whose whole list is gone produces no pool and names its port
+// (§1.2): the port closes instead of silently joining the common pool.
+test('buildPools: a proxy with every server gone gets no pool', () => {
+  const proxies = validateProxies([proxy({servers: ['🇦🇶 Antarctica']})]);
+  const warnings = [];
+
+  const pools = buildPools(proxies, [...ALL_TAGS], null, warnings);
+
+  assert.deepEqual(pools, []);
+  assert.equal(warnings.length, 1);
+  assert.match(
+    warnings[0],
+    /прокси 'main-socks' \(порт 54321\) выключен: ни одного из его 1 серверов нет в списке/,
   );
 });
 
@@ -121,15 +135,18 @@ test('buildRules: domain rules are appended on top', () => {
 });
 
 // Reference: test_build_rules_unknown_outbound_warns
-test('buildRules: an unknown outbound is a warning, not an error', () => {
+// NEW: the rule is NOT written any more (§1.3): `sing-box check` refuses an
+// unknown outbound, so a written rule would turn a warning into a hard failure.
+test('buildRules: an unknown outbound is a warning and the rule is skipped', () => {
   const proxies = validateProxies([proxy()]);
   const routes = {broken: {outbound: 'nope-tag', domains: ['example.com']}};
   const warnings = [];
 
-  buildRules(proxies, routes, new Set([...ALL_TAGS, 'auto-select', 'direct']), warnings);
+  const rules = buildRules(proxies, routes, new Set([...ALL_TAGS, 'auto-select', 'direct']), warnings);
 
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /неизвестный outbound 'nope-tag'/);
+  assert.match(warnings[0], /неизвестный outbound 'nope-tag' — правило пропущено/);
+  assert.equal(rules.length, 2, 'only the dns and sniff rules remain');
 });
 
 // Reference: test_build_config_structure_and_stats
@@ -331,4 +348,47 @@ test('buildConfig: everything excluded leaves auto-select empty without failing'
 
   assert.deepEqual(config.outbounds[0].outbounds, []);
   assert.equal(stats.auto_count, 0);
+});
+
+// NEW (§1.2, §1.3): a proxy whose whole list is gone leaves no inbound, no pool
+// and no rule, and a route on its pool is skipped with a warning. The config the
+// build produces would pass `sing-box check`.
+test('buildConfig: a closed proxy disappears from the config', () => {
+  const settings = {
+    dns: {servers: [], final: 'dns-local'},
+    exclude_from_auto: [],
+    proxies: [
+      {tag: 'ru-proxy', type: 'socks', port: 54325, servers: ['🇦🇶 Antarctica']},
+      {tag: 'main-socks', type: 'socks', port: 54321},
+    ],
+    routes: {minsk: {outbound: 'pool-ru-proxy', domains: ['t.me']}},
+  };
+  const warnings = [];
+
+  const [config] = buildConfig(settings, parseLinks(FIXTURE_LINKS), '127.0.0.1', warnings);
+
+  assert.deepEqual(config.inbounds.map((inbound) => inbound.tag), ['main-socks']);
+  assert.ok(!config.outbounds.some((outbound) => outbound.tag === 'pool-ru-proxy'));
+  assert.ok(!config.route.rules.some((rule) => rule.outbound === 'pool-ru-proxy'));
+  assert.ok(warnings.some((line) => /ru-proxy/.test(line) && /порт 54325/.test(line)));
+  assert.ok(warnings.some((line) => /правило пропущено/.test(line)));
+});
+
+// NEW (§6): with no server outbound at all, an empty `auto-select` urltest is
+// refused by `sing-box check` («missing tags»), so the tag is not emitted and
+// `route.final` falls back to `direct`. The golden config never hits this.
+test('buildConfig: no servers leaves a valid config without an empty auto-select', () => {
+  const settings = {
+    dns: {servers: [], final: 'dns-local'},
+    proxies: [
+      {tag: 'gh', type: 'http', port: 54324, tunnel: {provider: 'p', file: 'f.conf', interface: 'gh-x'}},
+    ],
+  };
+  const warnings = [];
+
+  const [config] = buildConfig(settings, [], '10.95.2.1', warnings);
+
+  assert.deepEqual(config.outbounds.map((outbound) => outbound.tag), ['direct', 'gh']);
+  assert.equal(config.route.final, 'direct');
+  assert.deepEqual(config.route.rules.at(-1), {inbound: ['gh-in'], outbound: 'gh'});
 });

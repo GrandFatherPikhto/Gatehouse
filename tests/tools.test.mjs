@@ -126,12 +126,13 @@ test('generate.mjs: a missing settings file exits with 1', () => {
   assert.match(result.stderr, /не найден/);
 });
 
-// Reference: test_main_invalid_config_returns_error
-test('generate.mjs: an unknown server exits with 1 and lists the available ones', () => {
+// NEW (§1): a server that left the links file no longer stops the CLI. It is
+// skipped, the config is still built, and the warning names the count.
+test('generate.mjs: a missing server is skipped, not a refusal', () => {
   const dir = makeTempDir();
   writeLinksFile(dir);
   const settingsFile = writeSettings(dir, {
-    proxies: [{tag: 'apps-http', type: 'http', port: 54323, servers: ['🇦🇶 Antarctica']}],
+    proxies: [{tag: 'apps-http', type: 'http', port: 54323, servers: [FI_TAG, '🇦🇶 Antarctica']}],
   });
 
   const result = runTool('generate.mjs', [
@@ -141,10 +142,9 @@ test('generate.mjs: an unknown server exits with 1 and lists the available ones'
     path.join(dir, 'config.json'),
   ]);
 
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /несуществующие серверы/);
-  assert.match(result.stderr, /Доступные серверы/);
-  assert.ok(!fs.existsSync(path.join(dir, 'config.json')));
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /1 из 2 серверов нет в списке — пропущены/);
+  assert.ok(fs.existsSync(path.join(dir, 'config.json')), 'the config is still built');
 });
 
 // NEW: argument handling of the ported CLI.

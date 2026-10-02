@@ -72,4 +72,19 @@ export function registerProviderRoutes(app, ctx) {
       };
     }),
   );
+
+  // §4: the record of a folder that was renamed (the usual case) moves under the
+  // new folder's id as one unit, so the proxies find their servers again.
+  app.post(
+    '/provider/move',
+    mutation(ctx, 'providers', (req) => {
+      const from = String(req.body.from ?? '').trim();
+      const to = String(req.body.to ?? '').trim();
+      ctx.model.moveProviderSettings(from, to);
+      return {
+        key: 'providers',
+        notice: `Настройки провайдера '${from}' перенесены в '${to}' — не забудьте сохранить`,
+      };
+    }),
+  );
 }

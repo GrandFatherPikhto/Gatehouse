@@ -24,6 +24,7 @@ import fs from 'node:fs';
 
 import {ConfigError} from '../core/errors.mjs';
 import {previewConfig, stringifyConfig} from '../core/settings.mjs';
+import {LABEL_NAMES_CAP} from '../model/stale.mjs';
 import {listConfigSnapshots} from '../model/storage.mjs';
 
 /**
@@ -94,7 +95,12 @@ function appliedAt(lastApply) {
 function compareWithLive(ctx) {
   const {model, state} = ctx;
   if (model.path === null) {
-    return {state: 'pending', message: 'сохранено, не применено', detail: 'файл ещё не сохранён'};
+    return {
+      state: 'pending',
+      message: 'сохранено, не применено',
+      detail: 'файл ещё не сохранён',
+      warnings: [],
+    };
   }
 
   const configPath = model.resolvedOutputPath();
@@ -102,10 +108,17 @@ function compareWithLive(ctx) {
   const cache = state.applyCache ?? null;
   if (cache !== null && cache.key === key) return cache.value;
 
+  // The build warnings travel with the answer: a server that left the links file
+  // is not a refusal, but the owner has to see it on the bar. The collector is
+  // filled by the SAME reader and assembly the generator runs.
+  const warnings = [];
   let value;
   try {
     const expected = stringifyConfig(
-      previewConfig(model.path, {providersRoot: model.resolvedProvidersRoot()}),
+      previewConfig(model.path, {
+        providersRoot: model.resolvedProvidersRoot(),
+        warnings,
+      }),
     );
     if (!fs.existsSync(configPath)) {
       value = {
@@ -129,6 +142,7 @@ function compareWithLive(ctx) {
     };
   }
 
+  value.warnings = warnings;
   state.applyCache = {key, value};
   return value;
 }
@@ -201,8 +215,35 @@ export function applyBar(ctx) {
   }
 
   const comparison = compareWithLive(ctx);
+  // Warnings are capped exactly like a tree label: the first `LABEL_NAMES_CAP`
+  // lines and «ещё N». A missing server produces one line per proxy, so an
+  // unbounded list would fill the bar.
+  const warnings = Array.isArray(comparison.warnings) ? comparison.warnings : [];
+  const shownWarnings = warnings.slice(0, LABEL_NAMES_CAP);
+  const warningsMore = warnings.length - shownWarnings.length;
+
+  // A successful apply that still produced warnings is a «warning», not
+  // «applied»: the port is up, but the owner has to see what was skipped.
+  if (comparison.state === 'applied' && warnings.length > 0) {
+    return {
+      state: 'warning',
+      message: 'Применено, с предупреждениями',
+      detail: '',
+      warnings: shownWarnings,
+      warningsMore,
+      lastAppliedAt: appliedAt(lastApply),
+      canRollback,
+      saveButton: true,
+      applyButton: true,
+      lastApply,
+      steps,
+    };
+  }
+
   return {
     ...comparison,
+    warnings: shownWarnings,
+    warningsMore,
     lastAppliedAt: appliedAt(lastApply),
     canRollback,
     saveButton: true,

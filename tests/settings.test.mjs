@@ -284,9 +284,10 @@ test('loadSettings: invalid JSON throws ConfigError', () => {
   );
 });
 
-// NEW: the committed fixture with a stale server reference must fail with the
-// reference wording — this is the fixture that used to break the comparison.
-test('stale fixture: an unknown server is a hard error listing the available ones', () => {
+// NEW (§1): the committed fixture with a stale server reference no longer fails —
+// the build skips the gone server with a count-only warning and writes the config.
+// This is the fixture that used to break the comparison.
+test('stale fixture: an unknown server is skipped with a warning', () => {
   const document = JSON.parse(fs.readFileSync(STALE_FIXTURE, 'utf8'));
   assert.equal(document.version, 2, 'the fixture is a flat version-2 document');
   assert.ok(
@@ -295,17 +296,18 @@ test('stale fixture: an unknown server is a hard error listing the available one
   );
 
   const dir = makeTempDir();
-  assert.throws(
-    () => generateConfigFile(STALE_FIXTURE, {output: path.join(dir, 'config.json')}),
-    (error) => {
-      assert.ok(error instanceof ConfigError);
-      assert.match(error.message, /несуществующие серверы/);
-      assert.match(error.message, /🇩🇪 Germany - Berlin/);
-      assert.match(error.message, /Доступные серверы/);
-      return true;
-    },
+  const {warnings} = generateConfigFile(STALE_FIXTURE, {output: path.join(dir, 'config.json')});
+
+  assert.ok(
+    warnings.some((line) => /1 из 3 серверов нет в списке — пропущены/.test(line)),
+    'the proxy warning names the count and no server name',
   );
-  assert.ok(!fs.existsSync(path.join(dir, 'config.json')), 'nothing is written on failure');
+  assert.ok(
+    warnings.some((line) =>
+      /неизвестный outbound '🇩🇪 Germany - Berlin' — правило пропущено/.test(line),
+    ),
+  );
+  assert.ok(fs.existsSync(path.join(dir, 'config.json')), 'the config is written anyway');
 });
 
 // NEW: the committed fixture pair must stay mutually consistent.
@@ -376,4 +378,45 @@ test('stats: the proxy summary data matches the reference', () => {
   assert.deepEqual(stats.proxies[1].servers, [FI_TAG, '🇳🇱 Netherlands - Amsterdam']);
   assert.deepEqual(stats.excluded, ['🇷🇺 Russia - Moscow']);
   assert.ok(ALL_TAGS.includes(stats.excluded[0]));
+});
+
+// NEW (§6 of the missing-servers plan): a document with no enabled provider that
+// has links, but WITH a tunnel proxy, still generates — the config drops the
+// empty auto-select and falls back to `direct`. An auto-select-only proxy would
+// follow that fallback straight out, so it keeps the refusal.
+test('generateConfigFile: tunnels alone are enough, auto-select-only still refuses', () => {
+  const dir = makeTempDir();
+  fs.mkdirSync(path.join(dir, 'providers'), {recursive: true});
+
+  const tunnelSettings = writeSettings(dir, {
+    providers: {},
+    proxies: [
+      {
+        tag: 'claude-http',
+        type: 'http',
+        port: 54324,
+        tunnel: {provider: 'hidemyname', file: 'x.conf', interface: 'gh-x'},
+      },
+    ],
+  });
+  const warnings = [];
+  const {config} = generateConfigFile(tunnelSettings, {
+    output: path.join(dir, 'tunnel-config.json'),
+    warnings,
+  });
+  assert.deepEqual(config.outbounds.map((outbound) => outbound.tag), ['direct', 'claude-http']);
+  assert.equal(config.route.final, 'direct');
+  assert.ok(warnings.some((line) => /только туннельные выходы/.test(line)));
+
+  const autoDir = makeTempDir();
+  fs.mkdirSync(path.join(autoDir, 'providers'), {recursive: true});
+  const autoSettings = writeSettings(autoDir, {
+    providers: {},
+    proxies: [{tag: 'main', type: 'socks', port: 54321}],
+  });
+  assert.throws(
+    () => generateConfigFile(autoSettings, {output: path.join(autoDir, 'config.json')}),
+    (error) =>
+      error instanceof ConfigError && /включённого провайдера со ссылками/.test(error.message),
+  );
 });

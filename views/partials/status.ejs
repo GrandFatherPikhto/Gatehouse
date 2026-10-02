@@ -78,6 +78,18 @@
     <button type="submit" class="secondary" data-form-guard="#panel-form">Перечитать с диска</button>
   </form>
 </div>
+<%# Build warnings of §1 — one line per proxy or route. `apply.warnings` is already
+    capped by the bar; `warningsMore` is the rest. %>
+<% if (apply.warnings && apply.warnings.length > 0) { %>
+  <ul class="warnings">
+    <% for (const warning of apply.warnings) { %>
+      <li><%= warning %></li>
+    <% } %>
+    <% if (apply.warningsMore > 0) { %>
+      <li>ещё <%= apply.warningsMore %></li>
+    <% } %>
+  </ul>
+<% } %>
 <% if (apply.steps && apply.steps.length > 0) { %>
   <ol class="apply-steps">
     <% for (const step of apply.steps) { %>

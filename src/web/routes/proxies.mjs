@@ -36,4 +36,22 @@ export function registerProxyRoutes(app, ctx) {
       return {key: 'proxies', notice: `Прокси '${tag}' удалён — не забудьте сохранить`};
     }),
   );
+
+  // «Убрать отсутствующие»: an explicit owner action that drops the servers which
+  // left the links file. The build already skips them; this only makes the
+  // document say so. Names are kept until the owner presses it.
+  app.post(
+    '/proxy/remove-missing',
+    mutation(ctx, 'proxies', (req) => {
+      const tag = String(req.body.current ?? '').trim();
+      const removed = ctx.model.dropMissingServers(tag, ctx.model.providersInfo().tags);
+      return {
+        key: panelKey('proxy', tag),
+        notice:
+          removed > 0
+            ? `У прокси '${tag}' убрано отсутствующих серверов: ${removed} — не забудьте сохранить`
+            : `У прокси '${tag}' отсутствующих серверов нет`,
+      };
+    }),
+  );
 }

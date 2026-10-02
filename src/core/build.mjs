@@ -7,7 +7,7 @@
 // `config.json` byte by byte with the reference output, and JS keeps string key
 // insertion order, so the order below must mirror the reference exactly.
 
-import {ConfigError, DEFAULT_EXCLUDE, isMapping, pyTruthy} from './errors.mjs';
+import {DEFAULT_EXCLUDE, isMapping, pyTruthy} from './errors.mjs';
 import {
   asList,
   isTunnelProxy,
@@ -76,27 +76,80 @@ export function buildTunnelOutbounds(proxies) {
 }
 
 /**
+ * Splits the server list of every proxy into "still in the links file" and
+ * "gone", skipping the gone ones and reporting ONE line per proxy.
+ *
+ * A server that vanished is not an error any more: the document keeps its names
+ * (renaming the provider folder back makes them resolve again), and the build
+ * simply skips them. The warning never lists names — a line of arbitrary length
+ * belongs nowhere near the apply bar, and the full list is already shown in the
+ * proxy form (the `LABEL_NAMES_CAP` rule of `stale.mjs`).
+ *
+ * A proxy whose WHOLE list is gone is dropped from the result: an empty list
+ * means "the common auto-select pool", and silently moving e.g. a "Russia only"
+ * port onto any country would change what the port means behind the owner's
+ * back. Such a proxy gets no inbound and no rule — its port simply closes — and
+ * the warning names the port so the closed socket is explained.
+ *
+ * @param {Array<{tag: string, port: number, servers?: string[], tunnel?: object|null}>} proxies
+ * @param {string[]} allTags Server tags of the current links files.
+ * @param {string[]} [warnings] Collector for the skipped servers.
+ * @returns {Array<Record<string, unknown>>} The proxies that still have an exit.
+ */
+export function resolveServers(proxies, allTags, warnings = []) {
+  const usable = [];
+  for (const proxy of proxies) {
+    // A tunnel proxy owns no server list: its single exit is the interface.
+    if (isTunnelProxy(proxy)) {
+      usable.push(proxy);
+      continue;
+    }
+
+    const servers = Array.isArray(proxy.servers) ? proxy.servers : [];
+    // No list at all means the common pool; there is nothing to skip.
+    if (servers.length === 0) {
+      usable.push(proxy);
+      continue;
+    }
+
+    const present = servers.filter((server) => allTags.includes(server));
+    if (present.length === 0) {
+      warnings.push(
+        `Предупреждение: прокси '${proxy.tag}' (порт ${proxy.port}) выключен: ` +
+          `ни одного из его ${servers.length} серверов нет в списке`,
+      );
+      continue;
+    }
+    if (present.length < servers.length) {
+      warnings.push(
+        `Предупреждение: прокси '${proxy.tag}': ${servers.length - present.length} из ` +
+          `${servers.length} серверов нет в списке — пропущены`,
+      );
+    }
+    usable.push(present.length === servers.length ? proxy : {...proxy, servers: present});
+  }
+  return usable;
+}
+
+/**
  * Builds one `pool-<tag>` urltest outbound per proxy that lists its own servers.
  * Reference: `build_pools`.
+ *
+ * Servers that are no longer in the links file are skipped with a warning
+ * (`resolveServers`); `buildConfig` resolves them once and passes the result in,
+ * so this call reports nothing twice.
  *
  * @param {Array<{tag: string, servers: string[]}>} proxies
  * @param {string[]} allTags
  * @param {unknown} urltestConfig
+ * @param {string[]} [warnings]
  * @returns {Array<Record<string, unknown>>}
  */
-export function buildPools(proxies, allTags, urltestConfig) {
+export function buildPools(proxies, allTags, urltestConfig, warnings = []) {
   const pools = [];
-  for (const proxy of proxies) {
+  for (const proxy of resolveServers(proxies, allTags, warnings)) {
     const servers = proxy.servers;
     if (!servers || servers.length === 0) continue;
-
-    const missing = servers.filter((server) => !allTags.includes(server));
-    if (missing.length > 0) {
-      throw new ConfigError(
-        `прокси '${proxy.tag}' ссылается на несуществующие серверы: ${missing.join(', ')}\n` +
-          `Доступные серверы: ${allTags.join(', ') || '(нет)'}`,
-      );
-    }
 
     const pool = {
       type: 'urltest',
@@ -124,13 +177,16 @@ export function buildPools(proxies, allTags, urltestConfig) {
  * @returns {Array<Record<string, unknown>>}
  */
 export function buildRules(proxies, routes, knownOutbounds, warnings = []) {
-  const rules = [
-    {protocol: 'dns', action: 'hijack-dns'},
-    {
+  const rules = [{protocol: 'dns', action: 'hijack-dns'}];
+  // The sniff rule names every inbound; with no inbound left (every proxy's
+  // servers gone) an empty `inbound` list would make `sing-box check` refuse, so
+  // the rule is not written at all in that case.
+  if (proxies.length > 0) {
+    rules.push({
       inbound: proxies.map((proxy) => (isTunnelProxy(proxy) ? `${proxy.tag}-in` : proxy.tag)),
       action: 'sniff',
-    },
-  ];
+    });
+  }
 
   for (const proxy of proxies) {
     if (isTunnelProxy(proxy)) {
@@ -145,10 +201,15 @@ export function buildRules(proxies, routes, knownOutbounds, warnings = []) {
   for (const [name, data] of Object.entries(routes || {})) {
     requireMapping(data, `маршрут '${name}'`);
     const outbound = data.outbound === undefined ? 'auto-select' : data.outbound;
+    // A rule on a missing outbound is NOT written: `sing-box check` refuses an
+    // unknown tag, and a written rule would turn a build warning into a hard
+    // failure. The warning stays, and says the rule was skipped.
     if (!knownOutbounds.has(outbound)) {
       warnings.push(
-        `Предупреждение: маршрут '${name}' ссылается на неизвестный outbound '${outbound}'`,
+        `Предупреждение: маршрут '${name}' ссылается на неизвестный outbound '${outbound}' — ` +
+          'правило пропущено',
       );
+      continue;
     }
     rules.push({
       domain_suffix: asList(data.domains),
@@ -179,8 +240,12 @@ export function buildConfig(settings, outbounds, listenIp, warnings = [], option
   const ublock = urltestBlock(urltestConfig);
 
   const proxies = validateProxies(settings.proxies === undefined ? null : settings.proxies);
-  const [inbounds, inboundTags] = buildInbounds(proxies, listenIp);
-  const pools = buildPools(proxies, tags, urltestConfig);
+  // Servers that left the links file are dropped HERE, once: every later step
+  // (inbounds, pools, rules, stats) works on the same surviving list, so a proxy
+  // whose whole list is gone leaves no inbound, no rule and no pool behind.
+  const usable = resolveServers(proxies, tags, warnings);
+  const [inbounds, inboundTags] = buildInbounds(usable, listenIp);
+  const pools = buildPools(usable, tags, urltestConfig, warnings);
 
   const excludePrefixes = validateExclude(
     asList(settings.exclude_from_auto === undefined ? DEFAULT_EXCLUDE : settings.exclude_from_auto),
@@ -190,11 +255,17 @@ export function buildConfig(settings, outbounds, listenIp, warnings = [], option
   );
   const excludedTags = tags.filter((tag) => !autoTags.includes(tag));
 
-  const tunnelOutbounds = buildTunnelOutbounds(proxies);
+  const tunnelOutbounds = buildTunnelOutbounds(usable);
+  // With NO server outbound at all (every provider folder gone, only tunnels
+  // left) an empty `auto-select` urltest is rejected by `sing-box check`
+  // («missing tags»), so the tag is not emitted at all and `route.final` falls
+  // back to `direct`. The golden config never hits this: its links file always
+  // has servers.
+  const hasServers = tags.length > 0;
 
   const knownOutbounds = new Set([
     ...tags,
-    'auto-select',
+    ...(hasServers ? ['auto-select'] : []),
     'direct',
     ...pools.map((pool) => pool.tag),
     ...tunnelOutbounds.map((outbound) => outbound.tag),
@@ -206,7 +277,7 @@ export function buildConfig(settings, outbounds, listenIp, warnings = [], option
   // it knows are up; without that answer no warning is invented.
   if (Array.isArray(options.runningTunnels)) {
     const running = new Set(options.runningTunnels.map((name) => String(name)));
-    for (const proxy of proxies) {
+    for (const proxy of usable) {
       if (!isTunnelProxy(proxy) || running.has(proxy.tunnel.interface)) continue;
       warnings.push(
         `Предупреждение: прокси '${proxy.tag}' слушает порт ${proxy.port}, ` +
@@ -228,12 +299,16 @@ export function buildConfig(settings, outbounds, listenIp, warnings = [], option
     dns: pyTruthy(dnsConfig) ? dnsConfig : {},
     inbounds,
     outbounds: [
-      {
-        type: 'urltest',
-        tag: 'auto-select',
-        outbounds: autoTags,
-        ...ublock,
-      },
+      ...(hasServers
+        ? [
+            {
+              type: 'urltest',
+              tag: 'auto-select',
+              outbounds: autoTags,
+              ...ublock,
+            },
+          ]
+        : []),
       {type: 'direct', tag: 'direct'},
       ...pools,
       // Tunnel `direct` outbounds sit next to the pools, before the VLESS
@@ -243,8 +318,8 @@ export function buildConfig(settings, outbounds, listenIp, warnings = [], option
       ...outbounds,
     ],
     route: {
-      rules: buildRules(proxies, settings.routes || null, knownOutbounds, warnings),
-      final: 'auto-select',
+      rules: buildRules(usable, settings.routes || null, knownOutbounds, warnings),
+      final: hasServers ? 'auto-select' : 'direct',
       default_domain_resolver: 'dns-local',
     },
   };
@@ -255,7 +330,7 @@ export function buildConfig(settings, outbounds, listenIp, warnings = [], option
     pools: pools.length,
     auto_count: autoTags.length,
     excluded: excludedTags,
-    proxies,
+    proxies: usable,
     listen_ip: listenIp,
   };
   return [config, stats];

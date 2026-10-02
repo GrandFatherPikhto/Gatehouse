@@ -315,6 +315,30 @@ function overridesView(provider) {
 }
 
 /**
+ * Discovered folders a missing provider record may have been renamed to.
+ *
+ * Nothing is guessed by NAME: a candidate is a folder that was read, has no
+ * record of its own, and whose content fits the kind the record already chose —
+ * `links.txt` for a subscription, `*.conf` for tunnels. A record with no kind
+ * accepts either. A `mixed` folder is never offered: it has to be split first.
+ *
+ * @param {Record<string, unknown>} info `model.providersInfo()`.
+ * @param {Record<string, unknown>} record The stored record of the missing id.
+ * @returns {Array<{id: string, hint: string}>}
+ */
+function relocationCandidates(info, record) {
+  const kind = record?.kind === 'subscription' || record?.kind === 'awg' ? record.kind : null;
+  return info.providers
+    .filter((provider) => provider.hasRecord !== true)
+    .filter((provider) => {
+      if (kind === 'subscription') return provider.contentKind === 'links';
+      if (kind === 'awg') return provider.contentKind === 'tunnels';
+      return provider.contentKind === 'links' || provider.contentKind === 'tunnels';
+    })
+    .map((provider) => ({id: String(provider.id), hint: String(provider.hint ?? '')}));
+}
+
+/**
  * Builds the view model of one panel.
  *
  * @param {import('../model/project.mjs').ProjectModel} model
@@ -390,6 +414,9 @@ export function buildPanel(model, key, extra = {}) {
                 ? entry.label
                 : entry.id,
             stateLabel: unreadStateLabel(entry.state),
+            // §4: a record whose folder is gone and a new folder of the same
+            // content are usually one rename. `forget` marks the missing records.
+            relocation: entry.forget === true ? relocationCandidates(info, entry.record ?? {}) : [],
           })),
         },
       };
@@ -470,6 +497,16 @@ export function buildPanel(model, key, extra = {}) {
       const proxy = model.getProxy(name);
       if (proxy === null) throw new ConfigError(`прокси '${name}' не найден`);
       const info = model.providersInfo();
+      // §2.1: the servers of this proxy that are no longer in the links file. The
+      // build skips them by itself; the row and the button only say so and let the
+      // owner drop them from the document explicitly. `removable` is false when
+      // every server is gone — removing them all would turn the proxy into the
+      // common pool, which the model refuses.
+      const known = new Set(info.tags);
+      const storedServers = Array.isArray(proxy.servers)
+        ? proxy.servers.filter((server) => typeof server === 'string')
+        : [];
+      const missingServers = storedServers.filter((server) => !known.has(server));
       return {
         ...base,
         title: `Прокси: ${name}`,
@@ -481,6 +518,12 @@ export function buildPanel(model, key, extra = {}) {
         // Tunnels the form may bind this proxy to (§5.1). Empty when no provider
         // folder holds a `*.conf`, and then the selector is not drawn at all.
         tunnels: model.availableTunnels(),
+        missing: {
+          count: missingServers.length,
+          total: storedServers.length,
+          tags: missingServers,
+          removable: missingServers.length > 0 && storedServers.length > missingServers.length,
+        },
       };
     }
 

@@ -171,6 +171,42 @@ export function removeProxy(model, tag) {
 }
 
 /**
+ * Removes the servers of a proxy that are no longer in the links file. This is
+ * the explicit owner action («Убрать отсутствующие»): the build already skips
+ * them by itself, and this only makes the document SAY so, so they stop being
+ * listed in the picker. The order of the survivors is kept exactly.
+ *
+ * The whole list is never removed: an empty `servers` means «the common
+ * auto-select pool», and silently moving a country-pinned port onto any exit is
+ * the very thing §1.2 of the task forbids. The owner deletes the proxy or picks
+ * another exit instead.
+ *
+ * @param {import('../project.mjs').ProjectModel} model
+ * @param {string} tag
+ * @param {string[]} allTags Server tags of the current links files.
+ * @returns {number} How many names were dropped (0 when nothing was missing).
+ */
+export function dropMissingServers(model, tag, allTags) {
+  const proxy = getProxy(model, tag);
+  if (proxy === null) throw new ConfigError(`прокси '${tag}' не найден`);
+  if (!Array.isArray(proxy.servers) || proxy.servers.length === 0) return 0;
+
+  const known = new Set(allTags);
+  const kept = proxy.servers.filter((server) => known.has(server));
+  const removed = proxy.servers.length - kept.length;
+  if (removed === 0) return 0;
+  if (kept.length === 0) {
+    throw new ConfigError(
+      `у прокси '${tag}' не остаётся ни одного сервера: удалите прокси или выберите другой выход`,
+    );
+  }
+
+  proxy.servers = kept;
+  model.markDirty();
+  return removed;
+}
+
+/**
  * Reference: `rename_proxy`.
  *
  * @param {import('../project.mjs').ProjectModel} model

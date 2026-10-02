@@ -60,6 +60,33 @@
                 <button type="submit" class="secondary">Забыть</button>
               </form>
             <% } %>
+            <%# §4: a record whose folder is gone and a new folder of the same
+                content are usually one rename. Nothing is guessed by NAME: the
+                candidates are found folders with no record and fitting content. %>
+            <% if (entry.relocation && entry.relocation.length > 0) { %>
+              <div class="hint">
+                папки нет; возможно, переименована в:
+                <% if (entry.relocation.length === 1) { %>
+                  <% const candidate = entry.relocation[0]; %>
+                  «<%= candidate.id %>»
+                  <form class="inline" hx-post="/provider/move" hx-target="#panel" hx-swap="innerHTML" method="post" action="/provider/move">
+                    <input type="hidden" name="from" value="<%= entry.id %>">
+                    <input type="hidden" name="to" value="<%= candidate.id %>">
+                    <button type="submit" class="secondary">Перенести настройки в <%= candidate.id %></button>
+                  </form>
+                <% } else { %>
+                  <form class="inline" hx-post="/provider/move" hx-target="#panel" hx-swap="innerHTML" method="post" action="/provider/move">
+                    <input type="hidden" name="from" value="<%= entry.id %>">
+                    <select name="to">
+                      <% for (const candidate of entry.relocation) { %>
+                        <option value="<%= candidate.id %>"><%= candidate.id %></option>
+                      <% } %>
+                    </select>
+                    <button type="submit" class="secondary">Перенести настройки</button>
+                  </form>
+                <% } %>
+              </div>
+            <% } %>
           </td>
         </tr>
       <% } %>

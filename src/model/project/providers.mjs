@@ -504,6 +504,93 @@ export function forgetProvider(model, id) {
 }
 
 /**
+ * Moves the record of a provider whose FOLDER is gone under a discovered folder
+ * that looks like the same content — the usual rename of a folder on the router.
+ *
+ * Only the record moves: `providers[oldId]` is deleted and written as
+ * `providers[newId]` (kind, label, suffix, overrides, enabled). Server names do
+ * not change (they come from the links file plus the suffix), so the servers of
+ * every proxy resolve again — without «Убрать отсутствующие». `tunnels[].provider`
+ * is rewritten too, otherwise a prepared tunnel would lose its source.
+ *
+ * Nothing is guessed by name: `newId` must be a discovered folder with no record
+ * of its own, and its content must fit the kind the old record already chose. If
+ * the moved record is enabled and enabling it makes two enabled providers hand
+ * out the same server name, the whole move is refused and the document stays.
+ *
+ * @param {import('../project.mjs').ProjectModel} model
+ * @param {string} oldId Identifier of the record whose folder is gone.
+ * @param {string} newId Discovered folder the record moves to.
+ * @returns {Record<string, unknown>} The stored record under `newId`.
+ */
+export function moveProviderSettings(model, oldId, newId) {
+  const from = String(oldId ?? '').trim();
+  const to = String(newId ?? '').trim();
+  if (!isProviderId(from) || !isProviderId(to)) {
+    throw new ConfigError('имя провайдера не подходит для идентификатора');
+  }
+  if (from === to) throw new ConfigError('новое имя совпадает со старым');
+
+  const map = providersMap(model);
+  const record = map[from];
+  if (!isMapping(record)) {
+    throw new ConfigError(`провайдер '${from}' не указан в providers`);
+  }
+
+  const info = providersInfo(model);
+  if (info.providers.some((provider) => provider.id === from)) {
+    throw new ConfigError(`папка '${from}' на диске: переносить нечего`);
+  }
+  const target = info.providers.find((provider) => provider.id === to) ?? null;
+  if (target === null) throw new ConfigError(`папка '${to}' не найдена`);
+  if (Object.hasOwn(map, to)) {
+    throw new ConfigError(`у папки '${to}' уже есть запись: перенос невозможен`);
+  }
+
+  const kind = record.kind === 'subscription' || record.kind === 'awg' ? record.kind : null;
+  const content = target.contentKind;
+  const fits =
+    kind === 'subscription'
+      ? content === 'links' || content === 'mixed'
+      : kind === 'awg'
+        ? content === 'tunnels' || content === 'mixed'
+        : true;
+  if (!fits) {
+    throw new ConfigError(
+      `папка '${to}' по содержимому не похожа на '${from}': перенос не выполняется`,
+    );
+  }
+
+  const before = model.toText();
+  const wasDirty = model.dirty;
+
+  const providers = ensureProviders(model);
+  delete providers[from];
+  providers[to] = {...record};
+  // A record with no kind is given the one its content implies, so the moved
+  // folder feeds the build right away instead of waiting for the next open.
+  if (kind === null) {
+    const inferred = inferKind(content);
+    if (inferred !== null) providers[to] = {...record, kind: inferred};
+  }
+  if (Array.isArray(model.document.tunnels)) {
+    for (const entry of model.document.tunnels) {
+      if (isMapping(entry) && entry.provider === from) entry.provider = to;
+    }
+  }
+  model.markDirty();
+
+  if (record.enabled === true) {
+    const refusal = providerCollisionRefusal(model);
+    if (refusal !== null) {
+      rollback(model, before, wasDirty);
+      throw new ConfigError(refusal);
+    }
+  }
+  return getProvider(model, to) ?? {};
+}
+
+/**
  * Migrates the `sources` field into `providers`, in place, and drops `sources`.
  * Returns the warnings to show.
  *
