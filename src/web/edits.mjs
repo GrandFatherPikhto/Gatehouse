@@ -131,10 +131,11 @@ export function applyRoute(ctx, route, req) {
       // The old order skipped the kind whenever the form asked to enable, so the
       // enabling refusal then complained about the very kind the form had sent.
       const stored = model.getProvider(id) ?? {};
+      const knownKind = (value) =>
+        value === 'subscription' || value === 'awg' || value === 'xray' ? value : null;
       if (Object.hasOwn(body, 'kind')) {
-        const kind = body.kind === 'subscription' || body.kind === 'awg' ? body.kind : null;
-        const storedKind =
-          stored.kind === 'subscription' || stored.kind === 'awg' ? stored.kind : null;
+        const kind = knownKind(body.kind);
+        const storedKind = knownKind(stored.kind);
         if (stored.enabled !== true) {
           model.setProviderKind(id, kind);
         } else if (kind !== storedKind) {
@@ -146,14 +147,18 @@ export function applyRoute(ctx, route, req) {
       }
       model.setProviderLabel(id, String(body.label ?? ''));
 
-      // «Suffix» and the overrides only exist for a SUBSCRIPTION: they are applied
-      // when the effective kind is one and skipped for tunnels, so a no-JS submit
-      // cannot leave a suffix on a tunnel record.
+      // The suffix exists for a SUBSCRIPTION and for XRAY — both name their servers
+      // and both use the same append rule; a tunnel record has no server names, so
+      // a no-JS submit cannot leave a suffix on it. The «тонкие настройки»
+      // (flow/fp) stay a subscription concern and are NOT applied to xray (task
+      // 19 §6).
       const effectiveKind = (model.getProvider(id) ?? {}).kind ?? null;
-      if (effectiveKind === 'subscription') {
+      if (effectiveKind === 'subscription' || effectiveKind === 'xray') {
         if (Object.hasOwn(body, 'suffix')) {
           model.setProviderSuffix(id, String(body.suffix ?? ''));
         }
+      }
+      if (effectiveKind === 'subscription') {
         // Only the fields the form really carries: a direct POST of `id`+`label`
         // must not wipe the stored overrides by sending two empty fields.
         const overrides = {};

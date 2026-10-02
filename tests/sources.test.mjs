@@ -78,14 +78,17 @@ describe('discovery of provider folders', () => {
     const root = buildDiscoveryRoot();
     const read = readProviders({}, root);
 
+    // Task 20 §1: EVERY folder that exists is a provider (with its state), so it
+    // gets a tree node and a panel. `unread` keeps only entries with no folder to
+    // open: a bad name and a stray file.
     assert.deepEqual(
       read.providers.map((provider) => provider.id).sort(),
-      ['amnezia', 'mix', 'vpnd'],
+      ['amnezia', 'empty', 'mix', 'vpnd'],
     );
     assert.equal(read.providers.every((provider) => provider.enabled === false), true);
+    assert.equal(read.providers.find((provider) => provider.id === 'empty').state, 'empty');
 
     const byId = Object.fromEntries(read.unread.map((entry) => [entry.id, entry]));
-    assert.equal(byId['empty'].state, 'empty');
     assert.equal(byId['bad name'].state, 'badname');
     assert.equal(byId['stray.txt'].state, 'stray');
     assert.equal(Object.hasOwn(byId, '.hidden'), false, 'hidden entries are skipped silently');

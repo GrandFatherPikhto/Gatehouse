@@ -26,9 +26,10 @@
 // testable on its own.
 
 import {isMapping} from '../core/errors.mjs';
-import {plural} from '../core/sources.mjs';
+import {LINKS_FILENAME, TUNNEL_EXTENSION, kindSourcePresent, plural} from '../core/sources.mjs';
 import {asList} from '../core/validate.mjs';
 import {subscriptionExpiry} from '../core/vless.mjs';
+import {XRAY_CONFIGS_FILENAME} from '../core/xray.mjs';
 
 /** Outbounds that always exist in a generated config, besides the servers. */
 export const BUILTIN_OUTBOUNDS = Object.freeze(['auto-select', 'direct']);
@@ -181,29 +182,31 @@ function node(key, title, kind, extra = {}) {
 }
 
 /**
- * Diagnoses of one provider folder, keyed by the state the provider reader
- * reports. The difference runs on the PROVIDER, not on the number: a folder that
- * was read and happens to list none of the proxies' servers still produces the
- * per-proxy fourth message, while a folder that was never read produces one of
- * the first three and nothing else.
+ * The SHORT diagnosis of one provider folder, for its tree label (task 20 §1.3).
+ * The full reason travels in the panel; the line itself only says which of the
+ * four things happened, never a path that would push everything else out.
  *
  * @param {Record<string, unknown>} provider
  * @returns {string} Empty for a readable folder.
  */
-export function providerDiagnosis(provider) {
-  // The noun follows the shape of the entry: a stray file in the root, a folder
-  // that is not there, or a folder the process may not read.
-  const noun =
-    provider.type === 'file' ? ['файл', 'не найден', 'недоступен']
-      : provider.type === 'folder' ? ['папка', 'не найдена', 'недоступна']
-        : ['каталог', 'не найден', 'недоступен'];
+export function providerShortMark(provider) {
   switch (provider.state) {
     case 'missing':
-      return `[!] ${noun[0]} ${noun[1]}: ${provider.path}`;
+      return '[!] папки нет';
+    case 'denied':
+      return '[!] нет доступа';
     case 'unreadable':
-      return `[!] ${noun[0]} ${noun[2]}: ${provider.path}`;
+      return '[!] файл не читается';
     case 'empty':
-      return `[!] пусто: ${provider.path}`;
+      // The chosen kind is missing its file: name the file, so the mismatch is
+      // visible without opening the panel. A file that IS there but holds nothing
+      // usable is simply «пусто».
+      if (!kindSourcePresent(provider.kind, String(provider.contentKind ?? ''))) {
+        if (provider.kind === 'subscription') return `[!] нет ${LINKS_FILENAME}`;
+        if (provider.kind === 'xray') return `[!] нет ${XRAY_CONFIGS_FILENAME}`;
+        if (provider.kind === 'awg') return `[!] нет *${TUNNEL_EXTENSION}`;
+      }
+      return '[!] пусто';
     default:
       return '';
   }
@@ -343,17 +346,17 @@ export function treeSpec(options = {}) {
     );
   }
 
-  // Every provider folder is a node of its own, with the honest diagnosis in it.
-  // A disabled provider says so — the whole point of the flag is that the owner
-  // notices at a glance which folders do NOT feed `config.json`. Unreadable
-  // entries are not nodes (many have no folder to open): they are counted in the
-  // mark of the «Выходы» node and listed in its panel.
+  // EVERY provider folder is a node of its own — empty, of a kind that finds no
+  // file, with a broken file, without access (task 20 §1.1): the owner must be able
+  // to open the panel and change the kind. A disabled provider says so. Only a
+  // folder that is GONE stays out of the tree: it is counted in the mark of the
+  // «Выходы» node and listed in its panel with «Забыть».
   const providerNode = (provider) => {
     const name =
       typeof provider.label === 'string' && provider.label.length > 0
         ? provider.label
         : String(provider.id);
-    const diagnosis = providerDiagnosis(provider);
+    const diagnosis = providerShortMark(provider);
     const marks = [];
     if (provider.enabled === false) marks.push('[выключен]');
     if (diagnosis !== '') marks.push(diagnosis);
@@ -381,6 +384,11 @@ export function treeSpec(options = {}) {
           (expiry !== null && (expiry.expired || expiry.soon)),
         detail: String(provider.id),
         mark,
+        // The full reason — the path, the owner, the rights — is a tooltip, so the
+        // tree line stays a single short diagnosis (task 20 §1.3).
+        full: typeof provider.error === 'string' && provider.error.length > 0
+          ? provider.error
+          : mark,
       },
     );
   };
@@ -403,18 +411,35 @@ export function treeSpec(options = {}) {
           typeof provider.label === 'string' && provider.label.length > 0
             ? provider.label
             : String(provider.id);
-        return node(`provider:${String(provider.id)}`, `${name} — ${provider.hint}`, 'provider', {
-          detail: String(provider.id),
-          mark: String(provider.hint ?? ''),
-        });
+        const hint = String(provider.hint ?? '');
+        const mark = providerShortMark(provider);
+        // A folder without a kind is described, never guessed at; a mixed one is
+        // marked so the owner notices the two sources before choosing (task 20 §3).
+        const mixed = provider.contentKind === 'mixed';
+        return node(
+          `provider:${String(provider.id)}`,
+          mark === '' ? `${name} — ${hint}` : `${name}  ${mark}`,
+          'provider',
+          {
+            detail: String(provider.id),
+            mark,
+            full: hint,
+            stale: mark !== '' || mixed,
+          },
+        );
       }),
     },
   );
 
   // «Выходы» HAS a page of its own (the former root Providers panel), so it is a
-  // link AND the parent of the two lists and «Найдено». Its mark carries the
-  // unread count, exactly like the old «Провайдеры» node did.
-  const outputsMark = unread.length > 0 ? `[!] не прочиталось: ${unread.length}` : '';
+  // link AND the parent of the two lists and «Найдено». Its mark counts only what
+  // truly could not be read (task 20 §1.3): a record whose folder is GONE, and a
+  // folder the process may not open. A stray file or a name unfit for an id is not
+  // «не прочиталось» — those never had a folder to read.
+  const unreadableCount =
+    unread.filter((entry) => entry.state === 'missing').length +
+    providers.filter((provider) => provider.state === 'denied').length;
+  const outputsMark = unreadableCount > 0 ? `[!] не прочиталось: ${unreadableCount}` : '';
   const outputs = node('providers', 'Выходы', 'outputs', {
     stale: outputsMark !== '',
     detail: String(options.providersRoot ?? ''),

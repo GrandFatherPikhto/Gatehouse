@@ -33,8 +33,11 @@ export function registerProviderRoutes(app, ctx) {
     ),
   );
 
-  // «Подключить как подписку/туннели» on the «Найдено» list: sets ONLY the kind,
-  // leaving `enabled` false so the owner ticks it on the list afterwards.
+  // «Подключить как подписку/туннели/конфиги Xray» on the «Найдено» list, and
+  // «Сменить вид на …» on the panel of a folder whose chosen kind finds no file
+  // (task 20 §2.2): sets ONLY the kind, leaving `enabled` false so the owner ticks
+  // it afterwards. A hidden `from` names the panel to come back to; without it the
+  // «Найдено» list stays the destination, exactly as before.
   app.post(
     '/provider/kind',
     mutation(ctx, 'outputs:found', (req) => {
@@ -47,9 +50,10 @@ export function registerProviderRoutes(app, ctx) {
             : req.body.kind === 'xray'
               ? 'xray'
               : null;
+      const from = String(req.body.from ?? '').trim();
       ctx.model.setProviderKind(id, kind);
       return {
-        key: 'outputs:found',
+        key: from.length > 0 ? from : 'outputs:found',
         notice: `Провайдеру '${id}' задан вид папки — не забудьте сохранить`,
       };
     }),

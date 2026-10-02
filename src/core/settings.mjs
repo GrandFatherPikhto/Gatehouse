@@ -533,10 +533,20 @@ function readBuild(settings, settingsDir, linksOverride, warnings, providersRoot
               ? 'папка смешанная — разнесите ссылки и конфиги'
               : provider.contentKind === 'empty'
                 ? 'папка пуста'
-                : 'вид не выводится из содержимого';
+                : provider.contentKind === 'denied'
+                  ? 'нет доступа к папке'
+                  : provider.contentKind === 'unreadable'
+                    ? 'папку не удалось прочитать'
+                    : 'вид не выводится из содержимого';
           reasons.push(`провайдер '${provider.id}' включён, но вид папки не задан: ${why}`);
         }
         continue;
+      }
+      // An enabled provider whose chosen file is missing, empty or unreadable
+      // produces nothing; the owner is told the REAL reason instead of a bare
+      // «нет включённых провайдеров» (task 20 §0).
+      if (provider.enabled === true && provider.state !== 'ok' && typeof provider.error === 'string') {
+        reasons.push(`провайдер '${provider.id}': ${provider.error}`);
       }
       if (provider.enabled !== true && provider.hasRecord === true) disabledIds.push(provider.id);
     }

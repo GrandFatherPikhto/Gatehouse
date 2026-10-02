@@ -7,14 +7,24 @@
 // React means reimplementing these builders and the templates, not the model.
 
 import {ConfigError, DEFAULT_EXCLUDE, PROXY_TYPES, isMapping} from '../core/errors.mjs';
-import {collisionRefusal} from '../core/sources.mjs';
+import {
+  LINKS_FILENAME,
+  TUNNEL_EXTENSION,
+  collisionRefusal,
+  describeContent,
+  kindFileName,
+  kindSourcePresent,
+  suggestedKind,
+} from '../core/sources.mjs';
 import {
   UTLS_FINGERPRINTS,
   subscriptionExpiry,
   transportKind,
   transportLabel,
 } from '../core/vless.mjs';
-import {listConfigSnapshots} from '../model/storage.mjs';
+import {XRAY_CONFIGS_FILENAME} from '../core/xray.mjs';
+import {listConfigSnapshots, processIdentity} from '../model/storage.mjs';
+import {providerShortMark} from '../model/stale.mjs';
 
 /** Keys of the tree, without a name part. */
 export const PANEL_KINDS = Object.freeze([
@@ -66,8 +76,8 @@ export function providerKindLabel(kind) {
 
 /**
  * Adds the presentation fields every provider ROW needs: the display name, the
- * kind label and the skipped count. Used by the «Выходы» page and its lists so
- * the three views cannot drift apart.
+ * kind label, the skipped count and the SHORT diagnosis (task 20 §1.3). Used by
+ * the «Выходы» page and its lists so the three views cannot drift apart.
  *
  * @param {Record<string, unknown>} provider
  * @returns {Record<string, unknown>}
@@ -81,7 +91,103 @@ function displayProvider(provider) {
         : provider.id,
     kindLabel: providerKindLabel(provider.kind),
     skippedCount: (provider.skipped ?? []).length,
+    // The same short mark the tree carries, so a list row and a tree node never
+    // say different things about one folder.
+    mark: providerShortMark(provider),
   };
+}
+
+/** What is missing when a folder holds nothing at all, built from the real names. */
+const NOTHING_IN_FOLDER =
+  `в папке нет ни ${LINKS_FILENAME}, ни конфигов туннелей (*${TUNNEL_EXTENSION}), ` +
+  `ни ${XRAY_CONFIGS_FILENAME}`;
+
+/**
+ * The command that gives the process access to a provider folder, built from the
+ * real account and the real path — never from a literal (task 20 §2.3).
+ *
+ * @param {string} dir
+ * @returns {string}
+ */
+function providerFixCommand(dir) {
+  const {user, group} = processIdentity();
+  return `sudo chown ${user}:${group} ${dir} && sudo chmod 750 ${dir}`;
+}
+
+/**
+ * The diagnosis block of a provider panel (task 20 §2): what is wrong with the
+ * folder, what it really holds, and — when the content points at another kind —
+ * the exact kind to switch to.
+ *
+ * The sentence is built with the SAME `describeContent` that feeds the «Найдено»
+ * hint, never from a copy of it, so the panel and the lists cannot disagree about
+ * what a folder holds.
+ *
+ * @param {Record<string, unknown>} provider
+ * @returns {{state: string, text: string, command: string|null,
+ *   suggest: {kind: string, label: string}|null, mixed: boolean}}
+ */
+function providerDiagnosisView(provider) {
+  const state = String(provider.state ?? '');
+  const kind = provider.kind ?? null;
+  const contentKind = String(provider.contentKind ?? '');
+  const error = typeof provider.error === 'string' ? provider.error : '';
+  const hint = String(provider.hint ?? '');
+  const mixed = contentKind === 'mixed';
+
+  if (state === 'denied') {
+    return {
+      state,
+      text: error,
+      command: providerFixCommand(String(provider.path ?? '')),
+      suggest: null,
+      mixed,
+    };
+  }
+  if (state === 'unreadable' || state === 'missing') {
+    return {state, text: error, command: null, suggest: null, mixed};
+  }
+  if (kind === null) {
+    // «Найдено, не подключено»: the content is DESCRIBED, never guessed at. The
+    // silent single-kind hint is exactly what produced the wrong choice on the
+    // router (task 20 §3).
+    return {
+      state,
+      text: contentKind === 'empty' ? NOTHING_IN_FOLDER : error || hint,
+      command: null,
+      suggest: null,
+      mixed,
+    };
+  }
+  if (state === 'empty') {
+    if (!kindSourcePresent(kind, contentKind)) {
+      const parts = describeContent(contentKind, provider.parts ?? {});
+      const suggestion = suggestedKind(contentKind);
+      let text =
+        `Вид — «${providerKindLabel(kind)}», но в папке нет ${kindFileName(kind)}. ` +
+        `В папке: ${parts}.`;
+      text +=
+        suggestion === null
+          ? ' Выберите вид, который подходит содержимому.'
+          : ` Похоже на «${providerKindLabel(suggestion)}» — вид можно сменить кнопкой ниже.`;
+      return {
+        state,
+        text,
+        command: null,
+        suggest:
+          suggestion === null
+            ? null
+            : {kind: suggestion, label: providerKindLabel(suggestion)},
+        mixed,
+      };
+    }
+    // The expected file IS there, it simply holds nothing usable: no kind change
+    // is needed, and the reason names the file.
+    return {state, text: error || NOTHING_IN_FOLDER, command: null, suggest: null, mixed};
+  }
+  // Readable. A mixed folder keeps saying WHAT it holds even with a chosen kind:
+  // its other half is not read, and silence would hide it (task 20 §3).
+  return {state, text: mixed ? hint : '', command: null, suggest: null, mixed};
 }
 
 /**
@@ -529,6 +635,10 @@ export function buildPanel(model, key, extra = {}) {
         overrides: overridesView(provider),
         // §2.2: the same refusal text as generation, shown while it lasts.
         collisionText: collisionRefusal(info.collisions),
+        // Task 20 §2: the diagnosis block — the mismatch, the accessible command
+        // and the kind to switch to. Always present, so the panel of a folder with
+        // no kind, a broken file or no access is never a dead end.
+        diagnosis: providerDiagnosisView(provider),
         // Kind `xray`: the server table and the state of the engine.
         ...(provider.kind === 'xray' ? xrayProviderView(model, provider, system) : {}),
       };

@@ -694,20 +694,23 @@ describe('honest tree labels: the cap and the provider diagnoses (NEW)', () => {
     assert.equal(outputs.children.reduce((count, child) => count + child.children.length, 0), 0);
   });
 
-  test('a links.txt that is a directory leaves the folder empty, not readable', () => {
+  test('a links.txt that is a directory leaves the folder empty, and it IS a provider', () => {
     const dir = makeTempDir();
     fs.mkdirSync(path.join(dir, 'providers', 'vpnd', 'links.txt'), {recursive: true});
     const file = path.join(dir, 'webui.json');
     fs.writeFileSync(file, canonicalJson(flatDocument()), 'utf8');
     const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
 
+    // Task 20 §1: a folder that exists is a provider with a panel, even when its
+    // chosen kind finds nothing. It is NOT «unread».
     const info = model.providersInfo();
-    assert.deepEqual(info.providers, []);
-    assert.equal(info.unread[0].id, 'vpnd');
-    assert.equal(info.unread[0].state, 'empty');
+    assert.equal(info.providers.length, 1);
+    assert.equal(info.providers[0].id, 'vpnd');
+    assert.equal(info.providers[0].state, 'empty');
+    assert.deepEqual(info.unread, []);
   });
 
-  test('an empty links file is diagnosed as empty', () => {
+  test('an empty links file is diagnosed as empty, and it IS a provider', () => {
     const dir = makeTempDir();
     writeLinksFile(dir, '');
     const file = path.join(dir, 'webui.json');
@@ -715,9 +718,10 @@ describe('honest tree labels: the cap and the provider diagnoses (NEW)', () => {
     const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
 
     const info = model.providersInfo();
-    assert.deepEqual(info.providers, []);
-    assert.equal(info.unread[0].state, 'empty');
-    assert.match(info.unread[0].error, /валидных VLESS-ссылок/);
+    assert.equal(info.providers.length, 1);
+    assert.equal(info.providers[0].state, 'empty');
+    assert.match(info.providers[0].error, /нет валидных ссылок/);
+    assert.deepEqual(info.unread, []);
   });
 
   test('an empty root leaves «Выходы» unmarked and the lists empty', () => {

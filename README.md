@@ -321,13 +321,29 @@ shows ONE sudoers block with the rules the owner still has to paste, and a
   `flow` although the server requires Vision: set flow → Vision once, and it
   survives subscription updates.
 * **A folder says what it IS, the owner chooses it.** `providers.<id>.kind` is
-  `subscription` (only `links.txt` feeds Sing-Box) or `awg` (only `*.conf` feeds
-  the tunnels). A folder with no kind is «found, not connected»: it is listed with
-  a hint («looks like a subscription: links.txt, 156 links») and two buttons
-  «Подключить как подписку/туннели», but it feeds nothing until a kind is chosen.
-  The foreign half of a mixed folder is warned about and left unread. The kind is
-  inferred ONCE from the content when an older document is opened, and the owner
-  is asked to save. The kind may only be changed while the provider is disabled.
+  `subscription` (only `links.txt` feeds Sing-Box), `awg` (only `*.conf` feeds the
+  tunnels) or `xray` (only `xray-configs.json` feeds the second engine). A folder
+  with no kind is «found, not connected»: it is listed with a hint that names EVERY
+  source it holds with its numbers — «смешанная папка: links.txt (4 ссылки),
+  xray-configs.json (3 конфига, 8 серверов) — разнесите по разным папкам или
+  выберите вид» — plus one button per kind, and it feeds nothing until a kind is
+  chosen. A single kind is never suggested silently: on the router that is how the
+  wrong kind got picked. The foreign half of a mixed folder is warned about and left
+  unread; foreign files of other sorts (`*.sh`, `hwid`, `*.raw`) are ignored
+  silently. The kind is inferred ONCE from the content when an older document is
+  opened, and the owner is asked to save. The kind may only be changed while the
+  provider is disabled.
+* **Every folder on disk has a node and a panel.** A folder that exists is a tree
+  node with its own panel whatever its state — empty (`[!] нет links.txt`), with a
+  file that does not read (`[!] файл не читается`), without access (`[!] нет доступа`)
+  — so the kind is always reachable from the interface: the panel opens with the
+  diagnosis and a «Сменить вид на …» button (the sentence comes from the same
+  `describeContent` as the «Найдено» hint), and an enabled provider is turned off
+  and re-kinded on that very panel, in two steps, without touching `webui.json`.
+  Only a folder that is GONE has no panel: it stays a row in «Не прочиталось» with
+  «Забыть» and «Перенести настройки», and the «не прочиталось» counter counts only
+  that and folders the process may not open — never a stray file or a folder name
+  unfit for an identifier.
 * **The tree is «Шлюз · Выходы · Настройки · Службы».** «Шлюз» groups Прокси and
   Маршруты; «Выходы» (a page of its own) holds Подписки, Туннели AmneziaWG and
   Найдено; «Настройки» groups Sing-Box and AmneziaWG; «Службы» groups the same two

@@ -284,8 +284,13 @@ export function setProviderEnabled(model, id, enabled) {
   const current = isMapping(providers[clean]) ? providers[clean] : {};
   // A provider with no chosen kind never feeds the build (§3.1), so enabling it
   // is refused with the instruction to choose the kind first.
-  if (enabled === true && current.kind !== 'subscription' && current.kind !== 'awg') {
-    throw new ConfigError('задайте вид папки: подписка или туннели');
+  if (
+    enabled === true &&
+    current.kind !== 'subscription' &&
+    current.kind !== 'awg' &&
+    current.kind !== 'xray'
+  ) {
+    throw new ConfigError('задайте вид папки: подписка, туннели или конфиги Xray');
   }
   const before = model.toText();
   const wasDirty = model.dirty;
@@ -311,9 +316,13 @@ export function setProviderEnabled(model, id, enabled) {
  * взяты из этой папки»). `null` removes the kind, which puts the folder back into
  * «Найдено, не подключено».
  *
+ * The three kinds of the interface are the three the model accepts (task 20 §2):
+ * a value the schema knows but this function refused would leave the owner with a
+ * kind that can be typed in a form and never saved.
+ *
  * @param {import('../project.mjs').ProjectModel} model
  * @param {string} id
- * @param {'subscription'|'awg'|null} kind
+ * @param {'subscription'|'awg'|'xray'|null} kind
  * @returns {Record<string, unknown>} The stored record.
  */
 export function setProviderKind(model, id, kind) {
@@ -321,9 +330,12 @@ export function setProviderKind(model, id, kind) {
   if (!isProviderId(clean)) {
     throw new ConfigError(`имя провайдера '${clean}' не подходит для идентификатора`);
   }
-  const value = kind === 'subscription' || kind === 'awg' ? kind : null;
+  const value =
+    kind === 'subscription' || kind === 'awg' || kind === 'xray' ? kind : null;
   if (kind !== null && kind !== undefined && value === null) {
-    throw new ConfigError(`вид '${String(kind)}' неизвестен: допустимо 'subscription' или 'awg'`);
+    throw new ConfigError(
+      `вид '${String(kind)}' неизвестен: допустимо 'subscription', 'awg' или 'xray'`,
+    );
   }
 
   const providers = ensureProviders(model);
@@ -547,14 +559,19 @@ export function moveProviderSettings(model, oldId, newId) {
     throw new ConfigError(`у папки '${to}' уже есть запись: перенос невозможен`);
   }
 
-  const kind = record.kind === 'subscription' || record.kind === 'awg' ? record.kind : null;
+  const kind =
+    record.kind === 'subscription' || record.kind === 'awg' || record.kind === 'xray'
+      ? record.kind
+      : null;
   const content = target.contentKind;
   const fits =
     kind === 'subscription'
       ? content === 'links' || content === 'mixed'
       : kind === 'awg'
         ? content === 'tunnels' || content === 'mixed'
-        : true;
+        : kind === 'xray'
+          ? content === 'xray' || content === 'mixed'
+          : true;
   if (!fits) {
     throw new ConfigError(
       `папка '${to}' по содержимому не похожа на '${from}': перенос не выполняется`,

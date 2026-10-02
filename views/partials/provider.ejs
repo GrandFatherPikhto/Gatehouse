@@ -8,6 +8,45 @@
   <p class="error"><%= panel.collisionText %></p>
 <% } %>
 
+<%# Task 20 §2: the diagnosis block. It is on the panel in EVERY state — an empty
+    folder, a file that does not read, no access, a chosen kind that finds no file
+    — so the kind is always reachable from the interface, never only from
+    `webui.json` by hand. The sentence comes from the panel builder, which uses the
+    same `describeContent` as the «Найдено» hint. %>
+<% if (panel.diagnosis && panel.diagnosis.text) { %>
+  <p class="<%= panel.diagnosis.mixed ? 'notice' : panel.diagnosis.state === 'ok' ? 'hint' : 'error' %>">
+    <%= panel.diagnosis.text %>
+  </p>
+  <% if (panel.diagnosis.command) { %>
+    <p class="hint">На роутере: <code><%= panel.diagnosis.command %></code></p>
+  <% } %>
+  <% if (panel.diagnosis.suggest) { %>
+    <% if (panel.kindEditable) { %>
+      <form class="inline" hx-post="/provider/kind" hx-target="#panel" hx-swap="innerHTML" method="post" action="/provider/kind">
+        <input type="hidden" name="id" value="<%= panel.providerId %>">
+        <input type="hidden" name="kind" value="<%= panel.diagnosis.suggest.kind %>">
+        <input type="hidden" name="from" value="<%= panel.key %>">
+        <button type="submit">Сменить вид на «<%= panel.diagnosis.suggest.label %>»</button>
+      </form>
+    <% } else { %>
+      <p class="hint">
+        Чтобы сменить вид, снимите галочку «включён» ниже и примените: та же панель
+        даёт сменить вид, править файлы руками не нужно.
+      </p>
+    <% } %>
+  <% } %>
+<% } %>
+
+<%# §3: the foreign half of a mixed folder is warned about in the generator output;
+    the panel says it too, so the interface and the build do not disagree. %>
+<% if (panel.provider.warnings && panel.provider.warnings.length > 0) { %>
+  <ul class="warnings">
+    <% for (const warning of panel.provider.warnings) { %>
+      <li><%= warning %></li>
+    <% } %>
+  </ul>
+<% } %>
+
 <form id="panel-form" class="form" hx-post="/provider" hx-target="#panel" hx-swap="innerHTML" method="post" action="/provider">
   <input type="hidden" name="id" value="<%= panel.providerId %>">
   <fieldset>
@@ -258,17 +297,11 @@
   <% } %>
 <% } %>
 
-<%# «Пуст» is claimed only when the folder really holds nothing. A folder WITHOUT a
-    chosen kind still shows what it holds («Записей: 156»), and repeating the hint
-    of «Найдено» is more useful than the false claim of emptiness (§1а). %>
-<% const providerEmpty =
-     panel.provider.count === 0 &&
-     panel.provider.tags.length === 0 &&
-     panel.provider.entries.length === 0 &&
-     panel.skippedCount === 0; %>
-<% if (providerEmpty) { %>
-  <p class="hint">Провайдер пуст: ни ссылок, ни конфигов туннелей.</p>
-<% } else if (panel.folderKind === null && panel.provider.hint) { %>
+<%# A folder WITHOUT a chosen kind still shows what it holds («Записей: 156»):
+    repeating the «Найдено» hint is more useful than a claim of emptiness. An empty
+    folder and a folder with no access are already explained by the diagnosis block
+    above, so they are not called «пуст» here (task 20 §2.3). %>
+<% if (panel.folderKind === null && panel.diagnosis.state === 'ok' && panel.provider.hint) { %>
   <p class="hint"><%= panel.provider.hint %></p>
 <% } %>
 

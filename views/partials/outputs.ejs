@@ -27,6 +27,11 @@
                hx-target="#panel"
                hx-swap="innerHTML"
                hx-push-url="true"><%= provider.displayName %></a>
+            <%# Task 20 §1.3: the same short diagnosis the tree carries, so a row
+                here is as informative as the node. %>
+            <% if (provider.mark) { %>
+              <br><span class="error"><%= provider.mark %></span>
+            <% } %>
             <% if (provider.skippedCount > 0) { %>
               <br><span class="error">пропущено: <%= provider.skippedCount %></span>
             <% } %>
@@ -36,16 +41,20 @@
           <td>
             <% if (panel.section === 'found') { %>
               <%= provider.hint %>
-              <form class="inline" hx-post="/provider/kind" hx-target="#panel" hx-swap="innerHTML" method="post" action="/provider/kind">
-                <input type="hidden" name="id" value="<%= provider.id %>">
-                <input type="hidden" name="kind" value="subscription">
-                <button type="submit" class="secondary">Подключить как подписку</button>
-              </form>
-              <form class="inline" hx-post="/provider/kind" hx-target="#panel" hx-swap="innerHTML" method="post" action="/provider/kind">
-                <input type="hidden" name="id" value="<%= provider.id %>">
-                <input type="hidden" name="kind" value="awg">
-                <button type="submit" class="secondary">Подключить как туннели</button>
-              </form>
+              <%# The OWNER picks the kind: all three are offered, because a single
+                  silent hint is exactly what led to the wrong choice on the router
+                  (task 20 §3). %>
+              <% for (const [value, label] of [
+                   ['subscription', 'Подключить как подписку'],
+                   ['awg', 'Подключить как туннели AmneziaWG'],
+                   ['xray', 'Подключить как конфиги Xray'],
+                 ]) { %>
+                <form class="inline" hx-post="/provider/kind" hx-target="#panel" hx-swap="innerHTML" method="post" action="/provider/kind">
+                  <input type="hidden" name="id" value="<%= provider.id %>">
+                  <input type="hidden" name="kind" value="<%= value %>">
+                  <button type="submit" class="secondary"><%= label %></button>
+                </form>
+              <% } %>
             <% } else { %>
               <form class="inline" hx-post="/provider/enabled" hx-target="#panel" hx-swap="innerHTML" method="post" action="/provider/enabled">
                 <input type="hidden" name="id" value="<%= provider.id %>">

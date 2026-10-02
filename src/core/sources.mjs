@@ -276,7 +276,20 @@ function readSubscriptionHeaders(filePath) {
  * @param {number} confs
  * @returns {string}
  */
-export function describeContent(contentKind, links, confs, xray = null) {
+export function describeContent(contentKind, parts = {}) {
+  const links = Number(parts.links) || 0;
+  const confs = Number(parts.confs) || 0;
+  const xrayConfigs = Number(parts.xrayConfigs) || 0;
+  const xrayOutbounds = Number(parts.xrayOutbounds) || 0;
+  const xrayServers = Number(parts.xrayServers) || 0;
+  const xrayText =
+    `${XRAY_CONFIGS_FILENAME} (${xrayConfigs} ${plural(
+      xrayConfigs,
+      'конфиг',
+      'конфига',
+      'конфигов',
+    )}, ${xrayServers} ${plural(xrayServers, 'сервер', 'сервера', 'серверов')})`;
+
   switch (contentKind) {
     case 'links':
       return `похоже на подписку: ${LINKS_FILENAME}, ${links} ${plural(
@@ -287,32 +300,92 @@ export function describeContent(contentKind, links, confs, xray = null) {
       )}`;
     case 'tunnels':
       return `похоже на туннели: ${confs} ${plural(confs, 'конфиг', 'конфига', 'конфигов')}`;
-    case 'xray': {
-      const meta = xray ?? {configs: 0, outbounds: 0, servers: 0};
+    case 'xray':
       return (
-        `похоже на конфиги Xray: ${meta.configs} ${plural(
-          meta.configs,
+        `похоже на конфиги Xray: ${xrayConfigs} ${plural(
+          xrayConfigs,
           'конфиг',
           'конфига',
           'конфигов',
-        )}, ${meta.outbounds} выходов, ${meta.servers} ${plural(
-          meta.servers,
+        )}, ${xrayOutbounds} выходов, ${xrayServers} ${plural(
+          xrayServers,
           'сервер',
           'сервера',
           'серверов',
         )}`
       );
-    }
     case 'mixed': {
-      const parts = [];
-      if (links > 0) parts.push(LINKS_FILENAME);
-      if (confs > 0) parts.push(`${confs} ${plural(confs, 'конфиг', 'конфига', 'конфигов')}`);
-      if (xray !== null && xray.servers > 0) parts.push(XRAY_CONFIGS_FILENAME);
-      return `смешанная: ${parts.join(' и ')} — разнесите по разным папкам`;
+      // EVERY source with its number, never a silent single-kind suggestion: on
+      // the router a mixed folder was suggested as «подписка» and that is how the
+      // wrong kind got chosen (task 20 §3).
+      const items = [];
+      if (links > 0) {
+        items.push(`${LINKS_FILENAME} (${links} ${plural(links, 'ссылка', 'ссылки', 'ссылок')})`);
+      }
+      if (xrayConfigs > 0) items.push(xrayText);
+      if (confs > 0) {
+        items.push(`${confs} ${plural(confs, 'конфиг', 'конфига', 'конфигов')} туннелей`);
+      }
+      return (
+        `смешанная папка: ${items.join(', ')} — разнесите по разным папкам или ` +
+        'выберите вид: лишнее не читается'
+      );
     }
+    case 'unreadable':
+      return 'файл не читается';
+    case 'denied':
+      return 'нет доступа';
+    case 'missing':
+      return 'папки нет';
     default:
       return 'пусто';
   }
+}
+
+/**
+ * What kind a folder's content LOOKS like. A HINT for the diagnosis and the
+ * button, never a silent choice: `mixed` has no single answer.
+ *
+ * @param {string} contentKind `links`|`tunnels`|`xray`|`mixed`|`empty`|…
+ * @returns {'subscription'|'awg'|'xray'|null}
+ */
+export function suggestedKind(contentKind) {
+  if (contentKind === 'links') return 'subscription';
+  if (contentKind === 'tunnels') return 'awg';
+  if (contentKind === 'xray') return 'xray';
+  return null;
+}
+
+/**
+ * File a chosen kind expects in its folder, for the diagnosis text.
+ *
+ * @param {'subscription'|'awg'|'xray'|null} kind
+ * @returns {string}
+ */
+export function kindFileName(kind) {
+  if (kind === 'subscription') return LINKS_FILENAME;
+  if (kind === 'xray') return XRAY_CONFIGS_FILENAME;
+  if (kind === 'awg') return `конфиг туннелей (*${TUNNEL_EXTENSION})`;
+  return '';
+}
+
+/**
+ * True when the folder really carries the source its chosen kind expects, which
+ * tells «the file is there but holds nothing usable» apart from «the file is not
+ * there at all» — the state that needs a kind change (task 20 §1.3, §2.2).
+ * `mixed` counts as present: the folder may well hold the file, plus something
+ * else. One rule, used by the tree label and by the panel.
+ *
+ * @param {'subscription'|'awg'|'xray'|null} kind
+ * @param {string} contentKind `links`|`tunnels`|`xray`|`mixed`|`empty`|`denied`|…
+ * @returns {boolean}
+ */
+export function kindSourcePresent(kind, contentKind) {
+  if (contentKind === 'mixed') return true;
+  if (kind === 'subscription') return contentKind === 'links';
+  if (kind === 'awg') return contentKind === 'tunnels';
+  if (kind === 'xray') return contentKind === 'xray';
+  return false;
 }
 
 /**
@@ -365,6 +438,11 @@ export function inferKind(contentKind) {
  */
 function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
   const base = {id, name: id, path: dir, type: 'folder', discovered: true};
+  // Content counts for the diagnosis and the hint. A foreign half of a folder is
+  // counted too — that is what makes the «вид не совпадает с содержимым» block and
+  // the «смешанная папка» list possible (task 20 §2, §3).
+  const emptyParts = () => ({links: 0, confs: 0, xrayConfigs: 0, xrayOutbounds: 0, xrayServers: 0});
+  const zeroXray = {configs: 0, outbounds: 0, servers: 0};
 
   let stat;
   try {
@@ -380,7 +458,10 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
       baseTags: [],
       entries: [],
       outbounds: [],
-      hint: '',
+      xrayServers: [],
+      xrayMeta: zeroXray,
+      parts: emptyParts(),
+      hint: describeContent('missing', emptyParts()),
       headers: {title: null, expire: null},
       state: 'missing',
       owner: null,
@@ -397,17 +478,23 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
     names = fs.readdirSync(dir);
   } catch (error) {
     const state = errorState(error) === 'denied' ? 'denied' : 'unreadable';
+    // The folder may not be listed, so its content is unknown. The CHOSEN kind is
+    // still honoured for the branch of the tree (task 20 §1.1): a `stash` seen as
+    // «Подписка» stays under «Подписки», with the diagnosis on it.
     return {
       ...base,
       exists: true,
-      kind: null,
-      contentKind: 'unreadable',
+      kind: storedKind ?? null,
+      contentKind: state,
       count: 0,
       tags: [],
       baseTags: [],
       entries: [],
       outbounds: [],
-      hint: '',
+      xrayServers: [],
+      xrayMeta: zeroXray,
+      parts: emptyParts(),
+      hint: describeContent(state, emptyParts()),
       headers: {title: null, expire: null},
       state,
       owner,
@@ -521,6 +608,21 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
     xrayError = read.error;
   }
 
+  // Counts for the diagnosis. The CHOSEN half was read above with the real
+  // collectors; a FOREIGN half is read here with throwaway ones, so its per-line
+  // warnings never reach the panel (task 20 §3).
+  let linksCount = rawOutbounds.length;
+  if (!wantLinks && hasLinks) linksCount = readLinks(linksPath, id, [], []).outbounds.length;
+  let xrayCountMeta = xrayMeta;
+  if (!wantXray && hasXray) xrayCountMeta = readXrayConfigs(xrayPath, [], []).meta;
+  const parts = {
+    links: linksCount,
+    confs: confFiles.length,
+    xrayConfigs: xrayCountMeta.configs,
+    xrayOutbounds: xrayCountMeta.outbounds,
+    xrayServers: xrayCountMeta.servers,
+  };
+
   const headers =
     kind === 'subscription' && hasLinks
       ? readSubscriptionHeaders(linksPath)
@@ -528,10 +630,25 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
 
   if (kind === null) {
     // «Найдено, не подключено»: nothing participates in the build, but the
-    // content is described so the owner can choose a kind (§3.5).
-    const empty = contentKind === 'empty';
+    // content is described so the owner can choose a kind (§3.5). A folder that
+    // is present but has nothing usable is «empty» too: an empty folder, or a
+    // `links.txt` without a single valid link.
+    const noContent = contentKind === 'empty';
+    const noValidLinks = contentKind === 'links' && rawOutbounds.length === 0;
+    // A file that could not be READ is not «a folder that holds nothing»: the
+    // hint says so and the folder is marked, so a broken `xray-configs.json` is
+    // never described as «0 конфигов» (task 20 §1.3).
+    const brokenFile =
+      (contentKind === 'xray' && xrayState === 'unreadable') ||
+      (contentKind === 'links' && linksState === 'unreadable');
+    const empty = !brokenFile && (noContent || noValidLinks);
     const xrayNames = xrayServers.map((server) => server.name);
-    const tags = contentKind === 'xray' ? xrayNames : rawOutbounds.map((outbound) => outbound.tag);
+    const tags =
+      contentKind === 'xray' && !brokenFile
+        ? xrayNames
+        : contentKind === 'xray'
+          ? []
+          : rawOutbounds.map((outbound) => outbound.tag);
     const count =
       contentKind === 'tunnels'
         ? confFiles.length
@@ -542,7 +659,7 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
       ...base,
       exists: true,
       kind: null,
-      contentKind,
+      contentKind: brokenFile ? 'unreadable' : contentKind,
       count,
       tags,
       baseTags: tags,
@@ -550,14 +667,19 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
       outbounds: [],
       xrayServers: [],
       xrayMeta,
-      hint: describeContent(contentKind, rawOutbounds.length, confFiles.length, xrayMeta),
+      parts,
+      hint: describeContent(brokenFile ? 'unreadable' : contentKind, parts),
       headers,
-      state: empty ? 'empty' : 'ok',
+      state: brokenFile ? 'unreadable' : empty ? 'empty' : 'ok',
       owner,
       mode,
-      error: empty
-        ? `нет ни ${LINKS_FILENAME}, ни конфигов туннелей (*${TUNNEL_EXTENSION}), ни ${XRAY_CONFIGS_FILENAME}`
-        : null,
+      error: brokenFile
+        ? (contentKind === 'xray' ? xrayError : linksError)
+        : noContent
+          ? `нет ни ${LINKS_FILENAME}, ни конфигов туннелей (*${TUNNEL_EXTENSION}), ни ${XRAY_CONFIGS_FILENAME}`
+          : noValidLinks
+            ? `в ${LINKS_FILENAME} нет валидных ссылок`
+            : null,
     };
   }
 
@@ -577,8 +699,9 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
         entries: [],
         outbounds: [],
         xrayServers: [],
-        xrayMeta: {configs: 0, outbounds: 0, servers: 0},
-        hint: describeContent(contentKind, rawOutbounds.length, confFiles.length, null),
+        xrayMeta: zeroXray,
+        parts,
+        hint: describeContent(contentKind, parts),
         headers,
         state: 'empty',
         owner,
@@ -599,18 +722,23 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
       outbounds: [],
       xrayServers,
       xrayMeta,
-      hint: describeContent(contentKind, rawOutbounds.length, confFiles.length, xrayMeta),
+      parts,
+      hint: describeContent(contentKind, parts),
       headers,
-      state: xrayState,
+      state: hasXray ? xrayState : 'empty',
       owner,
       mode,
-      error: xrayState === 'ok' ? null : xrayError,
+      error: hasXray && xrayState !== 'ok' ? xrayError : null,
     };
   }
 
   const subscription = kind === 'subscription';
   const outbounds = subscription ? rawOutbounds : [];
   const entries = subscription ? [] : confFiles;
+  // A `links.txt` without a single valid link is «empty», not «broken»: the file
+  // was readable. The message names the file, so the panel can print one wording
+  // for it whichever branch read the folder (task 20 §1.3, §2.3).
+  const noValidLinks = subscription && linksState === 'empty';
 
   if (subscription && !hasLinks) {
     return {
@@ -623,7 +751,10 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
       baseTags: [],
       entries: [],
       outbounds: [],
-      hint: describeContent(contentKind, 0, confFiles.length),
+      xrayServers: [],
+      xrayMeta: zeroXray,
+      parts,
+      hint: describeContent(contentKind, parts),
       headers,
       state: 'empty',
       owner,
@@ -642,7 +773,10 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
       baseTags: [],
       entries: [],
       outbounds: [],
-      hint: describeContent(contentKind, rawOutbounds.length, 0),
+      xrayServers: [],
+      xrayMeta: zeroXray,
+      parts,
+      hint: describeContent(contentKind, parts),
       headers,
       state: 'empty',
       owner,
@@ -661,12 +795,19 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
     baseTags: outbounds.map((outbound) => outbound.tag),
     entries,
     outbounds,
-    hint: describeContent(contentKind, rawOutbounds.length, confFiles.length),
+    xrayServers: [],
+    xrayMeta: zeroXray,
+    parts,
+    hint: describeContent(contentKind, parts),
     headers,
-    state: subscription ? linksState : 'ok',
+    state: noValidLinks ? 'empty' : subscription ? linksState : 'ok',
     owner,
     mode,
-    error: subscription ? linksError : null,
+    error: noValidLinks
+      ? `в ${LINKS_FILENAME} нет валидных ссылок`
+      : subscription
+        ? linksError
+        : null,
   };
 }
 
@@ -693,11 +834,12 @@ function recordView(record) {
 /**
  * Discovers every provider under `root` and merges the links of the ENABLED ones.
  *
- * `providers` carries the folders that were read (a links file and/or tunnel
- * configs); `unread` carries everything that could not be read, with the reason —
- * a stray file in the root, a folder whose name fits no identifier, a folder the
- * process may not read, an empty folder, a links file without a single valid link,
- * and a record whose folder is gone (which the owner may «forget»).
+ * `providers` carries EVERY folder that exists on disk, whatever its state — an
+ * empty one, one whose chosen kind finds no file, one with a broken file, one the
+ * process may not read — so each has a tree node and a panel (task 20 §1).
+ * `unread` carries only what has no folder to open: a stray file in the root, a
+ * folder whose name fits no identifier, and a record whose folder is gone (which
+ * the owner may «forget»).
  *
  * Names are settled HERE and nowhere else: after the in-file `dedupTags`, the
  * owner's `suffix` is appended and the per-subscription `overrides` are applied,
@@ -842,8 +984,12 @@ export function readProviders(records, root, warnings = []) {
     // in the generator output; the panel still sees every provider's own list.
     if (provider.enabled) warnings.push(...localWarnings);
 
-    if (provider.state === 'ok') providers.push(provider);
-    else unread.push(provider);
+    // EVERY folder that exists is a provider here, whatever its state (task 20 §1):
+    // an empty folder, a folder whose chosen kind finds no file, a folder with a
+    // broken file, a folder without access — each gets a tree node and a panel, so
+    // the view can be fixed from the interface. Only a folder that is GONE (or a
+    // stray file / a name unfit for an id) stays out, in `unread`.
+    providers.push(provider);
   }
 
   // A record whose folder is gone is NOT dropped silently: it is reported, and
