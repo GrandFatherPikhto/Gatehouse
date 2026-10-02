@@ -100,8 +100,16 @@ if (follow) {
     process.exit(0);
   });
 } else {
+  const chunks = [];
   for (let index = 0; index < lines; index += 1) {
-    process.stdout.write(`${entry(index, `tail line ${index}`, index % 7 === 0 ? 4 : 6)}\n`);
+    chunks.push(`${entry(index, `tail line ${index}`, index % 7 === 0 ? 4 : 6)}\n`);
   }
-  process.exit(0);
+  // Do NOT call `process.exit(0)` here: it does not wait for stdout to drain, and
+  // a tail of 200 byte-array lines is larger than the pipe buffer, so under load
+  // the last lines were truncated and `tailJournal` saw fewer entries than asked.
+  // One write with a callback flushes everything; then the loop empties and the
+  // process exits on its own with the code below.
+  process.stdout.write(chunks.join(''), () => {
+    process.exitCode = 0;
+  });
 }
