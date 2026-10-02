@@ -356,15 +356,46 @@ export function transportLabel(outbound) {
 }
 
 /**
- * Rebuilds an outbound in the canonical key order of the generator:
- * `type, tag, server, server_port, uuid, flow?, tls?, transport?`. JS keeps
- * string key insertion order, so this is what keeps `config.json` byte-stable
- * when a key is added after the fact (an override of `flow`, for example).
+ * Rebuilds an outbound in the canonical key order of the generator, PER TYPE.
+ * JS keeps string key insertion order, so this is what keeps `config.json`
+ * byte-stable when a key is added after the fact (an override of `flow`, for
+ * example).
+ *
+ * The order is per TYPE on purpose. A single VLESS-shaped order silently DROPPED
+ * every field a Hysteria2 outbound carries beyond the VLESS set (`password`,
+ * `obfs`, `server_ports`, `up_mbps`, `down_mbps`): the server then answered
+ * «authentication failed». A new outbound type is a switch-arm here, and the
+ * rule of the project is to test it through to the ASSEMBLED config — `sing-box
+ * check` does not require a password, so a broken pipeline stayed green.
+ *
+ *   * `vless`     — `type, tag, server, server_port, uuid, flow?, tls?, transport?`
+ *     (unchanged, so the vpnd bytes never move);
+ *   * `hysteria2` — `type, tag, server, server_port, server_ports?, password,
+ *     up_mbps?, down_mbps?, obfs?, tls`;
+ *   * anything else — the object as it stands, no key is dropped.
  *
  * @param {Record<string, unknown>} outbound
  * @returns {Record<string, unknown>}
  */
 function canonicalOutbound(outbound) {
+  const type = outbound.type;
+  if (type === 'hysteria2') {
+    const ordered = {
+      type: outbound.type,
+      tag: outbound.tag,
+      server: outbound.server,
+      server_port: outbound.server_port,
+    };
+    if (outbound.server_ports !== undefined) ordered.server_ports = outbound.server_ports;
+    if (outbound.password !== undefined) ordered.password = outbound.password;
+    if (outbound.up_mbps !== undefined) ordered.up_mbps = outbound.up_mbps;
+    if (outbound.down_mbps !== undefined) ordered.down_mbps = outbound.down_mbps;
+    if (outbound.obfs !== undefined) ordered.obfs = outbound.obfs;
+    if (outbound.tls !== undefined) ordered.tls = outbound.tls;
+    return ordered;
+  }
+  if (type !== 'vless') return {...outbound};
+
   const ordered = {
     type: outbound.type,
     tag: outbound.tag,
@@ -416,11 +447,14 @@ function buildWsTransport(query) {
 
 /**
  * Applies the per-subscription `overrides` (§2.5) to one parsed outbound and
- * returns a new object in the canonical key order.
+ * returns a new object in the canonical key order of its TYPE.
  *
- * `flow` only concerns links over TCP (`type` absent / `tcp` / `raw`): `vision`
- * forces `xtls-rprx-vision`, `none` removes it, anything else keeps the link as
- * parsed. `fp` rewrites `tls.utls.fingerprint` of every link that carries `tls`.
+ * Both settings are VLESS concerns: `flow` only for links over TCP (`type`
+ * absent / `tcp` / `raw`) — `vision` forces `xtls-rprx-vision`, `none` removes
+ * it, anything else keeps the link as parsed; `fp` rewrites
+ * `tls.utls.fingerprint` of every link that carries `tls`. A Hysteria2 outbound
+ * is QUIC and has neither a transport nor uTLS, so it is returned untouched
+ * (only re-ordered) — its `password`, `obfs` and ports must survive.
  *
  * @param {Record<string, unknown>} outbound
  * @param {{flow?: string, fp?: string}} [overrides]
@@ -428,12 +462,14 @@ function buildWsTransport(query) {
  */
 export function applyOverrides(outbound, overrides = {}) {
   const next = {...outbound};
-  if ((overrides.flow === 'vision' || overrides.flow === 'none') && transportKind(next) === 'tcp') {
-    if (overrides.flow === 'vision') next.flow = 'xtls-rprx-vision';
-    else delete next.flow;
-  }
-  if (typeof overrides.fp === 'string' && next.tls && next.tls.utls) {
-    next.tls = {...next.tls, utls: {...next.tls.utls, fingerprint: overrides.fp}};
+  if (next.type === 'vless') {
+    if ((overrides.flow === 'vision' || overrides.flow === 'none') && transportKind(next) === 'tcp') {
+      if (overrides.flow === 'vision') next.flow = 'xtls-rprx-vision';
+      else delete next.flow;
+    }
+    if (typeof overrides.fp === 'string' && next.tls && next.tls.utls) {
+      next.tls = {...next.tls, utls: {...next.tls.utls, fingerprint: overrides.fp}};
+    }
   }
   return canonicalOutbound(next);
 }

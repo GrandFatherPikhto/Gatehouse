@@ -11,11 +11,12 @@ import {describe, test} from 'node:test';
 
 import {ConfigError} from '../src/core/errors.mjs';
 import {parseHysteria2ToSingbox, parseHysteria2ToXray} from '../src/core/hysteria.mjs';
+import {generateConfigFile} from '../src/core/settings.mjs';
 import {readProviders} from '../src/core/sources.mjs';
 import {parseSubscriptionLinks} from '../src/core/subscription.mjs';
 import {parseVlessToXray} from '../src/core/xray-links.mjs';
 import {ProjectModel} from '../src/model/project.mjs';
-import {DEFAULT_SETTINGS_BODY, FIXTURES_DIR, makeTempDir} from './helpers.mjs';
+import {DEFAULT_SETTINGS_BODY, FIXTURES_DIR, makeTempDir, writeSettings} from './helpers.mjs';
 
 const XHTTP_LINKS = path.join(FIXTURES_DIR, 'providers-links', 'xhttp', 'links.txt');
 const HY2_LINKS = path.join(FIXTURES_DIR, 'providers-links', 'hy2', 'links.txt');
@@ -297,5 +298,66 @@ describe('the engine of a subscription (§2)', () => {
     const provider = read.providers.find((item) => item.id === 'stash');
     assert.match(provider.hint, /3 ссылки/);
     assert.match(provider.hint, /1 через Xray/);
+  });
+});
+
+// Task 23: the whole pipeline, not just the parser. `applyOverrides` used to
+// rebuild every server through a VLESS-shaped canonicaliser, dropping the
+// Hysteria2 `password` (and obfs/ports/speeds) on the way to `config.json`;
+// `sing-box check` does not require a password, so only an assembled config
+// catches it.
+describe('Hysteria2 survives to the assembled config.json (task 23 §2.3)', () => {
+  function generateFor(providers, copies) {
+    const dir = makeTempDir();
+    const root = path.join(dir, 'providers');
+    for (const [id, src] of Object.entries(copies)) {
+      fs.mkdirSync(path.join(root, id), {recursive: true});
+      fs.copyFileSync(src, path.join(root, id, 'links.txt'));
+    }
+    const settingsFile = writeSettings(dir, {
+      providers,
+      proxies: [{tag: 'main', type: 'mixed', port: 54321}],
+    });
+    return generateConfigFile(settingsFile, {providersRoot: root});
+  }
+
+  test('password, obfs, server_ports and speeds reach config.json', () => {
+    const {config} = generateFor({hy2: {enabled: true, kind: 'subscription'}}, {hy2: HY2_LINKS});
+    const hy2 = config.outbounds.filter((outbound) => outbound.type === 'hysteria2');
+    assert.equal(hy2.length, 2);
+
+    const full = hy2.find((outbound) => outbound.tag === 'HY2 Full');
+    assert.equal(full.password, 'secret');
+    assert.deepEqual(full.server_ports, ['20000:30000']);
+    assert.deepEqual(full.obfs, {type: 'salamander', password: 'obfspass'});
+    assert.equal(full.up_mbps, 100);
+    assert.equal(full.down_mbps, 500);
+    assert.deepEqual(full.tls, {enabled: true, server_name: 'hy2.example.com', alpn: ['h3']});
+
+    const short = hy2.find((outbound) => outbound.tag === 'HY2 Short');
+    assert.equal(short.password, 'plain');
+    assert.deepEqual(short.tls, {enabled: true, server_name: 'hy2b.example.com', insecure: true});
+  });
+
+  test('a suffix and overrides do not strip the Hysteria2 fields', () => {
+    const {config} = generateFor(
+      {hy2: {enabled: true, kind: 'subscription', suffix: 'X', overrides: {fp: 'safari', flow: 'vision'}}},
+      {hy2: HY2_LINKS},
+    );
+    const full = config.outbounds.find(
+      (outbound) => outbound.type === 'hysteria2' && outbound.tag === 'HY2 Full X',
+    );
+    assert.equal(full.password, 'secret');
+    assert.deepEqual(full.obfs, {type: 'salamander', password: 'obfspass'});
+    assert.deepEqual(full.server_ports, ['20000:30000']);
+    // QUIC: neither a transport flow nor uTLS is applied to Hysteria2.
+    assert.equal(Object.hasOwn(full, 'flow'), false);
+    assert.equal(Object.hasOwn(full.tls, 'utls'), false);
+  });
+
+  test('the XHTTP fixture yields Xray servers and no Hysteria2', () => {
+    const result = generateFor({xhttp: {enabled: true, kind: 'subscription'}}, {xhttp: XHTTP_LINKS});
+    assert.equal(result.config.outbounds.filter((o) => o.type === 'hysteria2').length, 0);
+    assert.equal(result.xray.servers.length, 3);
   });
 });
