@@ -8,7 +8,12 @@
 
 import {ConfigError, DEFAULT_EXCLUDE, PROXY_TYPES, isMapping} from '../core/errors.mjs';
 import {collisionRefusal} from '../core/sources.mjs';
-import {UTLS_FINGERPRINTS, transportKind, transportLabel} from '../core/vless.mjs';
+import {
+  UTLS_FINGERPRINTS,
+  subscriptionExpiry,
+  transportKind,
+  transportLabel,
+} from '../core/vless.mjs';
 import {listConfigSnapshots} from '../model/storage.mjs';
 
 /** Keys of the tree, without a name part. */
@@ -432,6 +437,9 @@ export function buildPanel(model, key, extra = {}) {
         kindLabel: providerKindLabel(provider.kind),
         // §3.6: the Happ/v2RayTun headers of the file, for the subscription panel.
         headers: provider.headers ?? {title: null, expire: null},
+        // The expiry as the interface shows it (date, days left, expired), or
+        // `null` when the file carries no date. A pure core helper.
+        expiry: subscriptionExpiry(provider.headers?.expire ?? null),
         // One row per `.conf`: the «включить» mark and the two editable names.
         // Only an ENABLED provider offers them — a disabled one says so instead.
         tunnelRows: provider.enabled === true ? model.providerTunnelRows(name) : [],
@@ -537,6 +545,9 @@ export function buildPanel(model, key, extra = {}) {
         // --- Amnezia: one row per tunnel, grouped by provider, with the runtime
         // state read from systemd and the sudoers rights. The app assembles it. ---
         tunnels: extra.tunnels ?? [],
+        // §4.1: the ONE sudoers block of the tab — missing rules, leftover rules,
+        // unreadable file. Assembled by the web layer, arranged here.
+        sudoers: extra.sudoers ?? null,
 
         // The listen address is shown on the Sing-box tab: the server test builds
         // its URL out of it.

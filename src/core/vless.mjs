@@ -736,3 +736,33 @@ export function parseSubscriptionHeaders(text) {
   }
   return result;
 }
+
+/**
+ * Turns the `expire` of a subscription into what the interface needs: the date,
+ * how many days are left, whether it has passed, and whether it is close enough
+ * to warn about (§3.6). Pure and clock-injectable, so a test never depends on
+ * the wall clock. `null` for a missing or zero `expire` — "no date", not a
+ * fake one.
+ *
+ * @param {number|null} expire Unix seconds, as `parseSubscriptionHeaders` returns.
+ * @param {number} [now] Now in milliseconds; defaults to the system clock.
+ * @returns {{date: string, daysLeft: number, expired: boolean, soon: boolean}|null}
+ */
+export function subscriptionExpiry(expire, now = Date.now()) {
+  const seconds = Number(expire);
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  const date = new Date(seconds * 1000);
+  if (Number.isNaN(date.getTime())) return null;
+  const pad = (number) => String(number).padStart(2, '0');
+  const formatted = `${pad(date.getDate())}.${pad(date.getMonth() + 1)}.${date.getFullYear()}`;
+
+  // Compare by calendar day: an expiry at 23:00 is still "today", not "in 0
+  // days" the moment midnight passes on the expiry date itself.
+  const dayMs = 24 * 60 * 60 * 1000;
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const expiryDay = new Date(date.getTime());
+  expiryDay.setHours(0, 0, 0, 0);
+  const daysLeft = Math.round((expiryDay.getTime() - today.getTime()) / dayMs);
+  return {date: formatted, daysLeft, expired: daysLeft < 0, soon: daysLeft >= 0 && daysLeft <= 14};
+}

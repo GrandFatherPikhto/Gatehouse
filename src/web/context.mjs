@@ -87,6 +87,13 @@ export function buildContext(options = {}) {
     lastCheck: null,
     lastRestart: null,
     testsRunning: false,
+    // Outcome of the last `POST /apply`: `{ok, step, message, at, rolledBack,
+    // steps}`. The apply bar reads it, and it is the only place the "apply
+    // failed" state comes from.
+    lastApply: null,
+    // Cache of the "saved document vs live config.json" comparison of the apply
+    // bar, keyed by the settings/config stamps. Never persisted, never written.
+    applyCache: null,
     // Runtime state of the tunnels, keyed by interface: `{applied, active,
     // enabled, unit}`. Refreshed from the host before a request is rendered.
     tunnels: {},

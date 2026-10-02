@@ -19,8 +19,16 @@
       показывается только в редакторе.
     </p>
     <label for="label">имя</label>
+    <%# The file's own profile title is offered as a PLACEHOLDER only: the label is
+        the owner's, and pressing «Применить» never writes the title over it (§3.6). %>
     <input type="text" id="label" name="label" value="<%= panel.provider.label ?? '' %>"
-           maxlength="64" size="40" placeholder="<%= panel.providerId %>">
+           maxlength="64" size="40"
+           placeholder="<%= panel.headers && panel.headers.title ? panel.headers.title : panel.providerId %>">
+    <% if (panel.headers && panel.headers.title) { %>
+      <span class="hint">
+        в файле подписки: «<%= panel.headers.title %>» — подставлено подсказкой, подпись не меняется
+      </span>
+    <% } %>
 
     <label for="kind">вид</label>
     <% if (panel.kindEditable) { %>
@@ -45,6 +53,18 @@
           <br>Пример: <code><%= panel.firstServerName %></code>
         <% } %>
       </p>
+
+      <%# §3.6: the expiry from `#subscription-userinfo`. A passed date warns the
+          same way a mark does in the tree; no date means no line at all. %>
+      <% if (panel.expiry) { %>
+        <p class="<%= panel.expiry.expired ? 'error' : panel.expiry.soon ? 'notice' : 'hint' %>">
+          <% if (panel.expiry.expired) { %>
+            Подписка истекла <%= panel.expiry.date %>.
+          <% } else { %>
+            Подписка до <%= panel.expiry.date %><% if (panel.expiry.soon) { %> — осталось <%= panel.expiry.daysLeft %> дн.<% } %>
+          <% } %>
+        </p>
+      <% } %>
     <% } %>
 
     <label class="check">

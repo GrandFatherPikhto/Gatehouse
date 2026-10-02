@@ -172,6 +172,11 @@ export class ProjectModel extends ProjectSession {
     return tunnels.unprepareTunnel(this, providerName, fileName);
   }
 
+  /** Marks (or clears) the tunnel the owner reaches the router through (§4.2). */
+  setTunnelCarrier(name, value) {
+    return tunnels.setTunnelCarrier(this, name, value);
+  }
+
   /** Tunnels the document knows about: proxies carrying a `tunnel` descriptor. */
   tunnelProxies() {
     return inventory.tunnelProxies(this);

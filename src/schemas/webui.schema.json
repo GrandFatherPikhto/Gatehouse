@@ -102,6 +102,10 @@
           "policy_routing": {
             "description": "The tunnel is also handed out through 3proxy by the source address, so the normalised config carries PostUp/PreDown with `ip rule`.",
             "type": "boolean"
+          },
+          "carrier": {
+            "description": "The tunnel the owner reaches the router through: restarting or stopping it cuts their own access, so the confirmations warn. At most one is expected, but more are not refused.",
+            "type": "boolean"
           }
         }
       }

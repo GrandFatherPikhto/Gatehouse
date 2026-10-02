@@ -114,9 +114,13 @@ describe('discovery of provider folders', () => {
     assert.equal(none.outbounds.length, 0);
     assert.deepEqual(none.tags, []);
 
-    // Enabled but WITHOUT a kind: still nothing (a folder must say what it is).
-    const unknownKind = readProviders({vpnd: {enabled: true}}, root);
-    assert.equal(unknownKind.tags.length, 0);
+    // Enabled record WITHOUT a written kind: the core INFERS it from the folder
+    // (links.txt → subscription, §0.1), so the old file still works.
+    const inferred = readProviders({vpnd: {enabled: true}}, root);
+    assert.equal(inferred.tags.length, 3);
+
+    // A folder with NO record at all is «found, not connected»: nothing.
+    assert.equal(readProviders({}, root).tags.length, 0);
 
     const read = readProviders({vpnd: {enabled: true, kind: 'subscription'}}, root);
     assert.equal(read.tags.length, 3);

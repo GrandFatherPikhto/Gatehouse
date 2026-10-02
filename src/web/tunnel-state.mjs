@@ -6,7 +6,12 @@
 // sudoers file the process may READ — the editor never writes it.
 
 import {ConfigError} from '../core/errors.mjs';
-import {tunnelPermissions, tunnelState, tunnelUnitName} from '../system/index.mjs';
+import {
+  tunnelPermissions,
+  tunnelState,
+  tunnelSudoersExtra,
+  tunnelUnitName,
+} from '../system/index.mjs';
 
 /**
  * Reads the runtime state of every tunnel of the inventory and caches it on
@@ -126,6 +131,9 @@ export function tunnelPanelRows(ctx) {
         ...tunnel,
         unit,
         label: typeof tunnel.name === 'string' ? tunnel.name : '',
+        // §4.2: the owner reaches the router through this tunnel; the template
+        // warns on restart/down, and the tree and the row carry the mark.
+        carrier: tunnel.carrier === true,
         applied: runtime.applied === true,
         active: runtime.active === true,
         enabled: runtime.enabled === true,
@@ -140,6 +148,54 @@ export function tunnelPanelRows(ctx) {
       };
     }),
   }));
+}
+
+/**
+ * The ONE sudoers block of the AmneziaWG tab (§4.1): the file path, the rules a
+ * tunnel is missing (with its human name), the leftover rules for tunnels that no
+ * longer exist, and the "unreadable file" case. Assembled here, in the web layer,
+ * because only it reads the file through the system boundary; the panel builder
+ * just arranges what it is handed.
+ *
+ * @param {ReturnType<import('./context.mjs').buildContext>} ctx
+ * @returns {{path: string, readable: boolean, notice: string|null,
+ *   missing: Array<{label: string, interface: string, lines: string[]}>,
+ *   extra: string[]}}
+ */
+export function tunnelPanelSudoers(ctx) {
+  const rights = tunnelRights(ctx);
+  const names = ctx.model.tunnelInventory().map((tunnel) => String(tunnel.interface));
+
+  const missing = [];
+  let unreadableNotice = null;
+  for (const group of ctx.model.tunnelGroups()) {
+    for (const tunnel of group.tunnels) {
+      const permission = rights[tunnel.interface] ?? {};
+      if (permission.sudoersReadable === false) {
+        if (unreadableNotice === null) unreadableNotice = permission.sudoersNotice ?? null;
+        continue;
+      }
+      const lines = permission.missingLines ?? [];
+      if (lines.length > 0) {
+        missing.push({
+          label: typeof tunnel.name === 'string' && tunnel.name.length > 0
+            ? tunnel.name
+            : String(tunnel.interface),
+          interface: String(tunnel.interface),
+          lines,
+        });
+      }
+    }
+  }
+
+  const extra = tunnelSudoersExtra(ctx.system.sudoers, names, {systemctl: ctx.system.systemctl});
+  return {
+    path: ctx.system.sudoers,
+    readable: unreadableNotice === null,
+    notice: unreadableNotice,
+    missing,
+    extra: extra.names,
+  };
 }
 
 /**

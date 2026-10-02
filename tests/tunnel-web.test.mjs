@@ -121,7 +121,9 @@ describe('the tunnel preview (NEW)', () => {
       assert.equal(html.split('type="checkbox"').length - 1, 1, 'one checkbox, for policy routing');
       assert.match(html, /отдаётся также через 3proxy по адресу источника/);
       assert.doesNotMatch(html, /hx-post="\/tunnel\/apply"/, 'there is no apply on this screen');
-      assert.doesNotMatch(html, />Применить</);
+      // The only «Применить» on any page is the global apply bar; the tunnel
+      // preview itself still writes nothing.
+      assert.equal(html.split('hx-post="/apply"').length - 1, 1, 'only the bar posts /apply');
       assert.match(html, /hx-post="\/tunnel\/policy"/, 'the policy switch has its own route');
       assert.match(html, /Имя туннеля: <code>hidemyname-AustriaGrazS4<\/code>/);
       assert.match(html, /туннель не включён/, 'a disabled tunnel says the file is not created');

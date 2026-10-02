@@ -10,8 +10,9 @@ import path from 'node:path';
 
 import {ConfigError} from '../core/errors.mjs';
 import {PRIORITY_LEVELS, tailJournal} from '../system/index.mjs';
+import {applyBar} from './apply-bar.mjs';
 import {PANEL_KINDS, buildPanel, buildStatus, panelKey, panelUrl} from './panel.mjs';
-import {tunnelPanelRows} from './tunnel-state.mjs';
+import {tunnelPanelRows, tunnelPanelSudoers} from './tunnel-state.mjs';
 
 /** Panel shown when nothing else is asked for. */
 export const DEFAULT_PANEL = 'singbox';
@@ -117,6 +118,9 @@ export function buildView(ctx, key, extra) {
     // Tunnel rows of the System panel. Assembled here, from the cached runtime
     // state and the sudoers rights, so the panel builders stay pure.
     tunnels: tunnelPanelRows(ctx),
+    // The ONE sudoers block of the AmneziaWG tab (§4.1): missing rules, leftover
+    // rules and the unreadable-file case. Read here, never written.
+    sudoers: tunnelPanelSudoers(ctx),
     auth: {tokenRequired: token.length > 0},
   };
   const resolved = resolvePanel(ctx, key, enriched);
@@ -128,6 +132,8 @@ export function buildView(ctx, key, extra) {
     // cache refreshed by the middleware of the app.
     tree: model.treeSpec({tunnelStates: state.tunnels}),
     status: buildStatus(model),
+    // The permanent apply bar: dirty / failed / saved-not-applied / applied.
+    apply: applyBar(ctx),
     extra: resolved.extra,
     sandbox,
   };

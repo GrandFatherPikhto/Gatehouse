@@ -4,8 +4,7 @@
   "listen_ip": "127.0.0.1",
   "providers": {
     "vpnd": {
-      "enabled": true,
-      "kind": "subscription"
+      "enabled": true
     }
   },
   "output_file": "etc/sing-box/config.json",

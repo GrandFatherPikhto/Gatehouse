@@ -278,14 +278,57 @@ function readSubscriptionHeaders(filePath) {
 export function describeContent(contentKind, links, confs) {
   switch (contentKind) {
     case 'links':
-      return `похоже на подписку: ${LINKS_FILENAME}, ${links} ссылок`;
+      return `похоже на подписку: ${LINKS_FILENAME}, ${links} ${plural(
+        links,
+        'ссылка',
+        'ссылки',
+        'ссылок',
+      )}`;
     case 'tunnels':
-      return `похоже на туннели: ${confs} конфигов`;
+      return `похоже на туннели: ${confs} ${plural(confs, 'конфиг', 'конфига', 'конфигов')}`;
     case 'mixed':
-      return `смешанная: ${LINKS_FILENAME} и ${confs} конфигов`;
+      return `смешанная: ${LINKS_FILENAME} и ${confs} ${plural(
+        confs,
+        'конфиг',
+        'конфига',
+        'конфигов',
+      )}`;
     default:
       return 'пусто';
   }
+}
+
+/**
+ * Russian plural form for a count. One helper, so «1 конфиг», «2 конфига» and
+ * «5 конфигов» can never drift apart between the messages (§2.2).
+ *
+ * @param {number} count
+ * @param {string} one Form for 1, 21, 31, …
+ * @param {string} few Form for 2–4, 22–24, …
+ * @param {string} many Form for 0, 5–20, 25–30, …
+ * @returns {string}
+ */
+export function plural(count, one, few, many) {
+  const n = Math.abs(Math.trunc(Number(count)));
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
+  return many;
+}
+
+/**
+ * The kind a folder IMPLIES from its content. One rule for the reader and the
+ * migration (§0): a record without `kind` is read exactly like the file it came
+ * from, so the CLI works on an old document before the first save.
+ *
+ * @param {string} contentKind `links`|`tunnels`|`mixed`|`empty`
+ * @returns {'subscription'|'awg'|null}
+ */
+export function inferKind(contentKind) {
+  if (contentKind === 'links') return 'subscription';
+  if (contentKind === 'tunnels') return 'awg';
+  return null;
 }
 
 /**
@@ -299,10 +342,11 @@ export function describeContent(contentKind, links, confs) {
  * @param {string} dir Absolute folder path.
  * @param {string[]} warnings Per-provider collector (see `readProviders`).
  * @param {Array<{label: string, reason: string}>} skipped Per-provider skips.
- * @param {'subscription'|'awg'|null} kind Stored kind of the provider.
+ * @param {'subscription'|'awg'|null} storedKind Kind written in the record.
+ * @param {boolean} hasRecord True when `providers` has an entry for the folder.
  * @returns {Record<string, unknown>}
  */
-function readProviderFolder(id, dir, warnings, skipped, kind) {
+function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
   const base = {id, name: id, path: dir, type: 'folder', discovered: true};
 
   let stat;
@@ -377,6 +421,11 @@ function readProviderFolder(id, dir, warnings, skipped, kind) {
         : confFiles.length > 0
           ? 'tunnels'
           : 'empty';
+
+  // An OLD record carries no `kind`: it is inferred from the content AT READ, by
+  // the same rule the migration uses, so the file and the document are read
+  // identically and generation works before the first save (§0.1).
+  const kind = storedKind ?? (hasRecord ? inferKind(contentKind) : null);
 
   // The foreign half of a folder with a CHOSEN kind is warned about and left
   // unread (§3.1). A mixed folder WITHOUT a kind is left for the migration.
@@ -608,14 +657,17 @@ export function readProviders(records, root, warnings = []) {
     }
 
     const view = recordView(map[name]);
+    const hasRecord = Object.hasOwn(map, name);
     const localWarnings = [];
     const localSkipped = [];
+    const folder = readProviderFolder(name, full, localWarnings, localSkipped, view.kind, hasRecord);
     const provider = {
-      ...readProviderFolder(name, full, localWarnings, localSkipped, view.kind),
+      ...folder,
       record: view.record,
-      // A folder with no chosen kind never feeds the build, even if the record
-      // still says `enabled: true` from before (§3.1).
-      enabled: view.enabled && view.kind !== null,
+      // A folder whose kind is neither written nor inferred never feeds the
+      // build, even if the record still says `enabled: true` from before (§3.1).
+      enabled: view.enabled && folder.kind !== null,
+      hasRecord,
       storedKind: view.kind,
       label: view.label,
       forget: false,

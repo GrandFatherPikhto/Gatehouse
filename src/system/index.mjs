@@ -987,6 +987,36 @@ export function tunnelPermissions(sudoersPath, names, options = {}) {
 }
 
 /**
+ * The tunnels the sudoers file GRANTS but the inventory does not have: leftover
+ * rules the owner may remove (§4.1). The editor only reads the file; it never
+ * writes it, and this list is a hint, never an action.
+ *
+ * @param {string} sudoersPath
+ * @param {string[]} known Interfaces present in `tunnels[]` or the amnezia dir.
+ * @param {{systemctl?: string}} [options]
+ * @returns {{readable: boolean, names: string[]}} `names` sorted; empty for an
+ *   unreadable file.
+ */
+export function tunnelSudoersExtra(sudoersPath, known, options = {}) {
+  let text = '';
+  let readable = true;
+  try {
+    text = fs.readFileSync(sudoersPath, 'utf8');
+  } catch (error) {
+    if (error.code === 'EACCES' || error.code === 'EPERM') readable = false;
+  }
+  if (!readable) return {readable: false, names: []};
+  const parsed = parseTunnelSudoers(text, options);
+  const knownSet = new Set(known.map((name) => String(name)));
+  return {
+    readable: true,
+    names: Object.keys(parsed)
+      .filter((name) => !knownSet.has(name))
+      .sort(),
+  };
+}
+
+/**
  * Reads a one-shot snapshot of the daemon log.
  *
  * This used to be the fetch half of a live `journalctl -f` stream. The stream was
@@ -1223,4 +1253,54 @@ export async function geositeLookup(domain, options = {}) {
     stderr: result.stderr,
     code: result.code,
   };
+}
+
+/**
+ * Waits until a unit is really UP: `systemctl is-active <unit>` must answer
+ * `active` TWICE in a row before the deadline.
+ *
+ * `Restart=always` means the unit may be seen `activating` for a moment right
+ * after a restart; two consecutive `active` reads are the honest "it came up"
+ * the apply chain waits for. `execFile` with an argument array, like everything
+ * on this boundary, and the poll stops at the deadline instead of hanging a
+ * request forever.
+ *
+ * @param {{env?: Record<string, string|undefined>, timeout?: number,
+ *   signal?: AbortSignal, systemctl?: string, unit?: string, interval?: number,
+ *   pollTimeout?: number}} [options]
+ * @returns {Promise<{ok: boolean, active: boolean, attempts: number, last: string,
+ *   error: string|null, unit: string}>}
+ */
+export async function waitForActive(options = {}) {
+  const config = systemConfig(options.env, options);
+  const systemctl = options.systemctl ?? config.systemctl;
+  const unit = options.unit ?? config.unit;
+  const interval = positive(options.interval, 500);
+  const deadline = Date.now() + positive(options.pollTimeout, 5000);
+
+  let streak = 0;
+  let attempts = 0;
+  let last = '';
+  let error = null;
+
+  for (;;) {
+    attempts += 1;
+    const result = await run(systemctl, ['is-active', unit], {
+      timeout: interval * 4,
+      env: options.env,
+      signal: options.signal,
+    });
+    last = result.stdout.trim();
+    error = result.error;
+    if (last === 'active') {
+      streak += 1;
+      if (streak >= 2) return {ok: true, active: true, attempts, last, error: null, unit};
+    } else {
+      streak = 0;
+    }
+    if (Date.now() >= deadline) {
+      return {ok: false, active: false, attempts, last, error, unit};
+    }
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
 }

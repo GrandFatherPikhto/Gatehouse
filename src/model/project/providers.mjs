@@ -18,6 +18,7 @@ import {
   SUFFIX_MAX_LENGTH,
   cleanSuffix,
   collisionRefusal,
+  inferKind,
   isProviderId,
   providerOverrides as recordOverrides,
   providersRootInfo as rootInfoOf,
@@ -615,12 +616,9 @@ export function migrateProviderKinds(document, root) {
     if (!Object.hasOwn(providers, id)) continue; // «Найдено»: nothing to touch
     const record = isMapping(providers[id]) ? providers[id] : {};
     if (record.kind === 'subscription' || record.kind === 'awg') continue;
-
-    if (provider.contentKind === 'links') {
-      providers[id] = {...record, kind: 'subscription'};
-      touched = true;
-    } else if (provider.contentKind === 'tunnels') {
-      providers[id] = {...record, kind: 'awg'};
+    const inferred = provider.kind ?? inferKind(provider.contentKind);
+    if (inferred === 'subscription' || inferred === 'awg') {
+      providers[id] = {...record, kind: inferred};
       touched = true;
     } else if (provider.contentKind === 'mixed') {
       warnings.push(

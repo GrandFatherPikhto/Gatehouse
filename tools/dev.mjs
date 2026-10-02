@@ -58,6 +58,20 @@ if (!fs.existsSync(LINKS)) {
   );
 }
 
+// `sing-box` is NOT one of the sandbox stubs: `check` and `tools fetch` have to
+// behave as on the router. Say plainly when the binary is missing instead of
+// letting «Применить» fail on the check step with a bare ENOENT.
+const singbox =
+  typeof process.env.GATEHOUSE_SINGBOX === 'string' && process.env.GATEHOUSE_SINGBOX.length > 0
+    ? process.env.GATEHOUSE_SINGBOX
+    : '/usr/local/bin/sing-box';
+if (!fs.existsSync(singbox)) {
+  process.stderr.write(
+    `Внимание: sing-box не найден: ${singbox}; задайте GATEHOUSE_SINGBOX=… — ` +
+      '«Применить» упадёт на шаге проверки схемы.\n',
+  );
+}
+
 // `run()` of the server reads `process.env`, so the sandbox variables are set
 // there rather than passed as an argument; this also makes the sandbox marker in
 // the UI fire, because it is derived from these very paths.

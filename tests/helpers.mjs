@@ -58,8 +58,9 @@ export const DEFAULT_LINKS = `${[
  */
 export const DEFAULT_SETTINGS_BODY = {
   listen_ip: '127.0.0.1',
-  // Since the «folder kind» task a provider must SAY what it is before it feeds
-  // the build; a links folder is a subscription.
+  // Helper projects start SETTLED (a kind is written) so unrelated tests are not
+  // surprised by the open migration. The real, kind-less shape is exercised by
+  // the committed `tests/fixtures/settings.json` (golden) and the §0.5 test.
   providers: {[LINKS_PROVIDER]: {enabled: true, kind: 'subscription'}},
   output_file: 'config.json',
   exclude_from_auto: ['🇷🇺'],

@@ -4,8 +4,21 @@
 // for the editor (and its tests) to observe which unit would have been acted on,
 // while the real router is never reached by `npm run dev`.
 //
+// `is-active`/`is-enabled` answer the happy path on purpose: the apply chain
+// polls `systemctl is-active sing-box` after a restart, and a stub that answered
+// `inactive` would make the sandbox roll the config back on every Apply.
+//
 // The output format is free but unambiguous on purpose: one line, a marker and
 // the JSON array of arguments, so a test can assert on the exact argv without
 // depending on the rest of the log.
-process.stdout.write(`fake-systemctl ${JSON.stringify(process.argv.slice(2))}\n`);
+const args = process.argv.slice(2);
+if (args[0] === 'is-active') {
+  process.stdout.write('active\n');
+  process.exit(0);
+}
+if (args[0] === 'is-enabled') {
+  process.stdout.write('enabled\n');
+  process.exit(0);
+}
+process.stdout.write(`fake-systemctl ${JSON.stringify(args)}\n`);
 process.exit(0);

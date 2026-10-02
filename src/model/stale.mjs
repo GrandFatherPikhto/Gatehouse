@@ -27,6 +27,7 @@
 
 import {isMapping} from '../core/errors.mjs';
 import {asList} from '../core/validate.mjs';
+import {subscriptionExpiry} from '../core/vless.mjs';
 
 /** Outbounds that always exist in a generated config, besides the servers. */
 export const BUILTIN_OUTBOUNDS = Object.freeze(['auto-select', 'direct']);
@@ -94,6 +95,9 @@ export function findStaleRefs(document, allTags) {
 
   for (const proxy of asList(data.proxies)) {
     if (!isMapping(proxy)) continue;
+    // A tunnel proxy IS an outbound: its tag names the `direct` outbound with
+    // `bind_interface`, so a route pointing at it is not «unknown» (§2.1).
+    if (isMapping(proxy.tunnel) && typeof proxy.tag === 'string') known.add(proxy.tag);
     for (const server of asList(proxy.servers)) {
       if (typeof server !== 'string') continue;
       if (!known.has(server)) stale.push([`proxies.${String(proxy.tag)}.servers`, server]);
@@ -258,6 +262,11 @@ export function treeSpec(options = {}) {
   const providers = Array.isArray(options.providers) ? options.providers : [];
   const unread = Array.isArray(options.unread) ? options.unread : [];
   const tunnelStates = isMapping(options.tunnelStates) ? options.tunnelStates : {};
+  // The subscription-expiry mark needs a clock; it is injectable so a test never
+  // depends on the wall clock (§3.6).
+  const now = Number.isFinite(options.now) ? Number(options.now) : Date.now();
+  // §4.2: providers whose tunnels carry the «carrier» mark.
+  const carrierProviders = new Set(asList(options.carrierProviders).map((id) => String(id)));
 
   const proxyNodes = [];
   for (const proxy of asList(document.proxies)) {
@@ -327,13 +336,31 @@ export function treeSpec(options = {}) {
     const marks = [];
     if (provider.enabled === false) marks.push('[выключен]');
     if (diagnosis !== '') marks.push(diagnosis);
+    // §4.2: the owner reaches the router through one of this provider's tunnels.
+    const isCarrier = carrierProviders.has(String(provider.id));
+    if (isCarrier) marks.push('[несущий]');
+    // §3.6: a subscription past its `expire` is marked in the tree, and one that
+    // is close to it warns. Both are marks, never a build blocker.
+    const expiry =
+      provider.kind === 'subscription'
+        ? subscriptionExpiry(provider.headers?.expire ?? null, now)
+        : null;
+    if (expiry !== null && expiry.expired) marks.push(`[!] подписка истекла ${expiry.date}`);
+    else if (expiry !== null && expiry.soon) marks.push(`[!] подписка до ${expiry.date}`);
     const mark = marks.join('  ');
     const label = `${name} (${providerKindLabel(provider.kind)}, ${provider.count})`;
     return node(
       `provider:${String(provider.id)}`,
       mark === '' ? label : `${label}  ${mark}`,
       'provider',
-      {stale: diagnosis !== '', detail: String(provider.id), mark},
+      {
+        stale:
+          diagnosis !== '' ||
+          isCarrier ||
+          (expiry !== null && (expiry.expired || expiry.soon)),
+        detail: String(provider.id),
+        mark,
+      },
     );
   };
 

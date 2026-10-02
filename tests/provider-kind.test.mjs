@@ -11,6 +11,7 @@ import path from 'node:path';
 import {describe, test} from 'node:test';
 
 import {ConfigError} from '../src/core/errors.mjs';
+import {generateConfigFile} from '../src/core/settings.mjs';
 import {readProviders} from '../src/core/sources.mjs';
 import {ProjectModel} from '../src/model/project.mjs';
 import {canonicalJson} from '../src/model/storage.mjs';
@@ -54,17 +55,28 @@ const LINKS = `${vlessLink('aaaaaaaa-0000-0000-0000-000000000001', 'a.example.co
 const CONFS = {'one.conf': 'x', 'two.conf': 'y'};
 
 describe('reading by kind (task §3.1)', () => {
-  test('no kind: described, but nothing enters the build', () => {
+  test('a folder with NO record is described but enters nothing', () => {
     const dir = makeTempDir();
     const root = path.join(dir, 'providers');
     write(root, 'vpnd', {'links.txt': LINKS});
-    const read = readProviders({vpnd: {enabled: true}}, root);
+    const read = readProviders({}, root);
     const provider = read.providers.find((item) => item.id === 'vpnd');
     assert.equal(provider.kind, null);
     assert.equal(provider.contentKind, 'links');
     assert.deepEqual(provider.outbounds, []);
     assert.deepEqual(provider.tags, []);
     assert.match(provider.hint, /похоже на подписку/);
+  });
+
+  test('a record with no kind has it INFERRED at read (§0.1)', () => {
+    const dir = makeTempDir();
+    const root = path.join(dir, 'providers');
+    write(root, 'vpnd', {'links.txt': LINKS});
+    write(root, 'h', CONFS);
+    const read = readProviders({vpnd: {enabled: true}, h: {enabled: true}}, root);
+    assert.equal(read.providers.find((item) => item.id === 'vpnd').kind, 'subscription');
+    assert.equal(read.providers.find((item) => item.id === 'h').kind, 'awg');
+    assert.equal(read.outbounds.length, 1);
   });
 
   test('subscription reads only links.txt and ignores *.conf with a warning', () => {
@@ -166,5 +178,124 @@ describe('the tree of outputs (task §2)', () => {
     assert.equal(outputs.children[0].children.length, 1, 'vpnd is a subscription');
     assert.equal(outputs.children[1].children.length, 1, 'h is a tunnel source');
     assert.match(outputs.children[2].children[0].title, /похоже на подписку/);
+  });
+});
+
+describe('backwards compatibility of an old webui.json (§0)', () => {
+  /** A router-shaped document: enabled records, NO kind, links and configs. */
+  function routerShaped() {
+    const dir = makeTempDir();
+    const root = path.join(dir, 'providers');
+    write(root, 'vpnd', {'links.txt': LINKS});
+    write(root, 'hidemyname', CONFS);
+    const file = path.join(dir, 'webui.json');
+    fs.writeFileSync(
+      file,
+      canonicalJson({
+        version: 2,
+        listen_ip: '127.0.0.1',
+        providers: {vpnd: {enabled: true}, hidemyname: {enabled: true}},
+        output_file: 'config.json',
+        exclude_from_auto: [],
+        urltest: {url: 'https://gstatic.com', interval: '3m', tolerance: 50},
+        log: {level: 'info', timestamp: true},
+        dns: {servers: [], final: 'dns-local'},
+        proxies: [{tag: 'p', type: 'socks', port: 54321}],
+        routes: {},
+      }),
+      'utf8',
+    );
+    return {dir, root, file};
+  }
+
+  test('generation works from disk WITHOUT saving, equal to after a save', () => {
+    const {dir, file} = routerShaped();
+    const first = path.join(dir, 'first.json');
+    generateConfigFile(file, {output: first});
+    const before = fs.readFileSync(first, 'utf8');
+
+    const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
+    model.save();
+    const second = path.join(dir, 'second.json');
+    generateConfigFile(file, {output: second});
+
+    assert.equal(fs.readFileSync(second, 'utf8'), before);
+  });
+
+  test('the open migration marks the document dirty, save clears it', () => {
+    const {dir, file} = routerShaped();
+    const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
+    assert.equal(model.dirty, true, 'есть несохранённые правки');
+    assert.match(model.providersMigrationNotice, /вид папки/);
+    model.save();
+    assert.equal(model.dirty, false);
+  });
+
+  test('an enabled MIXED folder is named honestly, not called disabled', () => {
+    const dir = makeTempDir();
+    write(path.join(dir, 'providers'), 'mixed', {...CONFS, 'links.txt': LINKS});
+    const file = path.join(dir, 'webui.json');
+    fs.writeFileSync(
+      file,
+      canonicalJson({
+        version: 2,
+        listen_ip: '127.0.0.1',
+        providers: {mixed: {enabled: true}},
+        output_file: 'config.json',
+        exclude_from_auto: [],
+        urltest: {url: 'https://gstatic.com', interval: '3m', tolerance: 50},
+        log: {level: 'info', timestamp: true},
+        dns: {servers: [], final: 'dns-local'},
+        proxies: [{tag: 'p', type: 'socks', port: 54321}],
+        routes: {},
+      }),
+      'utf8',
+    );
+    assert.throws(
+      () => generateConfigFile(file, {output: path.join(dir, 'c.json')}),
+      (error) =>
+        error instanceof ConfigError &&
+        /включён, но вид папки не задан: папка смешанная/.test(error.message) &&
+        !/найдены и выключены/.test(error.message),
+    );
+  });
+});
+
+describe('acceptance nits (§2)', () => {
+  test('a route on a tunnel proxy is not «unknown», a real stranger is', () => {
+    const {model} = project(
+      {h: {enabled: true, kind: 'awg'}},
+      {h: CONFS},
+    );
+    model.document.proxies = [
+      {tag: 'tp', type: 'mixed', port: 54321, tunnel: {provider: 'h', file: 'one.conf', interface: 'hmn-one'}},
+    ];
+    model.document.routes = {ok: {outbound: 'tp'}, bad: {outbound: 'ghost-tag'}};
+
+    const walk = (node, kind) => {
+      if (node.kind === kind) return node;
+      for (const child of node.children ?? []) {
+        const found = walk(child, kind);
+        if (found) return found;
+      }
+      return null;
+    };
+    const routes = walk(model.treeSpec(), 'routes');
+    const byDetail = Object.fromEntries(routes.children.map((child) => [child.detail, child]));
+    assert.equal(byDetail.ok.stale, false);
+    assert.equal(byDetail.bad.stale, true);
+  });
+
+  test('«1 конфиг», «2 конфига», «5 конфигов»', () => {
+    const dir = makeTempDir();
+    const root = path.join(dir, 'providers');
+    write(root, 'one', {'a.conf': 'x'});
+    write(root, 'two', {'a.conf': 'x', 'b.conf': 'x'});
+    write(root, 'five', Object.fromEntries(Array.from({length: 5}, (_, i) => [`${i}.conf`, 'x'])));
+    const read = readProviders({}, root);
+    const hint = (id) => read.providers.find((p) => p.id === id).hint;
+    assert.match(hint('one'), /1 конфиг$/);
+    assert.match(hint('two'), /2 конфига/);
+    assert.match(hint('five'), /5 конфигов/);
   });
 });

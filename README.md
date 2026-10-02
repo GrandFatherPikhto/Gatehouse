@@ -238,17 +238,27 @@ Since version 2 there is no path field for providers EITHER: they are DISCOVERED
 (see below), so the browser only ever sends the «включён» tick and the
 human-readable name.
 
-One tree node per screen: Провайдеры (discovered provider folders and their tunnels), Настройки —
-a group with two children, Прокси → tag, Маршруты → name, and Система, which is a
-group with two children as well: Sing-box (schema check, daemon restart, rollback,
-the journal and the server test) and Amnezia (the tunnel rows grouped by provider).
-A child is carried by the panel key (`system:amnezia`), so it is a real address that
-can be bookmarked and works without script; a bare `system` key opens the first
-child. «Настройки Sing-Box» collects every sing-box setting on one page (the old
-Общие, DNS and Вывод); «Настройки Amnezia» holds the output directory of the tunnel
-configs and the regeneration button. Inside a provider folder every `.conf` carries
+One tree node per screen, under four groups: «Шлюз» (Прокси → tag, Маршруты →
+name), «Выходы» (Подписки, Туннели AmneziaWG, Найдено, не подключено), «Настройки»
+(Sing-Box, AmneziaWG) and «Службы» (Sing-Box, AmneziaWG). «Шлюз», «Настройки» and
+«Службы» are groups with no page of their own; «Выходы» has one (the former root
+Providers panel). A child of «Службы» is carried by the panel key (`system:amnezia`),
+so it is a real address that can be bookmarked and works without script; a bare
+`system` key opens the first child. Inside a provider folder every `.conf` carries
 the «включить» switch and its two names; clicking it opens a read-only normalisation
 preview with the policy-routing switch.
+
+A permanent **apply bar** sits over the tree on every page. It has four states (by
+priority): unsaved edits, a failed apply, saved-but-not-applied, applied — and
+carries «Сохранить», «Применить» and «Откатить». «Применить» runs the whole chain
+server-side: save, build `config.json` into a neighbouring `config.json.new`,
+`sing-box check` it, snapshot the live file, rename it into place, restart, then poll
+`systemctl is-active`; if the daemon does not come up the snapshot is restored and
+the restart repeated. Unchecked bytes never reach the live file, and a build equal
+to the live one skips the restart. A subscription folder shows the profile title
+(as a placeholder) and the expiry date from its `#` headers; an AmneziaWG folder
+shows ONE sudoers block with the rules the owner still has to paste, and a
+«carrier» tick for the tunnel their own access to the router runs through.
 
 * **`webui.json` is flat; the profile level is gone.** The body used to be split
   between the active profile and `defaults`, but there was exactly one profile and

@@ -157,14 +157,26 @@ describe('authentication configuration', () => {
   });
 });
 
-describe('check and restart gating', () => {
-  test('the restart is neither offered nor accepted before a successful check', async () => {
+describe('the apply bar and the hidden system routes', () => {
+  test('the sing-box tab no longer offers check/restart/rollback buttons', async () => {
     const editor = await startEditor();
     try {
       const panel = await (await fetch(`${editor.base}/panel/system`)).text();
+      // §1.4: the four buttons left the tab; the chain lives on the bar.
+      assert.doesNotMatch(panel, /hx-post="\/check"/);
       assert.doesNotMatch(panel, /hx-post="\/restart"/);
-      assert.match(panel, /Кнопка перезапуска появится/);
+      // The bar's own «Откатить» is the only rollback on the page now.
+      assert.equal(panel.split('hx-post="/rollback"').length - 1, 1, 'only the bar rolls back');
+      assert.match(panel, /hx-post="\/apply"/, 'the apply bar is on the panel too');
+    } finally {
+      await editor.close();
+    }
+  });
 
+  test('the restart is neither offered nor accepted before a successful check', async () => {
+    const editor = await startEditor();
+    try {
+      // The route stays (tools and the apply chain speak to it), but it is gated.
       const refused = await post(editor.base, '/restart');
       assert.match(await refused.text(), /перезапуск не предлагается/);
       assert.equal(fs.existsSync(path.join(editor.stateDir, 'snapshots')), false);
@@ -183,7 +195,7 @@ describe('check and restart gating', () => {
     }
   });
 
-  test('a passing check enables the restart, a failing one does not', async () => {
+  test('a passing check lets a restart through, a failing one does not', async () => {
     const editor = await startEditor();
     try {
       await post(editor.base, '/save', {panel: 'singbox'});
@@ -193,18 +205,16 @@ describe('check and restart gating', () => {
       const checkedHtml = await checked.text();
       assert.match(checkedHtml, /Схема принята/);
       assert.match(checkedHtml, /не доказательство корректности/);
-      assert.match(checkedHtml, /hx-post="\/restart"/, 'the restart button is now drawn');
 
       const restarted = await post(editor.base, '/restart');
       assert.match(await restarted.text(), /перезапущен/);
 
-      // Now break the config on disk: the check has to fail and the button must go.
+      // Break the config on disk: the check has to fail, and the restart with it.
       fs.writeFileSync(editor.configPath, '{"marker": "__check_fail__"}');
       const failed = await post(editor.base, '/check');
-      const failedHtml = await failed.text();
-      assert.match(failedHtml, /Проверка не прошла/);
-      assert.match(failedHtml, /unknown inbound type/);
-      assert.doesNotMatch(failedHtml, /hx-post="\/restart"/);
+      // The check details left the tab with the button; the route reports the
+      // outcome, and the stderr now travels on the apply bar's failed step.
+      assert.match(await failed.text(), /Проверка не прошла/);
 
       const afterFailure = await post(editor.base, '/restart');
       assert.match(await afterFailure.text(), /перезапуск не предлагается/);
@@ -219,15 +229,14 @@ describe('check and restart gating', () => {
       await post(editor.base, '/save', {panel: 'singbox'});
       await post(editor.base, '/generate', {});
       await post(editor.base, '/check');
-      assert.match(await (await fetch(`${editor.base}/panel/system`)).text(), /hx-post="\/restart"/);
 
-      // New bytes: the old check judged a different file.
+      // New bytes: the old check judged a different file, so the restart is refused.
       editor.model.applyGeneral({listen_ip: '10.0.0.9'});
       editor.model.save();
       await post(editor.base, '/generate', {});
 
-      const panel = await (await fetch(`${editor.base}/panel/system`)).text();
-      assert.doesNotMatch(panel, /hx-post="\/restart"/);
+      const refused = await post(editor.base, '/restart');
+      assert.match(await refused.text(), /перезапуск не предлагается/);
     } finally {
       await editor.close();
     }

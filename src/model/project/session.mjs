@@ -201,6 +201,11 @@ export class ProjectSession {
     // to before this call.
     const root = resolvedProvidersRoot(this, settingsDir);
     const raw = this.#readJson(resolved);
+    // §0.2: a migration that CHANGED the document (added a folder kind, moved
+    // `sources`) leaves the model dirty, so the header says «есть несохранённые
+    // правки» and the owner knows to save instead of wondering why generation
+    // refuses. A version-1 file is rewritten on disk here, so it starts clean.
+    let changedOnOpen = false;
 
     if (isLegacyDocument(raw)) {
       const {document, warnings, linksFile} = migrateLegacyDocument(raw, resolved);
@@ -227,6 +232,7 @@ export class ProjectSession {
       // Migrated BEFORE `dropRemovedSettings`, for the same reason: `sources` must
       // become `providers`, not vanish. Neither touches the file here — the fields
       // leave it on the next ordinary save.
+      const before = canonicalJson(raw);
       const migrated = migrateProviders(raw, root, settingsDir, false);
       const kinds = migrateProviderKinds(raw, root);
       const providerWarnings = [...migrated, ...kinds];
@@ -236,10 +242,12 @@ export class ProjectSession {
       this.lastMigration = null;
       this.lastProvidersMigration =
         providerWarnings.length > 0 ? {warnings: providerWarnings} : null;
+      changedOnOpen = canonicalJson(raw) !== before;
     }
 
     this.path = resolved;
-    this.markClean();
+    if (changedOnOpen) this.markDirty();
+    else this.markClean();
     return this.document;
   }
 

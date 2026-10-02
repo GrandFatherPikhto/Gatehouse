@@ -27,7 +27,7 @@
         роутер не затрагиваются.
       </p>
     <% } %>
-    <header id="status"><%- include('partials/status', {status, key, editForm: panel.editForm}) %></header>
+    <header id="status"><%- include('partials/status', {status, apply, key, editForm: panel.editForm}) %></header>
     <main>
       <nav id="tree"><%- include('partials/tree', {tree, key}) %></nav>
       <section id="panel">

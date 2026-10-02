@@ -13,7 +13,15 @@ import {describe, test} from 'node:test';
 import {run as runGenerate} from '../tools/generate.mjs';
 import {canonicalJson, listSnapshots} from '../src/model/storage.mjs';
 import {DEFAULT_PORT, readEnv, startServer} from '../src/web/server.mjs';
-import {FI_TAG, NL_TAG, RU_TAG, makeTempDir, writeLinksFile, writeSettings} from './helpers.mjs';
+import {
+  FI_TAG,
+  NL_TAG,
+  RU_TAG,
+  fakeSystemEnv,
+  makeTempDir,
+  writeLinksFile,
+  writeSettings,
+} from './helpers.mjs';
 // The picker's filter lives in the browser script and is imported as it is: the
 // trap it guards against (a row that leaves the DOM leaves the form with it) is
 // a property of that code, and asserting it here beats asserting the markup.
@@ -34,6 +42,10 @@ async function startEditor(options = {}) {
 
   const {server, model, url} = await startServer({
     env: {
+      // `/generate` now checks the temporary file with `sing-box check` before
+      // renaming it into place, so the editor needs a binary to call; the fake
+      // keeps the test free of the real sing-box.
+      ...fakeSystemEnv(),
       GATEHOUSE_SETTINGS: settingsFile,
       GATEHOUSE_HOST: '127.0.0.1',
       GATEHOUSE_PORT: '0',

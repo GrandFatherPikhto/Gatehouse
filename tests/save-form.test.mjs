@@ -18,7 +18,7 @@ import {describe, test} from 'node:test';
 import {PINNED_REFUSAL} from '../src/model/project.mjs';
 import {listSnapshots} from '../src/model/storage.mjs';
 import {startServer} from '../src/web/server.mjs';
-import {FI_TAG, NL_TAG, makeTempDir, writeLinksFile, writeSettings} from './helpers.mjs';
+import {FI_TAG, NL_TAG, fakeSystemEnv, makeTempDir, writeLinksFile, writeSettings} from './helpers.mjs';
 
 /**
  * Starts the editor over a temporary project.
@@ -34,6 +34,9 @@ async function startEditor(options = {}) {
 
   const {server, model, url} = await startServer({
     env: {
+      // `/generate` checks the temporary file with the fake `sing-box` before
+      // renaming it into place.
+      ...fakeSystemEnv(),
       GATEHOUSE_SETTINGS: settingsFile,
       GATEHOUSE_HOST: '127.0.0.1',
       GATEHOUSE_PORT: '0',

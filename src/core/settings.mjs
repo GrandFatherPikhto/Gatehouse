@@ -343,6 +343,34 @@ export function generateConfigFile(settingsPath, options = {}) {
  * @param {string|undefined} providersRoot
  * @returns {Array<Record<string, unknown>>}
  */
+/**
+ * Builds the `config.json` object from a settings file WITHOUT writing anything.
+ *
+ * Used by the apply bar to compare "what the saved document would produce" with
+ * the bytes of the live `config.json` — the comparison must not touch the file
+ * (§1.1). It reuses exactly the same reader and assembly as `generateConfigFile`,
+ * so the two cannot drift apart.
+ *
+ * @param {string} settingsPath
+ * @param {{links?: string, listenIp?: string, providersRoot?: string,
+ *   warnings?: string[]}} [options]
+ * @returns {Record<string, unknown>}
+ */
+export function previewConfig(settingsPath, options = {}) {
+  const warnings = options.warnings || [];
+  const {settings, settingsDir} = loadEffectiveSettings(settingsPath);
+  const listenIp = options.listenIp || settings.listen_ip || '127.0.0.1';
+  const outbounds = readOutbounds(
+    settings,
+    settingsDir,
+    options.links,
+    warnings,
+    options.providersRoot,
+  );
+  const [config] = buildConfig(settings, outbounds, listenIp, warnings, {});
+  return config;
+}
+
 function readOutbounds(settings, settingsDir, linksOverride, warnings, providersRoot) {
   if (typeof linksOverride === 'string' && linksOverride.length > 0) {
     return parseLinks(resolvePath(settingsDir, linksOverride), warnings);
@@ -364,13 +392,26 @@ function readOutbounds(settings, settingsDir, linksOverride, warnings, providers
     const reasons = [];
     if (read.rootState.message !== null) reasons.push(read.rootState.message);
     for (const entry of read.unread) reasons.push(`${entry.id}: ${entry.error}`);
-    const disabled = read.providers.filter((provider) => !provider.enabled);
-    if (disabled.length > 0) {
-      reasons.push(
-        `включённых провайдеров нет; найдены и выключены: ${disabled
-          .map((provider) => provider.id)
-          .join(', ')}`,
-      );
+    const disabledIds = [];
+    for (const provider of read.providers) {
+      if (provider.kind === null) {
+        // Enabled, but the folder does not say what it is: name the real reason
+        // instead of pretending the record was disabled (§0.3).
+        if (provider.hasRecord === true && provider.record.enabled === true) {
+          const why =
+            provider.contentKind === 'mixed'
+              ? 'папка смешанная — разнесите ссылки и конфиги'
+              : provider.contentKind === 'empty'
+                ? 'папка пуста'
+                : 'вид не выводится из содержимого';
+          reasons.push(`провайдер '${provider.id}' включён, но вид папки не задан: ${why}`);
+        }
+        continue;
+      }
+      if (provider.enabled !== true && provider.hasRecord === true) disabledIds.push(provider.id);
+    }
+    if (disabledIds.length > 0) {
+      reasons.push(`найдены и выключены: ${disabledIds.join(', ')}`);
     }
     const reason = reasons.length > 0 ? `\n  - ${reasons.join('\n  - ')}` : '';
     throw new ConfigError(

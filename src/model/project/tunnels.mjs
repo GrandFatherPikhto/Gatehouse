@@ -203,6 +203,29 @@ export function storeTunnel(model, entry) {
 }
 
 /**
+ * Sets (or clears) the «carrier» mark of one prepared tunnel (§4.2): the owner
+ * reaches the router through it, so restarting or stopping it cuts their own
+ * access. The mark only feeds warnings — the generator never sees it — and the
+ * file is not rewritten: nothing about the wire changes.
+ *
+ * @param {import('../project.mjs').ProjectModel} model
+ * @param {string} name Interface of the tunnel.
+ * @param {boolean} value
+ * @returns {Record<string, unknown>} The updated entry.
+ */
+export function setTunnelCarrier(model, name, value) {
+  const iface = String(name ?? '').trim();
+  const entry = model.getTunnelByInterface(iface);
+  if (entry === null) {
+    throw new ConfigError(`туннель '${iface}' не подготовлен: отметьте его «включить» у источника`);
+  }
+  if (value) entry.carrier = true;
+  else delete entry.carrier;
+  model.markDirty();
+  return entry;
+}
+
+/**
  * Ticks a tunnel «нужен»: validates both names, normalises the source config,
  * writes `<interface>.conf` into the amnezia directory and records the entry.
  *

@@ -130,11 +130,21 @@ export function registerTunnelRoutes(app, ctx) {
             : applied.changed
               ? ''
               : ' (изменений не было)';
+        // §4.1: the same "no rights" block, for this one tunnel, right where the
+        // owner just ticked it — the next click (приподнять в «Службах») would
+        // otherwise fail with no explanation.
+        const permission = tunnelRights(ctx)[String(entry.interface)];
+        const missing =
+          permission && permission.sudoersReadable !== false && (permission.missingLines ?? []).length > 0
+            ? `\nНет прав на управление туннелем — добавьте на роутере:\n` +
+              permission.missingLines.join('\n')
+            : '';
         return {
           key,
           notice:
             `Туннель '${entry.name}' включён: ${applied.path}${snapshot}. ` +
-            'Туннель не поднят — поднимите его в разделе «Система». Не забудьте сохранить.',
+            'Туннель не поднят — поднимите его в разделе «Службы». Не забудьте сохранить.' +
+            missing,
         };
       },
     ),
@@ -246,6 +256,27 @@ export function registerTunnelRoutes(app, ctx) {
           ? `Туннель '${name}' перезапущен. Соединения через него оборвались — как и предупреждали.`
           : `Перезапуск туннеля '${name}' не удался: ` +
             `${result.stderr.trim() || result.error || 'без вывода'}`,
+      };
+    }),
+  );
+
+  /**
+   * The «carrier» mark of a tunnel (§4.2): the owner reaches the router through
+   * it. The mark only changes the confirmation texts and a tree/table label — the
+   * file is not rewritten and nothing is restarted here.
+   */
+  app.post(
+    '/tunnel/carrier',
+    mutation(ctx, 'system:amnezia', async (req) => {
+      const name = assertKnownTunnel(ctx, req.body.name);
+      const carrier = forms.checkbox(req.body.carrier);
+      const entry = model.setTunnelCarrier(name, carrier);
+      await refreshTunnelStates(ctx);
+      return {
+        key: 'system:amnezia',
+        notice:
+          `Туннель '${entry.name}' ${carrier ? 'отмечен несущим' : 'больше не несущий'}. ` +
+          'Не забудьте сохранить.',
       };
     }),
   );

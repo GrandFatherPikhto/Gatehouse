@@ -143,6 +143,9 @@ export function tunnelInventory(model) {
       file: String(entry.file),
       name: String(entry.name),
       interface: String(entry.interface),
+      // §4.2: the owner's mark that their own access to the router runs through
+      // this tunnel. It only feeds warnings; the generator never sees it.
+      carrier: entry.carrier === true,
       applied: tunnelConfigApplied(model.amneziaDir, String(entry.interface)),
     });
   }

@@ -29,11 +29,19 @@ export function staleMap(model) {
  * Reference: `tree_spec`.
  *
  * @param {import('../project.mjs').ProjectModel} model
- * @param {{tunnelStates?: Record<string, Record<string, unknown>>}} [options]
+ * @param {{tunnelStates?: Record<string, Record<string, unknown>>, now?: number}} [options]
+ *   `now` is the clock of the subscription-expiry mark; absent means "use the
+ *   system clock", which is what the web layer always wants.
  * @returns {Record<string, unknown>}
  */
 export function treeSpec(model, options = {}) {
   const info = model.providersInfo();
+  // §4.2: providers whose tunnels carry the «carrier» mark. The tree marks such a
+  // node so the owner sees at a glance whose access their own router rides on.
+  const carrierProviders = model
+    .tunnels()
+    .filter((entry) => entry.carrier === true)
+    .map((entry) => String(entry.provider));
   return buildTree({
     document: model.document,
     allTags: info.tags,
@@ -45,5 +53,7 @@ export function treeSpec(model, options = {}) {
     // Runtime tunnel states, handed in by the web layer. Absent means "not
     // asked", and then no proxy gets a tunnel mark.
     tunnelStates: options.tunnelStates ?? {},
+    carrierProviders,
+    now: options.now,
   });
 }

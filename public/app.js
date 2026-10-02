@@ -146,10 +146,35 @@ function wireExitKind(combo) {
   apply();
 }
 
-/** Wires every picker and exit selector of the document, if any. */
+/**
+ * Wires one «Скопировать» button: it puts the text of the element named by its
+ * `data-copy` selector (a CSS selector, e.g. `#sudoers-lines`) into the
+ * clipboard. Without JavaScript the block is still selectable by hand, which is
+ * the fallback the screen relies on — no library and no hidden state.
+ *
+ * @param {HTMLElement} button
+ */
+function wireCopy(button) {
+  if (button.dataset.wired === '1') return;
+  button.dataset.wired = '1';
+  const target = document.querySelector(button.dataset.copy ?? '');
+  if (target === null) return;
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(target.textContent ?? '');
+      button.textContent = 'Скопировано';
+    } catch {
+      // No clipboard permission (or an insecure origin): leave the text to be
+      // selected by hand rather than failing loudly.
+    }
+  });
+}
+
+/** Wires every picker, exit selector and copy button of the document, if any. */
 function setup() {
   for (const picker of document.querySelectorAll('[data-servers-picker]')) wirePicker(picker);
   for (const combo of document.querySelectorAll('[data-exit-kind]')) wireExitKind(combo);
+  for (const button of document.querySelectorAll('[data-copy]')) wireCopy(button);
 }
 
 if (typeof document !== 'undefined') {
