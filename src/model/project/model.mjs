@@ -21,6 +21,7 @@ import * as routes from './routes.mjs';
 import * as settings from './settings.mjs';
 import * as tree from './tree.mjs';
 import * as tunnels from './tunnels.mjs';
+import * as xray from './xray.mjs';
 
 export class ProjectModel extends ProjectSession {
   // ------------------------------------------------------------------
@@ -387,6 +388,40 @@ export class ProjectModel extends ProjectSession {
   /** Generates `config.json` from the SAVED file; `wasDirty` tells the UI to say so. */
   generate(options) {
     return settings.generate(this, options);
+  }
+
+  // ------------------------------------------------------------------
+  // Xray ports (the second engine behind sing-box)
+  // ------------------------------------------------------------------
+
+  /** Top-level `xray` block as a plain object. */
+  xrayBlock() {
+    return xray.xrayBlock(this);
+  }
+
+  /** Servers of every enabled `xray` provider, with their port keys. */
+  enabledXrayServers() {
+    return xray.enabledXrayServers(this);
+  }
+
+  /** Ports of the Xray panel: one row per server plus the forgotten ones. */
+  xrayPortInfo() {
+    return xray.xrayPortInfo(this);
+  }
+
+  /** Persists the ports of every enabled Xray server; marks the document dirty. */
+  ensureXrayPorts() {
+    return xray.ensureXrayPorts(this);
+  }
+
+  /** Changes the Xray port range; refuses a clash with a sing-box proxy port. */
+  setXrayPortRange(from, to) {
+    return xray.setXrayPortRange(this, from, to);
+  }
+
+  /** Forgets the port of a server that is gone. */
+  forgetXrayPort(key) {
+    return xray.forgetXrayPort(this, key);
   }
 
   // ------------------------------------------------------------------

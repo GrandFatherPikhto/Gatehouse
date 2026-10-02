@@ -1,0 +1,215 @@
+[
+  {
+    "remarks": "DE-1",
+    "dns": {
+      "servers": ["1.1.1.1"],
+      "queryStrategy": "UseIPv4"
+    },
+    "routing": {
+      "rules": [{"network": "tcp,udp", "balancerTag": "DE_BALANCER"}],
+      "balancers": [{"tag": "DE_BALANCER", "selector": ["de-main"]}]
+    },
+    "outbounds": [
+      {
+        "tag": "de-main",
+        "protocol": "vless",
+        "settings": {
+          "vnext": [
+            {
+              "address": "de2.example.net",
+              "port": 443,
+              "users": [{"id": "11111111-1111-4111-a111-111111111111", "encryption": "none", "flow": ""}]
+            }
+          ]
+        },
+        "streamSettings": {
+          "network": "xhttp",
+          "xhttpSettings": {
+            "mode": "packet-up",
+            "host": "de2.example.net",
+            "path": "/stream/abc",
+            "extra": {
+              "mode": "packet-up",
+              "xmux": {"maxConnections": 3, "hMaxRequestTimes": "600-850"},
+              "xPaddingKey": "_dc",
+              "xPaddingBytes": "100-400",
+              "xPaddingMethod": "tokenish",
+              "xPaddingObfsMode": true,
+              "xPaddingPlacement": "queryInHeader",
+              "sessionIDTable": "Base62",
+              "sessionIDPlacement": "path"
+            }
+          },
+          "security": "tls",
+          "tlsSettings": {"serverName": "de2.example.net", "fingerprint": "firefox", "alpn": ["h2"]}
+        }
+      },
+      {
+        "tag": "de-main-2",
+        "protocol": "vless",
+        "settings": {
+          "vnext": [
+            {
+              "address": "de2.example.net",
+              "port": 443,
+              "users": [{"id": "11111111-1111-4111-a111-111111111111", "encryption": "none", "flow": ""}]
+            }
+          ]
+        },
+        "streamSettings": {
+          "network": "xhttp",
+          "xhttpSettings": {"mode": "auto", "host": "github.com", "path": "/", "extra": {"noGRPCHeader": false}},
+          "security": "reality",
+          "realitySettings": {"serverName": "github.com", "publicKey": "PUBKEY", "shortId": "ab12cd34", "fingerprint": "chrome"}
+        }
+      },
+      {
+        "tag": "de-main-3",
+        "protocol": "hysteria",
+        "settings": {"address": "de2.example.net", "port": 443, "version": 2},
+        "streamSettings": {
+          "network": "hysteria",
+          "hysteriaSettings": {"version": 2, "auth": "AUTH"},
+          "security": "tls",
+          "tlsSettings": {"serverName": "de2.example.net", "fingerprint": "chrome", "alpn": ["h3"]},
+          "finalmask": {"quicParams": {"debug": false, "congestion": "bbr"}}
+        }
+      },
+      {
+        "tag": "de-cdn",
+        "protocol": "vless",
+        "settings": {
+          "vnext": [
+            {
+              "address": "de2.cdn.example.net",
+              "port": 443,
+              "users": [{"id": "11111111-1111-4111-a111-111111111111", "encryption": "none", "flow": ""}]
+            }
+          ]
+        },
+        "streamSettings": {
+          "network": "xhttp",
+          "xhttpSettings": {"mode": "packet-up", "host": "de2.cdn.example.net", "path": "/assets/main.js"},
+          "security": "tls",
+          "tlsSettings": {"serverName": "de2.cdn.example.net", "fingerprint": "chrome"}
+        }
+      },
+      {"tag": "direct", "protocol": "freedom"},
+      {"tag": "block", "protocol": "blackhole"}
+    ]
+  },
+  {
+    "remarks": "DE-2",
+    "outbounds": [
+      {
+        "tag": "de-main",
+        "protocol": "vless",
+        "settings": {
+          "vnext": [
+            {
+              "address": "de2.example.net",
+              "port": 443,
+              "users": [{"id": "11111111-1111-4111-a111-111111111111", "encryption": "none", "flow": ""}]
+            }
+          ]
+        },
+        "streamSettings": {
+          "network": "xhttp",
+          "xhttpSettings": {
+            "mode": "packet-up",
+            "host": "de2.example.net",
+            "path": "/stream/abc",
+            "extra": {
+              "mode": "packet-up",
+              "xmux": {"maxConnections": 3, "hMaxRequestTimes": "600-850"},
+              "xPaddingKey": "_dc",
+              "xPaddingBytes": "100-400",
+              "xPaddingMethod": "tokenish",
+              "xPaddingObfsMode": true,
+              "xPaddingPlacement": "queryInHeader",
+              "sessionIDTable": "Base62",
+              "sessionIDPlacement": "path"
+            }
+          },
+          "security": "tls",
+          "tlsSettings": {"serverName": "de2.example.net", "fingerprint": "firefox", "alpn": ["h2"]}
+        }
+      },
+      {
+        "tag": "proxy",
+        "protocol": "hysteria",
+        "settings": {"address": "de2.example.net", "port": 443, "version": 2},
+        "streamSettings": {
+          "network": "hysteria",
+          "hysteriaSettings": {"version": 2, "auth": "AUTH"},
+          "security": "tls",
+          "tlsSettings": {"serverName": "de2.example.net", "fingerprint": "chrome", "alpn": ["h2"]},
+          "finalmask": {"quicParams": {"debug": false, "congestion": "bbr"}}
+        }
+      },
+      {"tag": "direct", "protocol": "freedom"},
+      {"tag": "block", "protocol": "blackhole"}
+    ]
+  },
+  {
+    "remarks": "RU-1",
+    "outbounds": [
+      {
+        "tag": "ru-main",
+        "protocol": "vless",
+        "settings": {
+          "vnext": [
+            {
+              "address": "ru2.example.net",
+              "port": 443,
+              "users": [{"id": "11111111-1111-4111-a111-111111111111", "encryption": "none", "flow": ""}]
+            }
+          ]
+        },
+        "streamSettings": {
+          "network": "xhttp",
+          "xhttpSettings": {"mode": "packet-up", "host": "ru2.example.net", "path": "/api/upload/"},
+          "security": "tls",
+          "tlsSettings": {"serverName": "ru2.example.net", "fingerprint": "chrome", "alpn": ["h2"]}
+        }
+      },
+      {
+        "tag": "ru-cdn",
+        "protocol": "vless",
+        "settings": {
+          "vnext": [
+            {
+              "address": "ru2.cdn.example.net",
+              "port": 443,
+              "users": [{"id": "11111111-1111-4111-a111-111111111111", "encryption": "none", "flow": ""}]
+            }
+          ]
+        },
+        "streamSettings": {
+          "network": "xhttp",
+          "xhttpSettings": {"mode": "packet-up", "host": "ru2.cdn.example.net", "path": "/api/stream/"},
+          "security": "tls",
+          "tlsSettings": {"serverName": "ru2.cdn.example.net", "fingerprint": "chrome", "alpn": ["h2"]}
+        }
+      },
+      {
+        "tag": "proxy",
+        "protocol": "hysteria",
+        "settings": {"address": "ru2.example.net", "port": 443, "version": 2},
+        "streamSettings": {
+          "network": "hysteria",
+          "hysteriaSettings": {"version": 2, "auth": "AUTH"},
+          "security": "tls",
+          "tlsSettings": {"serverName": "ru2.example.net", "fingerprint": "chrome", "alpn": ["h2"]},
+          "finalmask": {"quicParams": {"debug": false, "congestion": "bbr"}}
+        }
+      },
+      {
+        "tag": "wg-only",
+        "protocol": "wireguard",
+        "settings": {"secretKey": "SECRET", "address": ["10.0.0.2/32"]}
+      },
+      {"tag": "direct", "protocol": "freedom"}
+    ]
+  }
+]

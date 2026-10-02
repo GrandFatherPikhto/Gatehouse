@@ -10,7 +10,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import {ConfigError, DEFAULT_EXCLUDE, isMapping} from '../../core/errors.mjs';
-import {generateConfigFile, resolvePath} from '../../core/settings.mjs';
+import {
+  generateConfigFile,
+  generateXrayConfigFile,
+  previewPair,
+  resolvePath,
+} from '../../core/settings.mjs';
 import {asList, requireMapping, urltestBlock} from '../../core/validate.mjs';
 import {canWriteDir, canonicalJson, configDirInfo} from '../storage.mjs';
 import {
@@ -20,6 +25,7 @@ import {
   formatStats,
 } from './document.mjs';
 import {resolvedProvidersRoot} from './providers.mjs';
+import * as xray from './xray.mjs';
 
 /**
  * Prefix of a server tag: its first whitespace-delimited word, which for the
@@ -246,6 +252,9 @@ export function generate(model, options = {}) {
     throw new ConfigError('сначала сохраните webui.json: генерация запускается по файлу');
   }
   const wasDirty = model.dirty;
+  // Handing out an Xray port IS a change of the document («Применить» saves it
+  // first), and the build must use exactly the ports the file carries.
+  xray.ensureXrayPorts(model);
   const result = generateConfigFile(model.path, {
     ...options,
     providersRoot: resolvedProvidersRoot(model),
@@ -255,6 +264,45 @@ export function generate(model, options = {}) {
     summary: formatStats(result.outputFile, result.stats, result.warnings),
     wasDirty,
   };
+}
+
+/**
+ * Builds and writes the Xray config of the SAVED document. Used by the apply
+ * chain and `/generate`; writes nothing when no server goes through Xray.
+ *
+ * @param {import('../project.mjs').ProjectModel} model
+ * @param {{xrayConfig?: string, warnings?: string[]}} [options]
+ * @returns {Record<string, unknown>}
+ */
+export function generateXray(model, options = {}) {
+  if (model.path === null) {
+    throw new ConfigError('сначала сохраните webui.json: генерация запускается по файлу');
+  }
+  const warnings = options.warnings || [];
+  return generateXrayConfigFile(model.path, {
+    ...options,
+    warnings,
+    providersRoot: resolvedProvidersRoot(model),
+  });
+}
+
+/**
+ * Builds BOTH configs of the saved document without writing anything: what the
+ * apply bar compares with the live pair (§4).
+ *
+ * @param {import('../project.mjs').ProjectModel} model
+ * @param {{warnings?: string[]}} [options]
+ * @returns {{config: Record<string, unknown>, xrayConfig: Record<string, unknown>|null,
+ *   xray: Record<string, unknown>, warnings: string[]}}
+ */
+export function previewBoth(model, options = {}) {
+  if (model.path === null) {
+    throw new ConfigError('сравнивать нечего: webui.json ещё не сохранён');
+  }
+  return previewPair(model.path, {
+    providersRoot: resolvedProvidersRoot(model),
+    warnings: options.warnings ?? [],
+  });
 }
 
 /**

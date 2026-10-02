@@ -1,0 +1,68 @@
+[
+  {
+    "remarks": "odd",
+    "outbounds": [
+      {
+        "tag": "de-main",
+        "protocol": "vless",
+        "settings": {
+          "vnext": [
+            {
+              "address": "de2.example.net",
+              "port": 443,
+              "users": [{"id": "22222222-2222-4222-a222-222222222222", "encryption": "none", "flow": ""}]
+            }
+          ]
+        },
+        "streamSettings": {
+          "network": "xhttp",
+          "xhttpSettings": {"mode": "packet-up", "host": "de2.example.net", "path": "/stream/x"},
+          "security": "tls",
+          "tlsSettings": {"serverName": "de2.example.net", "fingerprint": "firefox", "alpn": ["h2"]}
+        }
+      },
+      {
+        "tag": "chained",
+        "protocol": "vless",
+        "settings": {
+          "vnext": [
+            {
+              "address": "de2.example.net",
+              "port": 443,
+              "users": [{"id": "22222222-2222-4222-a222-222222222222", "encryption": "none", "flow": ""}]
+            }
+          ]
+        },
+        "streamSettings": {
+          "network": "xhttp",
+          "xhttpSettings": {"mode": "packet-up", "host": "de2.example.net", "path": "/stream/x"},
+          "security": "tls",
+          "tlsSettings": {"serverName": "de2.example.net", "fingerprint": "firefox", "alpn": ["h2"]}
+        },
+        "proxySettings": {"tag": "de-main"}
+      },
+      {
+        "tag": "old-vmess",
+        "protocol": "vmess",
+        "settings": {
+          "vnext": [
+            {
+              "address": "vm.example.net",
+              "port": 443,
+              "users": [{"id": "33333333-3333-4333-a333-333333333333", "security": "auto"}]
+            }
+          ]
+        },
+        "streamSettings": {
+          "network": "ws",
+          "security": "tls",
+          "wsSettings": {"path": "/vm"}
+        }
+      }
+    ]
+  },
+  {
+    "remarks": "only freedom",
+    "outbounds": [{"tag": "direct", "protocol": "freedom"}]
+  }
+]

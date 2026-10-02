@@ -10,6 +10,11 @@ webui.json
 # to compare its own generation against. The rule is not anchored, so it matches
 # at any depth — the negation has to be as explicit about the path.
 !tests/fixtures/golden/config.json
+# ...and the synthetic Xray provider fixtures of the test suite (fake keys and
+# example.net hosts, mirroring the StashVPN shape).
+!tests/fixtures/providers-xray/stash/xray-configs.json
+!tests/fixtures/providers-xray/xray-odd/xray-configs.json
+!tests/fixtures/providers-xray/xray-broken/xray-configs.json
 # The anonymised samples of the dev sandbox are committed for the same reason.
 !dev/root.example/etc/sing-box/config.json
 !dev/root.example/webui.json

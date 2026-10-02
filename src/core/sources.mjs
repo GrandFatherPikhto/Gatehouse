@@ -42,6 +42,7 @@ import {
   parseVless,
   pythonStrip,
 } from './vless.mjs';
+import {XRAY_CONFIGS_FILENAME, readXrayConfigs} from './xray.mjs';
 
 // The default root now lives in `paths.mjs`, next to the tunnel directory, so
 // the build keeps its directories in one place. The name stays published here:
@@ -275,7 +276,7 @@ function readSubscriptionHeaders(filePath) {
  * @param {number} confs
  * @returns {string}
  */
-export function describeContent(contentKind, links, confs) {
+export function describeContent(contentKind, links, confs, xray = null) {
   switch (contentKind) {
     case 'links':
       return `похоже на подписку: ${LINKS_FILENAME}, ${links} ${plural(
@@ -286,13 +287,29 @@ export function describeContent(contentKind, links, confs) {
       )}`;
     case 'tunnels':
       return `похоже на туннели: ${confs} ${plural(confs, 'конфиг', 'конфига', 'конфигов')}`;
-    case 'mixed':
-      return `смешанная: ${LINKS_FILENAME} и ${confs} ${plural(
-        confs,
-        'конфиг',
-        'конфига',
-        'конфигов',
-      )}`;
+    case 'xray': {
+      const meta = xray ?? {configs: 0, outbounds: 0, servers: 0};
+      return (
+        `похоже на конфиги Xray: ${meta.configs} ${plural(
+          meta.configs,
+          'конфиг',
+          'конфига',
+          'конфигов',
+        )}, ${meta.outbounds} выходов, ${meta.servers} ${plural(
+          meta.servers,
+          'сервер',
+          'сервера',
+          'серверов',
+        )}`
+      );
+    }
+    case 'mixed': {
+      const parts = [];
+      if (links > 0) parts.push(LINKS_FILENAME);
+      if (confs > 0) parts.push(`${confs} ${plural(confs, 'конфиг', 'конфига', 'конфигов')}`);
+      if (xray !== null && xray.servers > 0) parts.push(XRAY_CONFIGS_FILENAME);
+      return `смешанная: ${parts.join(' и ')} — разнесите по разным папкам`;
+    }
     default:
       return 'пусто';
   }
@@ -404,6 +421,7 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
 
   const confFiles = names.filter((name) => name.endsWith(TUNNEL_EXTENSION)).sort();
   const linksPath = path.join(dir, LINKS_FILENAME);
+  const xrayPath = path.join(dir, XRAY_CONFIGS_FILENAME);
 
   // A directory named `links.txt` is not a links file: it is ignored.
   let hasLinks = false;
@@ -413,14 +431,27 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
     hasLinks = false;
   }
 
+  // `xray-configs.json` is the source of kind `xray`: full Xray client configs,
+  // copied verbatim (§1.1). A folder is MIXED as soon as it carries more than one
+  // sort of content, the xray one included.
+  let hasXray = false;
+  try {
+    hasXray = fs.existsSync(xrayPath) && fs.statSync(xrayPath).isFile();
+  } catch {
+    hasXray = false;
+  }
+
+  const contentParts = (hasLinks ? 1 : 0) + (confFiles.length > 0 ? 1 : 0) + (hasXray ? 1 : 0);
   const contentKind =
-    hasLinks && confFiles.length > 0
+    contentParts > 1
       ? 'mixed'
       : hasLinks
         ? 'links'
         : confFiles.length > 0
           ? 'tunnels'
-          : 'empty';
+          : hasXray
+            ? 'xray'
+            : 'empty';
 
   // An OLD record carries no `kind`: it is inferred from the content AT READ, by
   // the same rule the migration uses, so the file and the document are read
@@ -429,16 +460,39 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
 
   // The foreign half of a folder with a CHOSEN kind is warned about and left
   // unread (§3.1). A mixed folder WITHOUT a kind is left for the migration.
-  if (kind === 'subscription' && confFiles.length > 0) {
+  const foreignWarning = (what) =>
     warnings.push(
-      `Предупреждение: лишнее в папке '${id}': ${confFiles.length} конфигов туннелей — ` +
-        'разнесите по разным папкам',
+      `Предупреждение: лишнее в папке '${id}': ${what} — разнесите по разным папкам`,
     );
+  if (kind === 'subscription' && confFiles.length > 0) {
+    foreignWarning(`${confFiles.length} конфигов туннелей`);
+  }
+  if (kind === 'subscription' && hasXray) {
+    foreignWarning(XRAY_CONFIGS_FILENAME);
   }
   if (kind === 'awg' && hasLinks) {
-    warnings.push(
-      `Предупреждение: лишнее в папке '${id}': ${LINKS_FILENAME} — разнесите по разным папкам`,
-    );
+    foreignWarning(LINKS_FILENAME);
+  }
+  if (kind === 'awg' && hasXray) {
+    foreignWarning(XRAY_CONFIGS_FILENAME);
+  }
+  if (kind === 'xray' && hasLinks) {
+    foreignWarning(LINKS_FILENAME);
+  }
+  if (kind === 'xray' && confFiles.length > 0) {
+    foreignWarning(`${confFiles.length} конфигов туннелей`);
+  }
+
+  // Any OTHER `*.json` next to the expected file is named, never read (§1.1): the
+  // owner copied the wrong export, and silence would hide it.
+  if (hasXray || kind === 'xray') {
+    for (const name of names.filter(
+      (entry) => entry.endsWith('.json') && entry !== XRAY_CONFIGS_FILENAME,
+    )) {
+      warnings.push(
+        `Предупреждение: файл не читается: ожидается ${XRAY_CONFIGS_FILENAME} (${name})`,
+      );
+    }
   }
 
   const wantLinks = kind === 'subscription' || (kind === null && hasLinks);
@@ -452,6 +506,21 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
     linksError = read.error;
   }
 
+  // The Xray configs are read for a chosen `xray` kind AND for the hint of a
+  // folder that has no kind yet («Найдено»), where the numbers come from them.
+  const wantXray = kind === 'xray' || (kind === null && hasXray);
+  let xrayServers = [];
+  let xrayMeta = {configs: 0, outbounds: 0, servers: 0};
+  let xrayState = 'ok';
+  let xrayError = null;
+  if (wantXray && hasXray) {
+    const read = readXrayConfigs(xrayPath, warnings, skipped);
+    xrayServers = read.servers;
+    xrayMeta = read.meta;
+    xrayState = read.state;
+    xrayError = read.error;
+  }
+
   const headers =
     kind === 'subscription' && hasLinks
       ? readSubscriptionHeaders(linksPath)
@@ -461,24 +530,81 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
     // «Найдено, не подключено»: nothing participates in the build, but the
     // content is described so the owner can choose a kind (§3.5).
     const empty = contentKind === 'empty';
+    const xrayNames = xrayServers.map((server) => server.name);
+    const tags = contentKind === 'xray' ? xrayNames : rawOutbounds.map((outbound) => outbound.tag);
+    const count =
+      contentKind === 'tunnels'
+        ? confFiles.length
+        : contentKind === 'xray'
+          ? xrayServers.length
+          : rawOutbounds.length;
     return {
       ...base,
       exists: true,
       kind: null,
       contentKind,
-      count: contentKind === 'tunnels' ? confFiles.length : rawOutbounds.length,
-      tags: rawOutbounds.map((outbound) => outbound.tag),
-      baseTags: rawOutbounds.map((outbound) => outbound.tag),
+      count,
+      tags,
+      baseTags: tags,
       entries: [],
       outbounds: [],
-      hint: describeContent(contentKind, rawOutbounds.length, confFiles.length),
+      xrayServers: [],
+      xrayMeta,
+      hint: describeContent(contentKind, rawOutbounds.length, confFiles.length, xrayMeta),
       headers,
       state: empty ? 'empty' : 'ok',
       owner,
       mode,
       error: empty
-        ? `нет ни ${LINKS_FILENAME}, ни конфигов туннелей (*${TUNNEL_EXTENSION})`
+        ? `нет ни ${LINKS_FILENAME}, ни конфигов туннелей (*${TUNNEL_EXTENSION}), ни ${XRAY_CONFIGS_FILENAME}`
         : null,
+    };
+  }
+
+  // Kind `xray`: the servers are the copied Xray outbounds, named and numbered by
+  // the core reader (§1.2, §1.3). They never become sing-box outbounds here — the
+  // socks front end is built later, where the ports are known (§3.2).
+  if (kind === 'xray') {
+    if (!hasXray) {
+      return {
+        ...base,
+        exists: true,
+        kind,
+        contentKind,
+        count: 0,
+        tags: [],
+        baseTags: [],
+        entries: [],
+        outbounds: [],
+        xrayServers: [],
+        xrayMeta: {configs: 0, outbounds: 0, servers: 0},
+        hint: describeContent(contentKind, rawOutbounds.length, confFiles.length, null),
+        headers,
+        state: 'empty',
+        owner,
+        mode,
+        error: `нет ${XRAY_CONFIGS_FILENAME}`,
+      };
+    }
+    const names = xrayServers.map((server) => server.name);
+    return {
+      ...base,
+      exists: true,
+      kind,
+      contentKind,
+      count: xrayServers.length,
+      tags: names,
+      baseTags: names,
+      entries: [],
+      outbounds: [],
+      xrayServers,
+      xrayMeta,
+      hint: describeContent(contentKind, rawOutbounds.length, confFiles.length, xrayMeta),
+      headers,
+      state: xrayState,
+      owner,
+      mode,
+      error: xrayState === 'ok' ? null : xrayError,
     };
   }
 
@@ -549,7 +675,7 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
  *
  * @param {unknown} record
  * @returns {{record: Record<string, unknown>, enabled: boolean, label: string|null,
- *   kind: 'subscription'|'awg'|null}}
+ *   kind: 'subscription'|'awg'|'xray'|null}}
  */
 function recordView(record) {
   const map = isMapping(record) ? record : {};
@@ -557,7 +683,10 @@ function recordView(record) {
     record: map,
     enabled: map.enabled === true,
     label: typeof map.label === 'string' && map.label.length > 0 ? map.label : null,
-    kind: map.kind === 'subscription' || map.kind === 'awg' ? map.kind : null,
+    kind:
+      map.kind === 'subscription' || map.kind === 'awg' || map.kind === 'xray'
+        ? map.kind
+        : null,
   };
 }
 
@@ -587,6 +716,7 @@ function recordView(record) {
  * @returns {{root: string, rootState: {state: string, owner: string|null,
  *   mode: string|null, message: string|null}, providers: Array<Record<string, unknown>>,
  *   unread: Array<Record<string, unknown>>, outbounds: Array<Record<string, unknown>>,
+ *   xrayServers: Array<{provider: string, server: Record<string, unknown>}>,
  *   tags: string[], collisions: Array<{tag: string, providers: string[]}>,
  *   warnings: string[]}}
  */
@@ -606,6 +736,7 @@ export function readProviders(records, root, warnings = []) {
       providers: [],
       unread: [],
       outbounds: [],
+      xrayServers: [],
       tags: [],
       collisions: [],
       warnings,
@@ -677,19 +808,35 @@ export function readProviders(records, root, warnings = []) {
     // `… #2 WS`. Overrides are applied to the same objects, in the same place.
     const suffix = cleanSuffix(view.record);
     const overrides = providerOverrides(view.record);
-    const baseTags = provider.tags;
-    let outbounds = provider.outbounds;
-    if (suffix.length > 0 || Object.keys(overrides).length > 0) {
-      outbounds = outbounds.map((outbound) =>
-        applyOverrides(withSuffix(outbound, suffix), overrides),
-      );
-    }
-    provider.baseTags = baseTags;
-    provider.outbounds = outbounds;
-    provider.tags = outbounds.map((outbound) => outbound.tag);
     provider.suffix = suffix;
     provider.warnings = localWarnings;
     provider.skipped = localSkipped;
+
+    if (provider.kind === 'xray') {
+      // Xray servers are named exactly like subscription servers, and the suffix
+      // applies the same way. The port key is built from the BASE name, so moving
+      // the suffix never moves a port (§2).
+      const base = provider.xrayServers ?? [];
+      const servers = base
+        .map((server) =>
+          suffix.length > 0 ? {...server, name: `${server.baseName} ${suffix}`} : server,
+        )
+        .map((server) => ({...server, key: `${provider.id}/${server.baseName}`}));
+      provider.xrayServers = servers;
+      provider.baseTags = base.map((server) => server.baseName);
+      provider.tags = servers.map((server) => server.name);
+    } else {
+      const baseTags = provider.tags;
+      let outbounds = provider.outbounds;
+      if (suffix.length > 0 || Object.keys(overrides).length > 0) {
+        outbounds = outbounds.map((outbound) =>
+          applyOverrides(withSuffix(outbound, suffix), overrides),
+        );
+      }
+      provider.baseTags = baseTags;
+      provider.outbounds = outbounds;
+      provider.tags = outbounds.map((outbound) => outbound.tag);
+    }
 
     // Generation reads only the ENABLED folders, so only their warnings belong
     // in the generator output; the panel still sees every provider's own list.
@@ -727,14 +874,22 @@ export function readProviders(records, root, warnings = []) {
     for (const outbound of provider.outbounds) {
       collected.push({provider: provider.id, outbound});
     }
+    // Xray servers join the same namespace: a name two enabled providers share is
+    // the same collision, whichever engine carries the traffic (§1.3).
+    for (const server of provider.xrayServers ?? []) {
+      collected.push({provider: provider.id, server});
+    }
   }
+
+  const collectedTag = (item) =>
+    item.outbound ? String(item.outbound.tag) : String(item.server.name);
 
   // A name two ENABLED providers share is a collision, not a rename: the first
   // provider in the identifier order keeps the name for DISPLAY only, and
   // generation refuses with the full list.
   const byTag = new Map();
   for (const item of collected) {
-    const tag = String(item.outbound.tag);
+    const tag = collectedTag(item);
     if (!byTag.has(tag)) byTag.set(tag, []);
     const ids = byTag.get(tag);
     if (!ids.includes(item.provider)) ids.push(item.provider);
@@ -745,12 +900,26 @@ export function readProviders(records, root, warnings = []) {
   }
 
   const outbounds = [];
+  const xrayServers = [];
   const seen = new Set();
   for (const item of collected) {
+    if (item.server) {
+      xrayServers.push({provider: item.provider, server: item.server});
+      continue;
+    }
     const tag = String(item.outbound.tag);
     if (seen.has(tag)) continue;
     seen.add(tag);
     outbounds.push(item.outbound);
+  }
+
+  const tags = [];
+  const tagSeen = new Set();
+  for (const item of collected) {
+    const tag = collectedTag(item);
+    if (tagSeen.has(tag)) continue;
+    tagSeen.add(tag);
+    tags.push(tag);
   }
 
   return {
@@ -764,7 +933,8 @@ export function readProviders(records, root, warnings = []) {
     providers,
     unread,
     outbounds,
-    tags: outbounds.map((outbound) => outbound.tag),
+    xrayServers,
+    tags,
     collisions,
     warnings,
   };

@@ -34,8 +34,8 @@
             "type": "boolean"
           },
           "kind": {
-            "description": "What the folder IS, chosen by the owner: `subscription` reads only links.txt, `awg` reads only *.conf. Missing means «found, not connected»: the folder is listed with a hint but never feeds the config or the tunnels.",
-            "enum": ["subscription", "awg"]
+            "description": "What the folder IS, chosen by the owner: `subscription` reads only links.txt, `awg` reads only *.conf, `xray` reads only xray-configs.json (full Xray client configs, carried through Xray). Missing means «found, not connected»: the folder is listed with a hint but never feeds the config or the tunnels.",
+            "enum": ["subscription", "awg", "xray"]
           },
           "label": {
             "description": "Human-readable name shown instead of the folder name. Trimmed; shown only, never stored in tags or config.json.",
@@ -106,6 +106,36 @@
           "carrier": {
             "description": "The tunnel the owner reaches the router through: restarting or stopping it cuts their own access, so the confirmations warn. At most one is expected, but more are not refused.",
             "type": "boolean"
+          }
+        }
+      }
+    },
+    "xray": {
+      "description": "The second engine (Xray) behind sing-box: it listens only on 127.0.0.1, one socks port per server of an enabled `xray` provider. Ports are handed out once and remembered here, keyed by `<provider>/<server name without suffix>`, so a re-ordered subscription never moves a port to another server.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "port_range": {
+          "description": "Inclusive port range new servers are handed ports from. Missing means [20800, 20999]. A server already given a port keeps it even if it falls outside a later range.",
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
+          }
+        },
+        "ports": {
+          "description": "Handed-out ports, keyed by `<provider>/<server name without suffix>`. A record for a server that is gone is KEPT: the port belongs to the server, and a returning server comes back on the same number. Only «Forget» removes a record.",
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*/.+$"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535
           }
         }
       }

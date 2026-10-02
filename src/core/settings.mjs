@@ -24,6 +24,7 @@ import {buildConfig} from './build.mjs';
 import {ConfigError, DEFAULT_SETTINGS_FILE, isMapping} from './errors.mjs';
 import {collisionRefusal, readProviders, resolveProvidersRoot} from './sources.mjs';
 import {parseLinks} from './vless.mjs';
+import {buildXrayConfig, resolveXrayPorts, xrayEntries, xraySocksOutbound} from './xray.mjs';
 
 const SCHEMA_URL = new URL('../schemas/webui.schema.json', import.meta.url);
 const SCHEMA = JSON.parse(fs.readFileSync(SCHEMA_URL, 'utf8'));
@@ -310,16 +311,18 @@ export function generateConfigFile(settingsPath, options = {}) {
       ? settings
       : {...settings, exclude_from_auto: override};
 
-  const outbounds = readOutbounds(settings, settingsDir, options.links, warnings, options.providersRoot);
+  const build = readBuild(settings, settingsDir, options.links, warnings, options.providersRoot);
   // `runningTunnels` is the set of tunnel interfaces the caller found up in
   // systemd. It only feeds the §5.4 warning about a proxy on a stopped tunnel;
   // `undefined` means "not asked", which adds no warning.
-  const [config, stats] = buildConfig(effective, outbounds, listenIp, warnings, {
+  const [config, stats] = buildConfig(effective, build.outbounds, listenIp, warnings, {
     runningTunnels: options.runningTunnels,
   });
   writeJson(outputFile, config);
 
-  return {outputFile, stats, warnings, config};
+  // `xray` carries the servers, their ports and the freshly handed ones; the web
+  // layer needs them to persist `xray.ports` and to write the Xray config.
+  return {outputFile, stats, warnings, config, xray: build.xray};
 }
 
 /**
@@ -357,23 +360,122 @@ export function generateConfigFile(settingsPath, options = {}) {
  * @returns {Record<string, unknown>}
  */
 export function previewConfig(settingsPath, options = {}) {
+  return previewPair(settingsPath, options).config;
+}
+
+/**
+ * Builds BOTH configurations of the saved document, without writing anything.
+ *
+ * This is what the apply bar compares with the live pair (§4) and what the web
+ * layer writes on `/apply`. It reuses exactly the reader and the assembly of the
+ * generator, so a preview can never drift from a generation. `xrayConfig` is
+ * `null` when no server goes through Xray: then there is no Xray config to check
+ * or apply, and the service is stopped instead.
+ *
+ * @param {string} settingsPath
+ * @param {{links?: string, listenIp?: string, providersRoot?: string,
+ *   warnings?: string[]}} [options]
+ * @returns {{config: Record<string, unknown>, xrayConfig: Record<string, unknown>|null,
+ *   xray: {servers: Array<Record<string, unknown>>, ports: Record<string, number>,
+ *   assigned: Record<string, number>, range: [number, number]|null},
+ *   warnings: string[]}}
+ */
+export function previewPair(settingsPath, options = {}) {
   const warnings = options.warnings || [];
   const {settings, settingsDir} = loadEffectiveSettings(settingsPath);
   const listenIp = options.listenIp || settings.listen_ip || '127.0.0.1';
-  const outbounds = readOutbounds(
-    settings,
-    settingsDir,
-    options.links,
-    warnings,
-    options.providersRoot,
-  );
-  const [config] = buildConfig(settings, outbounds, listenIp, warnings, {});
-  return config;
+  const build = readBuild(settings, settingsDir, options.links, warnings, options.providersRoot);
+  const [config] = buildConfig(settings, build.outbounds, listenIp, warnings, {});
+  const xrayConfig =
+    build.xray.servers.length > 0
+      ? buildXrayConfig(xrayEntries(build.xray.servers, build.xray.ports))
+      : null;
+  return {config, xrayConfig, xray: build.xray, warnings};
 }
 
-function readOutbounds(settings, settingsDir, linksOverride, warnings, providersRoot) {
+/**
+ * Builds the Xray configuration of the saved document, without writing it. The
+ * counterpart of `previewConfig` for the second engine.
+ *
+ * @param {string} settingsPath
+ * @param {Parameters<typeof previewPair>[1]} [options]
+ * @returns {Record<string, unknown>|null}
+ */
+export function previewXrayConfig(settingsPath, options = {}) {
+  return previewPair(settingsPath, options).xrayConfig;
+}
+
+/**
+ * Writes the generated Xray config with mode `0640`.
+ *
+ * `/etc/xray` is `denis:xray 2750`: the file is written by GateHouse (running as
+ * `denis`) and read by `xray` through the GROUP; the setgid bit of the directory
+ * gives the file the `xray` group. `0600` would make the daemon fail to read it,
+ * while `xray run -test` as `denis` would still pass — hence the explicit mode
+ * and a test that checks it (§3.3).
+ *
+ * @param {string} filePath
+ * @param {unknown} config
+ */
+export function writeXrayConfig(filePath, config) {
+  const directory = path.dirname(filePath);
+  if (directory && !fs.existsSync(directory)) {
+    fs.mkdirSync(directory, {recursive: true});
+  }
+  fs.writeFileSync(filePath, stringifyConfig(config), {encoding: 'utf8', mode: 0o640});
+  // `writeFileSync` applies the mode only when it CREATES the file; a rewrite of
+  // an existing file keeps its old mode, so it is set explicitly.
+  fs.chmodSync(filePath, 0o640);
+}
+
+/**
+ * Builds and writes the Xray configuration of the saved document.
+ *
+ * Writes NOTHING when no server goes through Xray: the owner has no Xray servers
+ * and the file must not appear out of nowhere (§4, step 5 of the chain). The
+ * caller decides whether to stop the service.
+ *
+ * @param {string} settingsPath
+ * @param {{xrayConfig?: string, links?: string, providersRoot?: string,
+ *   warnings?: string[]}} [options] `xrayConfig` is the target path.
+ * @returns {{outputFile: string, xrayConfig: Record<string, unknown>|null,
+ *   xray: {servers: Array<Record<string, unknown>>, ports: Record<string, number>,
+ *   assigned: Record<string, number>, range: [number, number]|null},
+ *   warnings: string[]}}
+ */
+export function generateXrayConfigFile(settingsPath, options = {}) {
+  const pair = previewPair(settingsPath, options);
+  const settingsDir = path.dirname(path.resolve(settingsPath));
+  const outputFile = resolvePath(settingsDir, options.xrayConfig || 'xray/config.json');
+  if (pair.xrayConfig !== null) writeXrayConfig(outputFile, pair.xrayConfig);
+  return {
+    outputFile,
+    xrayConfig: pair.xrayConfig,
+    xray: pair.xray,
+    warnings: pair.warnings,
+  };
+}
+
+/** Empty Xray half of a build, for the paths that carry no Xray servers. */
+function emptyXray() {
+  return {servers: [], ports: {}, assigned: {}, range: null};
+}
+
+/**
+ * Reads every outbound a generation run needs: the sing-box outbounds of the
+ * links providers PLUS a `socks` outbound per Xray server, and the Xray half
+ * (servers, the port of each, the freshly handed ones).
+ *
+ * @param {Record<string, unknown>} settings
+ * @param {string} settingsDir
+ * @param {string|undefined} linksOverride
+ * @param {string[]} warnings
+ * @param {string|undefined} providersRoot
+ * @returns {{outbounds: Array<Record<string, unknown>>, xray: ReturnType<typeof emptyXray>}}
+ */
+function readBuild(settings, settingsDir, linksOverride, warnings, providersRoot) {
   if (typeof linksOverride === 'string' && linksOverride.length > 0) {
-    return parseLinks(resolvePath(settingsDir, linksOverride), warnings);
+    return {outbounds: parseLinks(resolvePath(settingsDir, linksOverride), warnings), xray: emptyXray()};
   }
 
   const root =
@@ -388,7 +490,9 @@ function readOutbounds(settings, settingsDir, linksOverride, warnings, providers
   const refusal = collisionRefusal(read.collisions);
   if (refusal !== null) throw new ConfigError(refusal);
 
-  if (read.outbounds.length === 0) {
+  const xrayServers = read.xrayServers.map((item) => item.server);
+
+  if (read.outbounds.length === 0 && xrayServers.length === 0) {
     // A document whose proxies still carry a TUNNEL has a real exit even with no
     // subscription provider: the build closes the ports of the proxies whose
     // servers are gone (§1.2 of the missing-servers task) and keeps the tunnels.
@@ -412,7 +516,7 @@ function readOutbounds(settings, settingsDir, linksOverride, warnings, providers
         'Предупреждение: ни одного включённого провайдера со ссылками — ' +
           'работают только туннельные выходы',
       );
-      return [];
+      return {outbounds: [], xray: emptyXray()};
     }
 
     const reasons = [];
@@ -444,7 +548,29 @@ function readOutbounds(settings, settingsDir, linksOverride, warnings, providers
       `не найдено ни одного включённого провайдера со ссылками${reason}`,
     );
   }
-  return read.outbounds;
+
+  // The ports of the Xray front end: a stored port is kept by its server, a new
+  // one takes the smallest free in the range, and a sing-box proxy port is never
+  // crossed (§2).
+  const reservedPorts = (Array.isArray(settings.proxies) ? settings.proxies : [])
+    .filter((proxy) => isMapping(proxy))
+    .map((proxy) => Number(proxy.port))
+    .filter((port) => Number.isInteger(port));
+  const resolved = resolveXrayPorts(xrayServers, settings.xray, reservedPorts);
+
+  const socks = xrayServers.map((server) =>
+    xraySocksOutbound(server, resolved.ports[server.key]),
+  );
+
+  return {
+    outbounds: [...read.outbounds, ...socks],
+    xray: {
+      servers: xrayServers,
+      ports: resolved.ports,
+      assigned: resolved.assigned,
+      range: resolved.range,
+    },
+  };
 }
 
 export {SCHEMA, DEFAULT_SETTINGS_FILE};
