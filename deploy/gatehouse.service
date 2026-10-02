@@ -71,6 +71,13 @@ Environment=GATEHOUSE_SINGBOX=/usr/local/bin/sing-box
 Environment=GATEHOUSE_SYSTEMCTL=/usr/bin/systemctl
 Environment=GATEHOUSE_JOURNALCTL=/usr/bin/journalctl
 Environment=GATEHOUSE_UNIT=sing-box
+# Xray — второе ядро ПОЗАДИ sing-box: слушает только 127.0.0.1, по socks-порту
+# на сервер провайдера вида «Конфиги Xray». Конфиг лежит в /etc/xray, каталог
+# `denis:xray 2750`: пишет GateHouse от denis, читает служба xray через группу,
+# поэтому файл пишется 0640 (setgid каталога даёт ему группу xray).
+Environment=GATEHOUSE_XRAY=/usr/local/bin/xray
+Environment=GATEHOUSE_XRAY_CONFIG=/etc/xray/config.json
+Environment=GATEHOUSE_XRAY_UNIT=xray
 # `gatehouse-tunnel@<name>` reads `<name>.conf` from here; the editor writes
 # normalised tunnel configs into this directory (see ReadWritePaths below). This
 # path MUST match the one in deploy/gatehouse-tunnel@.service.
@@ -95,10 +102,15 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 # /etc/sing-box holds the generated config.json; /etc/gatehouse holds the
-# normalised tunnel configs the editor writes (under /etc/gatehouse/tunnels).
-# Both are opened for write explicitly: /etc/gatehouse is named here rather than
-# relying on ConfigurationDirectory being writable under ProtectSystem=strict.
-ReadWritePaths=/etc/sing-box /etc/gatehouse
+# normalised tunnel configs the editor writes (under /etc/gatehouse/tunnels);
+# /etc/xray holds the generated Xray config. All three are opened for write
+# explicitly: /etc/gatehouse is named here rather than relying on
+# ConfigurationDirectory being writable under ProtectSystem=strict.
+#
+# /etc/xray MUST be `denis:xray 2750` (`sudo chown denis:xray /etc/xray &&
+# sudo chmod 2750 /etc/xray`): denis writes the config, the xray service reads it
+# through the group, and the setgid bit gives new files the xray group.
+ReadWritePaths=/etc/sing-box /etc/gatehouse /etc/xray
 # NoNewPrivileges=yes здесь включить НЕЛЬЗЯ: он блокирует setuid, то есть ломает
 # `sudo`, а с ним и перезапуск демона. Если хочется и его — берите вариант на
 # polkit: deploy/gatehouse.service.polkit.

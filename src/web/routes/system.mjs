@@ -578,6 +578,25 @@ export function registerSystemRoutes(app, ctx) {
     }),
   );
 
+  // «Службы → Xray»: a plain restart, no config change. Guarded by sudoers only,
+  // like the tunnel restart; the panel shows the block when the line is missing.
+  app.post(
+    '/xray/restart',
+    mutation(ctx, 'system:xray', async () => {
+      const result = await restartXray({env: systemEnv});
+      const active = result.ok
+        ? await waitForActive({env: systemEnv, unit: ctx.system.xrayUnit})
+        : {ok: false, last: ''};
+      return {
+        key: 'system:xray',
+        notice:
+          result.ok && active.ok
+            ? 'Xray перезапущен и поднялся.'
+            : `Перезапуск Xray не удался: ${result.stderr.trim() || result.error || `is-active: ${active.last}`}`,
+      };
+    }),
+  );
+
   app.post(
     '/rollback',
     mutation(ctx, 'system:singbox', async (req) => {

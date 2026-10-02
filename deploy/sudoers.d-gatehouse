@@ -21,6 +21,14 @@
 
 denis ALL=(root) NOPASSWD: /usr/bin/systemctl restart sing-box
 
+# --- Xray (второе ядро, необязательно) ---------------------------------------
+#
+# Нужны, только если включён провайдер вида «Конфиги Xray». Путь к systemctl
+# обязан совпадать с GATEHOUSE_SYSTEMCTL. `start` не нужен: конфиг пишет сам
+# GateHouse, а запуском занимается `restart`.
+denis ALL=(root) NOPASSWD: /usr/bin/systemctl restart xray
+denis ALL=(root) NOPASSWD: /usr/bin/systemctl stop xray
+
 # --- Туннели (необязательно) ------------------------------------------------
 #
 # На каждый туннель — три строки, ПО ИМЕНИ, без wildcard. `gatehouse-tunnel@*`

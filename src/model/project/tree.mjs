@@ -42,6 +42,15 @@ export function treeSpec(model, options = {}) {
     .tunnels()
     .filter((entry) => entry.carrier === true)
     .map((entry) => String(entry.provider));
+
+  // §5: server names carried by Xray, so a proxy whose exits ride on it can be
+  // marked when the service is stopped. Derived from the ENABLED providers only.
+  const xrayTags = [];
+  for (const provider of info.providers) {
+    if (provider.kind !== 'xray' || provider.enabled !== true) continue;
+    for (const server of provider.xrayServers ?? []) xrayTags.push(server.name);
+  }
+
   return buildTree({
     document: model.document,
     allTags: info.tags,
@@ -50,9 +59,11 @@ export function treeSpec(model, options = {}) {
     providers: info.providers,
     unread: info.unread,
     outputFile: model.outputFile,
-    // Runtime tunnel states, handed in by the web layer. Absent means "not
-    // asked", and then no proxy gets a tunnel mark.
+    // Runtime states, handed in by the web layer. Absent means "not asked", and
+    // then neither a tunnel nor an Xray mark is drawn.
     tunnelStates: options.tunnelStates ?? {},
+    xrayTags,
+    xrayActive: options.xrayActive,
     carrierProviders,
     now: options.now,
   });

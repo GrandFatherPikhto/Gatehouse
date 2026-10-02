@@ -141,6 +141,58 @@
     <% } %>
   <% } %>
 
+<% } else if (panel.tab === 'xray') { %>
+
+  <h3>Состояние</h3>
+  <% if (!panel.xray || panel.xray.installed !== true) { %>
+    <p class="error">Xray не найден: <code><%= panel.xrayBinary %></code>. Включить серверы Xray нельзя, пока бинарник не установлен.</p>
+  <% } else { %>
+    <p>
+      Юнит <code><%= panel.xrayUnit %></code>:
+      <strong><%= panel.xray.active ? 'работает' : 'остановлен' %></strong>,
+      <%= panel.xray.enabled ? 'в автозагрузке' : 'не в автозагрузке' %>.
+      Версия: <code><%= panel.xrayVersion && panel.xrayVersion.ok ? panel.xrayVersion.version : 'неизвестна' %></code>.
+      Серверов через Xray: <%= panel.xray.servers ?? 0 %>.
+    </p>
+    <p class="hint">
+      Конфиг: <code><%= panel.xrayConfigPath %></code>. Xray слушает только
+      <code>127.0.0.1</code>; клиенты ходят на порты sing-box.
+    </p>
+
+    <% if (!panel.xray.enabled) { %>
+      <div class="sudoers-block notice">
+        <p>Юнит не в автозагрузке: после перезагрузки роутера серверы Xray окажутся мёртвыми. На роутере выполните:</p>
+        <pre class="output">sudo systemctl enable <%= panel.xrayUnit %></pre>
+        <p class="hint">В автозагрузку приложение не включает — это действие владельца.</p>
+      </div>
+    <% } %>
+
+    <% if (panel.xrayRights && !panel.xrayRights.readable) { %>
+      <p class="error"><%= panel.xrayRights.notice %></p>
+    <% } else if (panel.xrayRights && panel.xrayRights.missing.length > 0) { %>
+      <div class="sudoers-block notice">
+        <p>Нет прав на управление Xray. На роутере выполните:</p>
+        <pre class="output">sudo visudo -f <%= panel.xrayRights.path %></pre>
+        <p>и допишите в конец:</p>
+        <pre class="output" id="xray-sudoers-lines"><%= panel.xrayRights.missing.join('\n') %></pre>
+        <button type="button" class="secondary" data-copy="#xray-sudoers-lines">Скопировать</button>
+        <p class="hint">Потом обновите страницу. Приложение в sudoers не пишет.</p>
+      </div>
+    <% } %>
+
+    <% if (panel.xrayRights && panel.xrayRights.canRestart) { %>
+      <form class="inline" hx-post="/xray/restart" hx-target="#panel" hx-swap="innerHTML" method="post" action="/xray/restart">
+        <button type="submit" class="danger"
+                hx-confirm="Перезапустить Xray? Соединения через серверы Xray оборвутся.">Перезапустить</button>
+      </form>
+    <% } else if (panel.xrayRights && panel.xrayRights.readable) { %>
+      <span class="hint">нет прав — см. блок выше</span>
+    <% } %>
+
+    <h3>Журнал Xray</h3>
+    <%- include('journal', {panel}) %>
+  <% } %>
+
 <% } else { %>
 
   <h3>Применение</h3>

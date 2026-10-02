@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 
 import {ConfigError} from '../core/errors.mjs';
-import {previewConfig, stringifyConfig} from '../core/settings.mjs';
+import {stringifyConfig} from '../core/settings.mjs';
 import {LABEL_NAMES_CAP} from '../model/stale.mjs';
 import {listConfigSnapshots} from '../model/storage.mjs';
 
@@ -93,7 +93,7 @@ function appliedAt(lastApply) {
  * @returns {{state: string, message: string, detail: string}}
  */
 function compareWithLive(ctx) {
-  const {model, state} = ctx;
+  const {model, state, system} = ctx;
   if (model.path === null) {
     return {
       state: 'pending',
@@ -104,7 +104,14 @@ function compareWithLive(ctx) {
   }
 
   const configPath = model.resolvedOutputPath();
-  const key = [model.path, model.dirty, statStamp(model.path), statStamp(configPath)].join('|');
+  const xrayConfigPath = String(system?.xrayConfig ?? '');
+  const key = [
+    model.path,
+    model.dirty,
+    statStamp(model.path),
+    statStamp(configPath),
+    statStamp(xrayConfigPath),
+  ].join('|');
   const cache = state.applyCache ?? null;
   if (cache !== null && cache.key === key) return cache.value;
 
@@ -114,19 +121,29 @@ function compareWithLive(ctx) {
   const warnings = [];
   let value;
   try {
-    const expected = stringifyConfig(
-      previewConfig(model.path, {
-        providersRoot: model.resolvedProvidersRoot(),
-        warnings,
-      }),
-    );
+    // BOTH configs are built, exactly as `/apply` would: "already applied" means
+    // the pair matches, and a change in either one must show as pending (§4).
+    const pair = model.previewBoth({warnings});
+    const expected = stringifyConfig(pair.config);
+    const expectedXray = pair.xrayConfig === null ? null : stringifyConfig(pair.xrayConfig);
+
+    const singboxMatch =
+      fs.existsSync(configPath) && fs.readFileSync(configPath, 'utf8') === expected;
+    let xrayMatch = true;
+    if (expectedXray !== null) {
+      xrayMatch =
+        xrayConfigPath.length > 0 &&
+        fs.existsSync(xrayConfigPath) &&
+        fs.readFileSync(xrayConfigPath, 'utf8') === expectedXray;
+    }
+
     if (!fs.existsSync(configPath)) {
       value = {
         state: 'pending',
         message: 'сохранено, не применено',
         detail: 'боевой config.json ещё не собран',
       };
-    } else if (fs.readFileSync(configPath, 'utf8') === expected) {
+    } else if (singboxMatch && xrayMatch) {
       value = {state: 'applied', message: 'применено', detail: ''};
     } else {
       value = {state: 'pending', message: 'сохранено, не применено', detail: ''};

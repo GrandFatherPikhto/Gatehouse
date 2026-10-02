@@ -1,0 +1,86 @@
+<%# «Настройки → Xray»: the port range and the handed-out ports.
+    Xray is the second engine BEHIND sing-box: it listens only on 127.0.0.1, one
+    socks port per server of an enabled provider of kind «Конфиги Xray». A port is
+    handed to a server once and remembered, so re-ordering a subscription never
+    moves a port to another server. %>
+<h2><%= panel.title %></h2>
+
+<p class="hint">
+  Xray — вспомогательное ядро. Он слушает только <code>127.0.0.1</code>, по одному
+  socks-порту на сервер; sing-box ходит в эти порты как в обычные серверы, поэтому
+  пулы, автовыбор и маршруты работают с ними как со всеми. Порт выдаётся серверу
+  один раз и запоминается — порядок строк в файле порт не двигает.
+</p>
+
+<% if (panel.portsError) { %>
+  <p class="error"><%= panel.portsError %></p>
+<% } %>
+
+<form id="panel-form" class="form" hx-post="/xray" hx-target="#panel" hx-swap="innerHTML" method="post" action="/xray">
+  <fieldset>
+    <legend>Диапазон портов</legend>
+    <p class="hint">
+      Новым серверам порт выдаётся из этого диапазона (наименьший свободный). Уже
+      выданные порты не двигаются, даже если окажутся за его границами. Слушать
+      Xray всегда будет только <code>127.0.0.1</code>.
+    </p>
+    <label for="xray_port_from">с</label>
+    <input type="number" id="xray_port_from" name="xray_port_from" min="1" max="65535" value="<%= panel.range[0] %>" size="6">
+    <label for="xray_port_to">по</label>
+    <input type="number" id="xray_port_to" name="xray_port_to" min="1" max="65535" value="<%= panel.range[1] %>" size="6">
+  </fieldset>
+</form>
+
+<h3>Выданные порты (<%= panel.rows.length %>)</h3>
+
+<% if (panel.rows.length === 0) { %>
+  <p class="hint">
+    Ни одного сервера через Xray. Включите провайдера вида «Конфиги Xray» на его
+    панели — порты появятся здесь после «Применить».
+  </p>
+<% } else { %>
+  <table class="list">
+    <thead>
+      <tr><th>сервер</th><th>провайдер</th><th>порт</th><th>состояние</th><th></th></tr>
+    </thead>
+    <tbody>
+      <% for (const row of panel.rows) { %>
+        <tr class="<%= row.missing ? 'stale' : '' %>">
+          <td><code><%= row.name %></code></td>
+          <td><%= row.provider %></td>
+          <td><code><%= row.port ?? '—' %></code></td>
+          <td>
+            <% if (row.missing) { %>
+              <span class="error">сервер пропал, порт закреплён за ним</span>
+            <% } else if (!row.stored) { %>
+              <span class="hint">будет выдан</span>
+            <% } else { %>
+              выдан
+            <% } %>
+          </td>
+          <td>
+            <% if (row.missing) { %>
+              <form class="inline" hx-post="/xray/forget" hx-target="#panel" hx-swap="innerHTML" method="post" action="/xray/forget">
+                <input type="hidden" name="key" value="<%= row.key %>">
+                <button type="submit" class="secondary">Забыть</button>
+              </form>
+            <% } %>
+          </td>
+        </tr>
+      <% } %>
+    </tbody>
+  </table>
+<% } %>
+
+<p>
+  Бинарник: <code><%= panel.binary %></code>
+  <% if (!panel.installed) { %><span class="error">— не найден</span><% } %><br>
+  Конфиг: <code><%= panel.configPath %></code><br>
+  Юнит: <code><%= panel.unit %></code> —
+  <%= panel.active ? 'работает' : 'остановлен' %>,
+  <%= panel.enabled ? 'в автозагрузке' : 'не в автозагрузке' %>
+  <% if (panel.installed && !panel.enabled) { %>
+    <br><span class="notice">после перезагрузки роутера серверы Xray окажутся мёртвыми:
+    <code>sudo systemctl enable <%= panel.unit %></code></span>
+  <% } %>
+</p>

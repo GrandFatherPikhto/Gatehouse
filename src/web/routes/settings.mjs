@@ -19,6 +19,27 @@ export function registerSettingsRoutes(app, ctx) {
     }),
   );
 
+  // «Настройки → Xray»: the port range. Handing out a new range does not move an
+  // existing port (a server keeps its number), so this is a safe edit to save.
+  app.post(
+    '/xray',
+    mutation(ctx, 'xray', (req) => {
+      applyEditForm(ctx, 'xray', req);
+      return {key: 'xray', notice: 'Настройки Xray применены — не забудьте сохранить'};
+    }),
+  );
+
+  // Frees the port of a server that is GONE. A server that is present keeps its
+  // port: the model refuses the other way around.
+  app.post(
+    '/xray/forget',
+    mutation(ctx, 'xray', (req) => {
+      const key = String(req.body.key ?? '').trim();
+      ctx.model.forgetXrayPort(key);
+      return {key: 'xray', notice: `Порт '${key}' освобождён — не забудьте сохранить`};
+    }),
+  );
+
   /**
    * Re-normalises and rewrites every marked tunnel.
    *

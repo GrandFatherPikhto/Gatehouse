@@ -178,6 +178,34 @@ export function parseRouteForm(body) {
  * @returns {{listen_ip: string, urltest: Record<string, unknown>,
  *   log: Record<string, unknown>, exclude_from_auto: string[]}}
  */
+/**
+ * Parses the «Настройки → Xray» form: the inclusive port range new servers are
+ * handed ports from.
+ *
+ * @param {Record<string, unknown>} body
+ * @returns {{port_range: [number, number]}}
+ */
+export function parseXrayForm(body) {
+  return {
+    port_range: [
+      integer(body.xray_port_from, 'xray.port_range'),
+      integer(body.xray_port_to, 'xray.port_range'),
+    ],
+  };
+}
+
+/**
+ * Parses the general settings form.
+ *
+ * `exclude_from_auto` is a row of checkboxes now, so it arrives as one value, an
+ * array of them, or not at all. Unticking every box means an EMPTY list — "nothing
+ * is excluded" — which is what the panel says in words; the core's default prefix
+ * then applies only to a document that never carried the key.
+ *
+ * @param {Record<string, unknown>} body
+ * @returns {{listen_ip: string, urltest: Record<string, unknown>,
+ *   log: Record<string, unknown>, exclude_from_auto: string[]}}
+ */
 export function parseGeneralForm(body) {
   return {
     listen_ip: String(body.listen_ip ?? '').trim(),

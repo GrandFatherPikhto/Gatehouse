@@ -26,6 +26,7 @@
 // testable on its own.
 
 import {isMapping} from '../core/errors.mjs';
+import {plural} from '../core/sources.mjs';
 import {asList} from '../core/validate.mjs';
 import {subscriptionExpiry} from '../core/vless.mjs';
 
@@ -220,6 +221,8 @@ function providerKindLabel(kind) {
       return 'подписка';
     case 'awg':
       return 'туннели';
+    case 'xray':
+      return 'конфиги Xray';
     default:
       return 'вид не задан';
   }
@@ -248,6 +251,11 @@ export function treeSpec(options = {}) {
   const providers = Array.isArray(options.providers) ? options.providers : [];
   const unread = Array.isArray(options.unread) ? options.unread : [];
   const tunnelStates = isMapping(options.tunnelStates) ? options.tunnelStates : {};
+  // §5: a proxy whose exits go through Xray is dead while the service is stopped.
+  // `xrayTags` names the servers carried by Xray, `xrayActive` its runtime state;
+  // both come from the web layer, which alone may ask the host.
+  const xrayTags = new Set(asList(options.xrayTags).map((tag) => String(tag)));
+  const xrayActive = options.xrayActive === true;
   // The subscription-expiry mark needs a clock; it is injectable so a test never
   // depends on the wall clock (§3.6).
   const now = Number.isFinite(options.now) ? Number(options.now) : Date.now();
@@ -292,13 +300,31 @@ export function treeSpec(options = {}) {
       }
     }
 
+    // §5: the same idea for Xray. The mark names how many exits of THIS proxy ride
+    // on Xray, so the owner sees why the port is dead, not just that it is.
+    let xrayMark = '';
+    if (xrayTags.size > 0 && !xrayActive) {
+      const count = asList(proxy.servers).filter(
+        (server) => typeof server === 'string' && xrayTags.has(server),
+      ).length;
+      if (count > 0) {
+        xrayMark = `[!] ${count} ${plural(
+          count,
+          'сервер',
+          'сервера',
+          'серверов',
+        )} идут через Xray, а он остановлен`;
+        marks.push(xrayMark);
+      }
+    }
+
     const mark = marks.join('  ');
     proxyNodes.push(
       node(`proxy:${tag}`, mark === '' ? tag : `${tag}  ${mark}`, 'proxy', {
-        stale: missing.length > 0 || tunnelMark !== '',
+        stale: missing.length > 0 || tunnelMark !== '' || xrayMark !== '',
         detail: tag,
         mark,
-        full: missingFull || tunnelMark,
+        full: missingFull || tunnelMark || xrayMark,
       }),
     );
   }
@@ -359,7 +385,11 @@ export function treeSpec(options = {}) {
     );
   };
 
-  const subscriptions = providers.filter((provider) => provider.kind === 'subscription');
+  // §5: grouping is by the KIND of output, not by the engine — an `xray` provider
+  // is a subscription to the owner, and its servers appear in the same list.
+  const subscriptions = providers.filter(
+    (provider) => provider.kind === 'subscription' || provider.kind === 'xray',
+  );
   const awg = providers.filter((provider) => provider.kind === 'awg');
   const found = providers.filter((provider) => provider.kind === null);
 
@@ -419,14 +449,16 @@ export function treeSpec(options = {}) {
         children: [
           node('singbox', 'Sing-Box', 'singbox'),
           node('amnezia', 'AmneziaWG', 'amnezia'),
+          node('xray', 'Xray', 'xray'),
         ],
       }),
-      // The host layer, renamed to «Службы»: a GROUP over the two former tabs.
+      // The host layer, renamed to «Службы»: a GROUP over the three tabs.
       node('system', 'Службы', 'system', {
         group: true,
         children: [
           node('system:singbox', 'Sing-Box', 'system'),
           node('system:amnezia', 'AmneziaWG', 'system'),
+          node('system:xray', 'Xray', 'system'),
         ],
       }),
     ],

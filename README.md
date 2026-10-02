@@ -55,6 +55,9 @@ and the system layer in
 * Node **22** (`.nvmrc` pins the major; verified on 22.23.2 with npm 10.9.8, the
   same versions the router runs)
 * npm — the runtime dependencies are `ajv`, `express` and `ejs`
+* optional: **Xray** (`/usr/local/bin/xray`) and the `/etc/xray` directory, only
+  if a provider folder of kind «Xray configs» is used (see *Xray, the second
+  engine* below)
 
 ## Install and test
 
@@ -590,6 +593,38 @@ on the next ordinary save. See
   convenience, not protection from sniffing. There is no HTTPS termination in the
   project on purpose: use `ssh -L 8080:127.0.0.1:8080 denis@10.95.2.1` or an
   external proxy.
+
+## Xray, the second engine
+
+sing-box stays the only entry point for clients (ports, pools, routes, tunnels).
+Xray is an auxiliary engine BEHIND it, for transports sing-box does not speak —
+at StashVPN that is VLESS XHTTP with fine obfuscation, handed out only as full
+Xray client configs. A provider folder of kind **«Xray configs»** holds
+`xray-configs.json` (the array of configs Happ/Remnawave returns, or a single
+hand-written config). The outbound objects are copied VERBATIM — only the tag is
+replaced — so `xPaddingObfsMode`, `sessionIDTable`, `xmux` and the Hysteria2
+`finalmask` survive untouched.
+
+* Xray listens ONLY on `127.0.0.1`, one socks port per server (`20800, 20801, …`,
+  the range lives in `xray.port_range`). A port is handed to a server once and
+  remembered in `xray.ports`, so re-ordering a subscription never moves a port to
+  another server.
+* sing-box sees each port as an ordinary `socks` outbound named like the server,
+  so pools, `auto-select`, `exclude_from_auto` and routes work with it as with
+  any other server. A proxy whose exits ride on a stopped Xray is marked in the
+  tree, exactly like a proxy on a stopped tunnel.
+* **Apply builds a pair.** It builds and checks BOTH configs (`sing-box check` and
+  `xray run -test`); if either fails, nothing is applied. It restarts Xray only
+  when its config changed (and stops it when no server goes through Xray), then
+  sing-box. A failure at either restart rolls BOTH back.
+* `/etc/xray` must be `denis:xray 2750` (`sudo chown denis:xray /etc/xray &&
+  sudo chmod 2750 /etc/xray`): GateHouse writes the config as `denis`, the `xray`
+  service reads it through the group, and the file is written `0640`. Add
+  `/etc/xray` to the unit's `ReadWritePaths` (done in
+  [`deploy/gatehouse.service`](deploy/gatehouse.service:1)), add the
+  `restart xray` / `stop xray` lines to sudoers, and run
+  `sudo systemctl enable xray` so the servers survive a reboot — the editor never
+  enables it itself.
 
 ## Deployment
 

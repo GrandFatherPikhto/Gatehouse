@@ -66,6 +66,10 @@ if (!fs.existsSync(LINKS)) {
 // A developer who installed it with a package manager has it in PATH but not under
 // /usr/local/bin, and there is no reason to make them set the variable by hand.
 const SINGBOX_DEFAULT = '/usr/local/bin/sing-box';
+// The second engine is searched the same way: the variable, the build default,
+// then `xray` from PATH. The sandbox writes its config under dev/root/etc/xray.
+const XRAY_DEFAULT = '/usr/local/bin/xray';
+const XRAY_CONFIG = path.join(SANDBOX, 'etc', 'xray', 'config.json');
 
 /**
  * First executable `sing-box` found in `PATH`, or `null`.
@@ -102,6 +106,25 @@ if (!fs.existsSync(singbox)) {
   );
 }
 
+// Xray is optional: a sandbox that never enables an `xray` provider does not need
+// it. Say plainly when it is missing so the message is not a bare ENOENT.
+const configuredXray =
+  typeof process.env.GATEHOUSE_XRAY === 'string' && process.env.GATEHOUSE_XRAY.length > 0
+    ? process.env.GATEHOUSE_XRAY
+    : null;
+const xray =
+  configuredXray ?? (fs.existsSync(XRAY_DEFAULT) ? XRAY_DEFAULT : findInPath('xray') ?? XRAY_DEFAULT);
+if (configuredXray === null && xray !== XRAY_DEFAULT) {
+  process.stdout.write(`xray найден в PATH: ${xray}\n`);
+}
+if (!fs.existsSync(xray)) {
+  process.stderr.write(
+    `Внимание: xray не найден: ${xray}; задайте GATEHOUSE_XRAY=… — конфиг Xray ` +
+      'не пройдёт проверку, если включить провайдера вида «Конфиги Xray».\n',
+  );
+}
+fs.mkdirSync(path.dirname(XRAY_CONFIG), {recursive: true});
+
 // `run()` of the server reads `process.env`, so the sandbox variables are set
 // there rather than passed as an argument; this also makes the sandbox marker in
 // the UI fire, because it is derived from these very paths.
@@ -109,6 +132,9 @@ Object.assign(process.env, {
   // The resolved binary (variable, default or PATH) so the server agrees with the
   // message printed above.
   GATEHOUSE_SINGBOX: singbox,
+  GATEHOUSE_XRAY: xray,
+  GATEHOUSE_XRAY_CONFIG: XRAY_CONFIG,
+  GATEHOUSE_XRAY_UNIT: 'xray',
   GATEHOUSE_SYSTEMCTL: path.join(ROOT, 'dev', 'bin', 'systemctl'),
   GATEHOUSE_SUDO: path.join(ROOT, 'dev', 'bin', 'sudo'),
   GATEHOUSE_CONFIG: CONFIG,

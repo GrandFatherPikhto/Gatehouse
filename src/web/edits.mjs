@@ -25,6 +25,7 @@ const ROUTE_FIELDS = Object.freeze({
   '/provider': ['id'],
   '/dns': ['dns'],
   '/output': ['output_file'],
+  '/xray': ['xray_port_from', 'xray_port_to'],
   '/general': [
     'listen_ip',
     'urltest_url',
@@ -173,6 +174,11 @@ export function applyRoute(ctx, route, req) {
     case '/output':
       model.setOutputFile(String(body.output_file ?? '').trim());
       return {applied: true, key: 'output'};
+    case '/xray': {
+      const candidate = forms.parseXrayForm(body);
+      model.setXrayPortRange(candidate.port_range[0], candidate.port_range[1]);
+      return {applied: true, key: 'xray'};
+    }
     case '/general': {
       model.applyGeneral(forms.parseGeneralForm(body));
       return {applied: true, key: 'general'};

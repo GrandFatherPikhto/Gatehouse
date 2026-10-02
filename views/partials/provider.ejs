@@ -35,9 +35,10 @@
       <select id="kind" name="kind" data-kind-toggle>
         <option value="subscription" <%= panel.folderKind === 'subscription' ? 'selected' : '' %>>Подписка</option>
         <option value="awg" <%= panel.folderKind === 'awg' ? 'selected' : '' %>>Туннели AmneziaWG</option>
+        <option value="xray" <%= panel.folderKind === 'xray' ? 'selected' : '' %>>Конфиги Xray</option>
       </select>
     <% } else { %>
-      <strong><%= panel.folderKind === 'subscription' ? 'Подписка' : 'Туннели AmneziaWG' %></strong>
+      <strong><%= panel.folderKind === 'subscription' ? 'Подписка' : panel.folderKind === 'xray' ? 'Конфиги Xray' : 'Туннели AmneziaWG' %></strong>
       <span class="hint">чтобы сменить вид, выключите провайдера</span>
     <% } %>
 
@@ -78,7 +79,9 @@
     </label>
 
     <div data-kind-block="subscription" <%= panel.folderKind === 'awg' ? 'hidden' : '' %>>
-      <details class="overrides" <%= panel.overrides.open ? 'open' : '' %>>
+      <%# The тонкие настройки are a SUBSCRIPTION concern and do not apply to
+          Xray configs, so that block is hidden for kind «xray». %>
+      <details class="overrides" <%= panel.overrides.open ? 'open' : '' %> <%= panel.folderKind === 'xray' ? 'hidden' : '' %>>
         <summary>Тонкие настройки</summary>
         <p class="hint">
           Авто — как в ссылках. Переопределение действует на все серверы подписки и
@@ -135,7 +138,43 @@
   </ul>
 <% } %>
 
-<% if (panel.provider.tags.length > 0) { %>
+<%# Kind xray: the copied Xray outbounds, with the protocol, the real address and
+    the local port sing-box will use. The generic name list below is skipped for
+    this kind, because the table already names every server. %>
+<% if (panel.xrayRows) { %>
+  <h3>Серверы Xray (<%= panel.xrayRows.length %>)</h3>
+  <% if (!panel.xrayInstalled) { %>
+    <p class="error">Xray не найден: <code><%= panel.xrayBinary %></code> — включить провайдера нельзя.</p>
+  <% } else if (!panel.xrayActive) { %>
+    <p class="notice">Xray остановлен: порты этих серверов не работают, пока он не запущен.</p>
+  <% } %>
+  <table class="list">
+    <thead>
+      <tr><th>имя</th><th>протокол</th><th>адрес</th><th>порт Xray</th><th>из конфига</th></tr>
+    </thead>
+    <tbody>
+      <% for (const row of panel.xrayRows) { %>
+        <tr>
+          <td><code><%= row.name %></code></td>
+          <td><%= row.protocol %></td>
+          <td><%= row.address %><% if (row.remotePort) { %>:<%= row.remotePort %><% } %></td>
+          <td><code><%= row.port ?? '—' %></code></td>
+          <td><%= row.remark ?? '—' %></td>
+        </tr>
+      <% } %>
+    </tbody>
+  </table>
+  <% if (panel.xraySkipped.length > 0) { %>
+    <h4>Пропущено выходов: <%= panel.xraySkipped.length %></h4>
+    <ul class="warnings">
+      <% for (const item of panel.xraySkipped) { %>
+        <li><code><%= item.label %></code> — <%= item.reason %></li>
+      <% } %>
+    </ul>
+  <% } %>
+<% } %>
+
+<% if (panel.provider.tags.length > 0 && panel.folderKind !== 'xray') { %>
   <h3>Серверы (<%= panel.provider.tags.length %>)</h3>
   <% if (!panel.enabled) { %>
     <p class="hint">

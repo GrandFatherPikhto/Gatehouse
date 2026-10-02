@@ -20,6 +20,7 @@ import {listConfigSnapshots} from '../model/storage.mjs';
 export const PANEL_KINDS = Object.freeze([
   'singbox',
   'amnezia',
+  'xray',
   'providers',
   'outputs',
   'proxies',
@@ -37,7 +38,7 @@ export const PANEL_KINDS = Object.freeze([
  * JavaScript off it is simply a link in the tree. The list also names the child
  * whose content an unknown or absent key falls back to.
  */
-export const SYSTEM_TABS = Object.freeze(['singbox', 'amnezia']);
+export const SYSTEM_TABS = Object.freeze(['singbox', 'amnezia', 'xray']);
 
 /** Outbounds that exist in every generated config. */
 export const BUILTIN_OUTBOUNDS = Object.freeze(['auto-select', 'direct']);
@@ -56,6 +57,8 @@ export function providerKindLabel(kind) {
       return 'подписка';
     case 'awg':
       return 'туннели';
+    case 'xray':
+      return 'конфиги Xray';
     default:
       return 'вид не задан';
   }
@@ -132,8 +135,10 @@ const EDIT_FORMS = Object.freeze({
   // and its «Сохранить» keeps the standalone behaviour; regeneration has its own
   // button.
   amnezia: [],
+  // «Настройки → Xray»: the port range is the only editable field.
+  xray: ['/xray'],
   // «Система» has NO edit form any more: the watchdog settings were its only one,
-  // and they left the project together with the watchdog. Its two tabs are
+  // and they left the project together with the watchdog. Its three tabs are
   // read-only, so `buildPanel` reports `editForm: false` for the whole panel.
 });
 
@@ -315,6 +320,40 @@ function overridesView(provider) {
 }
 
 /**
+ * The `xray` block of a provider panel: one row per server (name, protocol,
+ * address, the Xray port and the `remarks` of the config it came from), plus what
+ * the runtime says about the engine. The port comes from the model's pure
+ * `xrayPortInfo`, matched by the server key.
+ *
+ * @param {import('../model/project.mjs').ProjectModel} model
+ * @param {Record<string, unknown>} provider
+ * @param {Record<string, unknown>} system
+ * @returns {Record<string, unknown>}
+ */
+function xrayProviderView(model, provider, system) {
+  const info = model.xrayPortInfo();
+  const portByKey = new Map((info.rows ?? []).map((row) => [row.key, row.port]));
+  const rows = (provider.xrayServers ?? []).map((server) => ({
+    key: server.key,
+    name: server.name,
+    protocol: server.protocol,
+    address: server.address,
+    remotePort: server.remotePort,
+    remark: server.remark,
+    port: portByKey.get(server.key) ?? null,
+  }));
+  const xray = system.xray ?? {};
+  return {
+    xrayRows: rows,
+    xrayBinary: system.xrayBinary ?? '',
+    xrayInstalled: xray.installed === true,
+    xrayActive: xray.active === true,
+    xrayServers: rows.length,
+    xraySkipped: provider.skipped ?? [],
+  };
+}
+
+/**
  * Discovered folders a missing provider record may have been renamed to.
  *
  * Nothing is guessed by NAME: a candidate is a folder that was read, has no
@@ -404,7 +443,9 @@ export function buildPanel(model, key, extra = {}) {
         info: {
           ...info,
           providers,
-          subscriptions: providers.filter((provider) => provider.kind === 'subscription'),
+          subscriptions: providers.filter(
+            (provider) => provider.kind === 'subscription' || provider.kind === 'xray',
+          ),
           awg: providers.filter((provider) => provider.kind === 'awg'),
           found: providers.filter((provider) => provider.kind === null),
           unread: info.unread.map((entry) => ({
@@ -433,7 +474,11 @@ export function buildPanel(model, key, extra = {}) {
         null: 'Найдено, не подключено',
       };
       const providers = info.providers
-        .filter((provider) => provider.kind === section)
+        .filter((provider) =>
+          section === 'subscription'
+            ? provider.kind === 'subscription' || provider.kind === 'xray'
+            : provider.kind === section,
+        )
         .map(displayProvider);
       return {
         ...base,
@@ -484,6 +529,30 @@ export function buildPanel(model, key, extra = {}) {
         overrides: overridesView(provider),
         // §2.2: the same refusal text as generation, shown while it lasts.
         collisionText: collisionRefusal(info.collisions),
+        // Kind `xray`: the server table and the state of the engine.
+        ...(provider.kind === 'xray' ? xrayProviderView(model, provider, system) : {}),
+      };
+    }
+
+    case 'xray': {
+      // «Настройки → Xray»: the port range, the handed-out ports (with «Забыть»
+      // for the gone servers) and the state of the engine.
+      const info = model.xrayPortInfo();
+      const xray = system.xray ?? {};
+      return {
+        ...base,
+        title: 'Xray',
+        range: info.range,
+        rows: info.rows,
+        assigned: info.assigned,
+        portsError: info.error,
+        installed: xray.installed === true,
+        active: xray.active === true,
+        enabled: xray.enabled === true,
+        servers: xray.servers ?? info.rows.filter((row) => !row.missing).length,
+        binary: system.xrayBinary ?? '',
+        configPath: system.xrayConfigPath ?? '',
+        unit: system.xrayUnit ?? 'xray',
       };
     }
 
@@ -595,6 +664,14 @@ export function buildPanel(model, key, extra = {}) {
         // The listen address is shown on the Sing-box tab: the server test builds
         // its URL out of it.
         listenIp: model.listenIp,
+
+        // --- Xray: state, version, journal, restart, sudoers (§5) ---
+        xray: system.xray ?? null,
+        xrayBinary: system.xrayBinary ?? '',
+        xrayConfigPath: system.xrayConfigPath ?? '',
+        xrayUnit: system.xrayUnit ?? 'xray',
+        xrayVersion: extra.xrayVersion ?? null,
+        xrayRights: system.xrayRights ?? null,
       };
     }
 

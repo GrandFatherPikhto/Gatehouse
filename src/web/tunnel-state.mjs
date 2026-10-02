@@ -11,6 +11,8 @@ import {
   tunnelState,
   tunnelSudoersExtra,
   tunnelUnitName,
+  xrayInstalled,
+  xrayState,
 } from '../system/index.mjs';
 
 /**
@@ -48,7 +50,34 @@ export async function refreshTunnelStates(ctx) {
 }
 
 /**
- * Middleware that refreshes the cache before every request.
+ * Reads the runtime state of the Xray engine into `state.xray`: whether the
+ * binary is installed and, when at least one enabled provider goes through it,
+ * the two systemd axes. The systemd reads are SKIPPED with no Xray servers, so a
+ * project that never used the second engine pays only one `fs.existsSync`.
+ *
+ * @param {ReturnType<import('./context.mjs').buildContext>} ctx
+ * @returns {Promise<Record<string, unknown>>}
+ */
+export async function refreshXrayState(ctx) {
+  const installed = xrayInstalled({env: ctx.systemEnv, xray: ctx.system.xray});
+  const servers = ctx.model.enabledXrayServers().length;
+  if (servers === 0) {
+    ctx.state.xray = {installed, active: false, enabled: false, servers: 0, unit: ctx.system.xrayUnit};
+    return ctx.state.xray;
+  }
+  const runtime = await xrayState({env: ctx.systemEnv, xray: ctx.system.xray});
+  ctx.state.xray = {
+    installed,
+    active: runtime.active,
+    enabled: runtime.enabled,
+    servers,
+    unit: runtime.unit,
+  };
+  return ctx.state.xray;
+}
+
+/**
+ * Middleware that refreshes the caches before every request.
  *
  * The tunnel rows of the System panel and the tree marks need runtime state, and
  * Express handlers are synchronous once they render. A failure is swallowed on
@@ -62,6 +91,11 @@ export function tunnelRefreshMiddleware(ctx) {
   return async (req, res, next) => {
     try {
       await refreshTunnelStates(ctx);
+    } catch {
+      // keep the previous snapshot
+    }
+    try {
+      await refreshXrayState(ctx);
     } catch {
       // keep the previous snapshot
     }

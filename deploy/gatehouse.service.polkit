@@ -53,6 +53,13 @@ Environment=GATEHOUSE_SINGBOX=/usr/local/bin/sing-box
 Environment=GATEHOUSE_SYSTEMCTL=/usr/bin/systemctl
 Environment=GATEHOUSE_JOURNALCTL=/usr/bin/journalctl
 Environment=GATEHOUSE_UNIT=sing-box
+# Xray — второе ядро за sing-box. В polkit-варианте правило расширять не стали:
+# управление Xray (restart/stop) здесь недоступно, поэтому панель «Службы → Xray»
+# показывает состояние без кнопки перезапуска. Каталог конфига всё равно
+# открывается на запись: конфиг пишет сам GateHouse.
+Environment=GATEHOUSE_XRAY=/usr/local/bin/xray
+Environment=GATEHOUSE_XRAY_CONFIG=/etc/xray/config.json
+Environment=GATEHOUSE_XRAY_UNIT=xray
 # Тот же каталог, что в `gatehouse.service` и в шаблоне `gatehouse-tunnel@`:
 # один путь для записи, удаления и предохранителя. Конфиги ЛИЧНЫХ туннелей
 # amnezia GateHouse не видит и не трогает — это разграничение держится и в
@@ -83,7 +90,9 @@ RestartSec=5
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-ReadWritePaths=/etc/sing-box /etc/gatehouse
+# Same set as `gatehouse.service`, /etc/xray included: /etc/xray is
+# `denis:xray 2750` (setgid), the Xray config is written 0640.
+ReadWritePaths=/etc/sing-box /etc/gatehouse /etc/xray
 # Здесь setuid не нужен — рестарт идёт по D-Bus, поэтому доступно и это.
 NoNewPrivileges=yes
 

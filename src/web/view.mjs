@@ -9,7 +9,7 @@
 import path from 'node:path';
 
 import {ConfigError} from '../core/errors.mjs';
-import {PRIORITY_LEVELS, tailJournal} from '../system/index.mjs';
+import {PRIORITY_LEVELS, tailJournal, xrayPermissions, xrayVersion} from '../system/index.mjs';
 import {applyBar} from './apply-bar.mjs';
 import {PANEL_KINDS, buildPanel, buildStatus, panelKey, panelUrl} from './panel.mjs';
 import {tunnelPanelRows, tunnelPanelSudoers} from './tunnel-state.mjs';
@@ -114,6 +114,14 @@ export function buildView(ctx, key, extra) {
       journalLines: JOURNAL_SNAPSHOT_LINES,
       journalLevel: DEFAULT_JOURNAL_LEVEL,
       journalLevels: PRIORITY_LEVELS,
+      // §5: the runtime state of the second engine and its paths, so the provider
+      // panel and «Службы → Xray» can speak about it without asking the host.
+      xray: state.xray ?? {installed: false, active: false, enabled: false, servers: 0},
+      xrayBinary: system.xray,
+      xrayConfigPath: system.xrayConfig,
+      xrayUnit: system.xrayUnit,
+      // The two sudoers lines the owner must install, and what is already there.
+      xrayRights: xrayPermissions(system.sudoers, {systemctl: system.systemctl}),
     },
     // Tunnel rows of the System panel. Assembled here, from the cached runtime
     // state and the sudoers rights, so the panel builders stay pure.
@@ -128,9 +136,12 @@ export function buildView(ctx, key, extra) {
     model,
     key: resolved.key,
     panel: resolved.panel,
-    // The tree marks a proxy on a stopped tunnel; the states come from the
-    // cache refreshed by the middleware of the app.
-    tree: model.treeSpec({tunnelStates: state.tunnels}),
+    // The tree marks a proxy on a stopped tunnel AND a proxy whose exits ride on a
+    // stopped Xray; the states come from the caches refreshed by the middleware.
+    tree: model.treeSpec({
+      tunnelStates: state.tunnels,
+      xrayActive: (state.xray ?? {}).active === true,
+    }),
     status: buildStatus(model),
     // The permanent apply bar: dirty / failed / saved-not-applied / applied.
     apply: applyBar(ctx),
@@ -178,7 +189,7 @@ export function renderFragment(ctx, res, key, extra = {}) {
  * @param {import('express').Request} req
  * @returns {Promise<Record<string, unknown>>}
  */
-export async function journalSnapshot(ctx, req) {
+export async function journalSnapshot(ctx, req, unitOverride = '') {
   const requested = Number(req.query?.lines);
   const lines = Number.isFinite(requested)
     ? Math.min(Math.max(Math.trunc(requested), 1), JOURNAL_MAX_LINES)
@@ -186,7 +197,10 @@ export async function journalSnapshot(ctx, req) {
   const requestedLevel =
     typeof req.query?.level === 'string' ? req.query.level.trim().toLowerCase() : '';
   const level = PRIORITY_LEVELS.includes(requestedLevel) ? requestedLevel : DEFAULT_JOURNAL_LEVEL;
-  const unit = typeof req.query?.unit === 'string' ? req.query.unit.trim() : '';
+  // The panel may name a unit in the query (a tunnel journal); without one, the
+  // caller's override (the Xray tab) or `tailJournal`'s default is used.
+  const requestedUnit = typeof req.query?.unit === 'string' ? req.query.unit.trim() : '';
+  const unit = requestedUnit.length > 0 ? requestedUnit : unitOverride;
 
   const result = await tailJournal(lines, {
     env: ctx.systemEnv,
@@ -218,11 +232,18 @@ export async function panelExtra(ctx, key, req) {
   const kind =
     typeof key === 'string' && key.includes(':') ? key.slice(0, key.indexOf(':')) : key;
   if (kind === 'system') {
-    // The journal is a section of the SING-BOX tab, so only that tab pays for a
-    // `journalctl` call; the other tabs render without touching the host.
+    // The journal is a section of the Sing-Box and Xray tabs, so only those pay
+    // for a `journalctl` call; the AmneziaWG tab renders without touching the host.
     const tab =
       typeof key === 'string' && key.includes(':') ? key.slice(key.indexOf(':') + 1) : 'singbox';
-    return tab === 'singbox' ? {journal: await journalSnapshot(ctx, req)} : {};
+    if (tab === 'singbox') return {journal: await journalSnapshot(ctx, req)};
+    if (tab === 'xray') {
+      return {
+        journal: await journalSnapshot(ctx, req, ctx.system.xrayUnit),
+        xrayVersion: await xrayVersion({env: ctx.systemEnv, xray: ctx.system.xray}),
+      };
+    }
+    return {};
   }
   if (kind === 'tunnel') {
     // The preview reads a file, so it is built here, in the route, and handed

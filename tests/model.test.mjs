@@ -595,13 +595,13 @@ describe('stale references and the tree', () => {
       ['subscriptions', 'tunnels', 'found'],
     );
 
-    // «Настройки» is a GROUP: no page, only the two child panels.
+    // «Настройки» is a GROUP: no page, only the child panels.
     const settings = findTreeKind(root, 'settings');
-    assert.deepEqual(settings.children.map((child) => child.kind), ['singbox', 'amnezia']);
+    assert.deepEqual(settings.children.map((child) => child.kind), ['singbox', 'amnezia', 'xray']);
     assert.equal(settings.group, true);
-    assert.deepEqual(settings.children.map((child) => child.title), ['Sing-Box', 'AmneziaWG']);
+    assert.deepEqual(settings.children.map((child) => child.title), ['Sing-Box', 'AmneziaWG', 'Xray']);
 
-    // «Службы» is a GROUP like «Настройки»: two child nodes.
+    // «Службы» is a GROUP like «Настройки»: the child nodes, Xray included.
     const system = findTreeKind(root, 'system');
     assert.equal(system.group, true);
     assert.deepEqual(
@@ -609,6 +609,7 @@ describe('stale references and the tree', () => {
       [
         ['system:singbox', 'Sing-Box'],
         ['system:amnezia', 'AmneziaWG'],
+        ['system:xray', 'Xray'],
       ],
     );
   });
