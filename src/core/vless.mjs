@@ -676,3 +676,63 @@ export function parseLinks(filePath, warnings = [], skipped = []) {
   dedupTags(outbounds);
   return outbounds;
 }
+
+/**
+ * Decodes a `#profile-title` value: Happ/v2RayTun write it as `base64:<…>`, and
+ * anything else is taken as it stands. A malformed payload is returned literally
+ * rather than dropped — the owner sees what the file holds.
+ *
+ * @param {string} value
+ * @returns {string}
+ */
+function decodeProfileTitle(value) {
+  const text = String(value ?? '').trim();
+  if (!text.toLowerCase().startsWith('base64:')) return text;
+  try {
+    const decoded = Buffer.from(text.slice('base64:'.length).trim(), 'base64').toString('utf8');
+    // A decoded string of replacement characters means the payload is not UTF-8
+    // text; the raw value is more honest than mojibake.
+    return decoded.includes('\ufffd') ? text : decoded;
+  } catch {
+    return text;
+  }
+}
+
+/**
+ * Reads the `expire=<unix>` of `#subscription-userinfo`, or `null`.
+ *
+ * @param {string} value
+ * @returns {number|null}
+ */
+function decodeUserinfoExpire(value) {
+  const match = /(?:^|;)\s*expire=(\d+)\s*(?:;|$)/.exec(String(value ?? ''));
+  if (match === null) return null;
+  const seconds = Number.parseInt(match[1], 10);
+  // `expire=0` means "no date", exactly like a missing field.
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+}
+
+/**
+ * Reads the human headers of a subscription `links.txt` (Happ / v2RayTun): the
+ * profile title and the expiry date. Pure: it takes the file TEXT and touches no
+ * filesystem, and it never reaches `config.json` — the `#` lines stay comments
+ * for `parseLinks`, untouched.
+ *
+ * @param {string} text
+ * @returns {{title: string|null, expire: number|null}} `expire` in unix seconds.
+ */
+export function parseSubscriptionHeaders(text) {
+  const result = {title: null, expire: null};
+  for (const line of String(text ?? '').split(LINE_BREAK)) {
+    const trimmed = pythonStrip(line);
+    if (!trimmed.startsWith('#')) continue;
+    const body = trimmed.slice(1).trim();
+    const colon = body.indexOf(':');
+    if (colon < 0) continue;
+    const key = body.slice(0, colon).trim().toLowerCase();
+    const value = body.slice(colon + 1).trim();
+    if (key === 'profile-title' && value.length > 0) result.title = decodeProfileTitle(value);
+    else if (key === 'subscription-userinfo') result.expire = decodeUserinfoExpire(value);
+  }
+  return result;
+}

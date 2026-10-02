@@ -93,6 +93,11 @@ export class ProjectModel extends ProjectSession {
     return providers.setProviderOverrides(this, id, values);
   }
 
+  /** Sets (or clears) the folder kind: `subscription`, `awg` or `null`. */
+  setProviderKind(id, kind) {
+    return providers.setProviderKind(this, id, kind);
+  }
+
   /** Forgets a record whose folder is gone; a folder on disk is never dropped. */
   forgetProvider(id) {
     return providers.forgetProvider(this, id);

@@ -281,6 +281,11 @@ export function setProviderEnabled(model, id, enabled) {
   }
   const providers = ensureProviders(model);
   const current = isMapping(providers[clean]) ? providers[clean] : {};
+  // A provider with no chosen kind never feeds the build (§3.1), so enabling it
+  // is refused with the instruction to choose the kind first.
+  if (enabled === true && current.kind !== 'subscription' && current.kind !== 'awg') {
+    throw new ConfigError('задайте вид папки: подписка или туннели');
+  }
   const before = model.toText();
   const wasDirty = model.dirty;
 
@@ -294,6 +299,54 @@ export function setProviderEnabled(model, id, enabled) {
       throw new ConfigError(refusal);
     }
   }
+  return getProvider(model, clean) ?? {};
+}
+
+/**
+ * Sets (or clears) the KIND of a provider folder (§3.3).
+ *
+ * Refused while the provider is enabled («сначала выключите») and for `awg` when
+ * a `tunnels[]` entry already takes its config from this folder («туннели …
+ * взяты из этой папки»). `null` removes the kind, which puts the folder back into
+ * «Найдено, не подключено».
+ *
+ * @param {import('../project.mjs').ProjectModel} model
+ * @param {string} id
+ * @param {'subscription'|'awg'|null} kind
+ * @returns {Record<string, unknown>} The stored record.
+ */
+export function setProviderKind(model, id, kind) {
+  const clean = String(id ?? '').trim();
+  if (!isProviderId(clean)) {
+    throw new ConfigError(`имя провайдера '${clean}' не подходит для идентификатора`);
+  }
+  const value = kind === 'subscription' || kind === 'awg' ? kind : null;
+  if (kind !== null && kind !== undefined && value === null) {
+    throw new ConfigError(`вид '${String(kind)}' неизвестен: допустимо 'subscription' или 'awg'`);
+  }
+
+  const providers = ensureProviders(model);
+  const current = isMapping(providers[clean]) ? providers[clean] : {};
+  if (current.enabled === true) {
+    throw new ConfigError('провайдер включён: чтобы сменить вид, сначала выключите его');
+  }
+  if (value === 'awg') {
+    const used = [];
+    for (const entry of Array.isArray(model.document.tunnels) ? model.document.tunnels : []) {
+      if (isMapping(entry) && entry.provider === clean) {
+        used.push(String(entry.name ?? entry.interface ?? entry.file));
+      }
+    }
+    if (used.length > 0) {
+      throw new ConfigError(`туннели ${used.join(', ')} взяты из этой папки — сначала выключите их`);
+    }
+  }
+
+  const next = {...current};
+  if (value === null) delete next.kind;
+  else next.kind = value;
+  providers[clean] = next;
+  model.markDirty();
   return getProvider(model, clean) ?? {};
 }
 
@@ -512,7 +565,10 @@ export function migrateProviders(document, root, settingsDir, enableAllWithLinks
   } else if (enableAllWithLinks) {
     const read = readProviders({}, root);
     const found = read.providers
-      .filter((provider) => provider.kind === 'links' || provider.kind === 'mixed')
+      .filter((provider) => provider.contentKind === 'links')
+      .map((provider) => provider.id);
+    const mixed = read.providers
+      .filter((provider) => provider.contentKind === 'mixed')
       .map((provider) => provider.id);
     if (found.length === 0) {
       warnings.push(
@@ -520,11 +576,63 @@ export function migrateProviders(document, root, settingsDir, enableAllWithLinks
           'положите links.txt в папку провайдера',
       );
     } else {
-      for (const id of found) providers[id] = {enabled: true};
+      // A version-1 file has no kind at all: the folder that carries only a
+      // `links.txt` is enabled AS A SUBSCRIPTION, which is what it is.
+      for (const id of found) providers[id] = {enabled: true, kind: 'subscription'};
       warnings.push(`Предупреждение: включены найденные провайдеры: ${found.join(', ')}`);
+    }
+    for (const id of mixed) {
+      warnings.push(
+        `Предупреждение: папка '${id}' содержит и ссылки, и конфиги туннелей — ` +
+          'разнесите и задайте вид',
+      );
     }
   }
 
   if (touched || Object.keys(providers).length > 0) document.providers = providers;
+  return warnings;
+}
+
+/**
+ * One-time migration of the folder KIND (§3.2): a record that has no `kind` gets
+ * it inferred from the content — only `links.txt` → `subscription`, only
+ * `*.conf` → `awg`. A mixed folder is left without a kind and warned about, and a
+ * folder WITHOUT a record is left alone («Найдено»). Nothing is enabled here.
+ *
+ * @param {Record<string, unknown>} document
+ * @param {string} root Providers root.
+ * @returns {string[]} Warnings to show, including the «save» one.
+ */
+export function migrateProviderKinds(document, root) {
+  const warnings = [];
+  const providers = isMapping(document.providers) ? document.providers : {};
+  if (Object.keys(providers).length === 0) return warnings;
+
+  const read = readProviders(providers, root);
+  let touched = false;
+  for (const provider of read.providers) {
+    const id = provider.id;
+    if (!Object.hasOwn(providers, id)) continue; // «Найдено»: nothing to touch
+    const record = isMapping(providers[id]) ? providers[id] : {};
+    if (record.kind === 'subscription' || record.kind === 'awg') continue;
+
+    if (provider.contentKind === 'links') {
+      providers[id] = {...record, kind: 'subscription'};
+      touched = true;
+    } else if (provider.contentKind === 'tunnels') {
+      providers[id] = {...record, kind: 'awg'};
+      touched = true;
+    } else if (provider.contentKind === 'mixed') {
+      warnings.push(
+        `Предупреждение: папка '${id}' содержит и ссылки, и конфиги туннелей — ` +
+          'разнесите и задайте вид',
+      );
+    }
+  }
+  if (touched) {
+    warnings.push(
+      'Предупреждение: у провайдеров появился вид папки (подписка/туннели): сохраните изменения',
+    );
+  }
   return warnings;
 }

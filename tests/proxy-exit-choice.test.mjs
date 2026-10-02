@@ -48,7 +48,7 @@ async function startEditor() {
   fs.copyFileSync(PROVIDER_CONF, path.join(tunnelDir, 'AustriaGrazS4.conf'));
 
   const settingsFile = writeSettings(dir, {
-    providers: {vpnd: {enabled: true}, hidemyname: {enabled: true}},
+    providers: {vpnd: {enabled: true, kind: 'subscription'}, hidemyname: {enabled: true, kind: 'awg'}},
     proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
   });
   const sudoers = writeSudoers(path.join(dir, 'sudoers-gatehouse'), ['hmn-graz4']);

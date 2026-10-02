@@ -91,27 +91,34 @@ describe('discovery of provider folders', () => {
     assert.equal(Object.hasOwn(byId, '.hidden'), false, 'hidden entries are skipped silently');
   });
 
-  test('classifies links, tunnels and mixed folders, counting what they hold', () => {
+  test('describes links, tunnels and mixed folders when no kind is chosen', () => {
     const root = buildDiscoveryRoot();
     const read = readProviders({}, root);
     const byId = Object.fromEntries(read.providers.map((provider) => [provider.id, provider]));
 
-    assert.equal(byId.vpnd.kind, 'links');
+    // With no `kind` chosen the folder is only DESCRIBED (the «Найдено» hint):
+    // nothing from it enters the build.
+    assert.equal(byId.vpnd.kind, null);
+    assert.equal(byId.vpnd.contentKind, 'links');
     assert.equal(byId.vpnd.count, 3);
-    assert.equal(byId.amnezia.kind, 'tunnels');
+    assert.equal(byId.amnezia.contentKind, 'tunnels');
     assert.equal(byId.amnezia.count, 2);
-    assert.deepEqual(byId.amnezia.entries, ['one.conf', 'two.conf']);
-    assert.equal(byId.mix.kind, 'mixed');
+    assert.deepEqual(byId.amnezia.entries, []);
+    assert.equal(byId.mix.contentKind, 'mixed');
     assert.equal(byId.mix.count, 3);
   });
 
-  test('only ENABLED providers contribute outbounds and tags', () => {
+  test('only ENABLED SUBSCRIPTION providers contribute outbounds and tags', () => {
     const root = buildDiscoveryRoot();
     const none = readProviders({}, root);
     assert.equal(none.outbounds.length, 0);
     assert.deepEqual(none.tags, []);
 
-    const read = readProviders({vpnd: {enabled: true}}, root);
+    // Enabled but WITHOUT a kind: still nothing (a folder must say what it is).
+    const unknownKind = readProviders({vpnd: {enabled: true}}, root);
+    assert.equal(unknownKind.tags.length, 0);
+
+    const read = readProviders({vpnd: {enabled: true, kind: 'subscription'}}, root);
     assert.equal(read.tags.length, 3);
     assert.equal(read.tags.includes(FI_TAG), true);
   });
@@ -135,7 +142,10 @@ describe('discovery of provider folders', () => {
       fs.writeFileSync(path.join(root, id, 'links.txt'), text);
     }
 
-    const read = readProviders({one: {enabled: true}, two: {enabled: true}}, root);
+    const read = readProviders(
+      {one: {enabled: true, kind: 'subscription'}, two: {enabled: true, kind: 'subscription'}},
+      root,
+    );
     assert.deepEqual(read.collisions, [{tag: FI_TAG, providers: ['one', 'two']}]);
     // Display keeps one copy of the name, the first provider in identifier order.
     assert.deepEqual(read.tags, [FI_TAG]);
@@ -152,7 +162,10 @@ describe('discovery of provider folders', () => {
     }
 
     const read = readProviders(
-      {one: {enabled: true}, two: {enabled: true, suffix: 'WS'}},
+      {
+        one: {enabled: true, kind: 'subscription'},
+        two: {enabled: true, kind: 'subscription', suffix: 'WS'},
+      },
       root,
     );
     assert.deepEqual(read.collisions, []);

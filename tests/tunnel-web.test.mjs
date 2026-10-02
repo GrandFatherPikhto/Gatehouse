@@ -26,7 +26,7 @@ async function startEditor() {
   fs.mkdirSync(tunnelDir, {recursive: true});
   fs.copyFileSync(PROVIDER_CONF, path.join(tunnelDir, 'AustriaGrazS4.conf'));
   const settingsFile = writeSettings(dir, {
-    providers: {vpnd: {enabled: true}, hidemyname: {enabled: true}},
+    providers: {vpnd: {enabled: true, kind: 'subscription'}, hidemyname: {enabled: true, kind: 'awg'}},
   });
   const stateDir = path.join(dir, 'state');
 

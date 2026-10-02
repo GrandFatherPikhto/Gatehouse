@@ -221,19 +221,17 @@ export function providerDiagnosis(provider) {
 /**
  * Human readable kind of a provider folder, for its tree label.
  *
- * @param {unknown} kind
+ * @param {unknown} kind `subscription`|`awg`|null
  * @returns {string}
  */
 function providerKindLabel(kind) {
   switch (kind) {
-    case 'links':
-      return 'ссылки';
-    case 'tunnels':
+    case 'subscription':
+      return 'подписка';
+    case 'awg':
       return 'туннели';
-    case 'mixed':
-      return 'ссылки+туннели';
     default:
-      return 'нет';
+      return 'вид не задан';
   }
 }
 
@@ -319,8 +317,8 @@ export function treeSpec(options = {}) {
   // A disabled provider says so — the whole point of the flag is that the owner
   // notices at a glance which folders do NOT feed `config.json`. Unreadable
   // entries are not nodes (many have no folder to open): they are counted in the
-  // mark of the «Провайдеры» node and listed in the panel.
-  const providerNodes = providers.map((provider) => {
+  // mark of the «Выходы» node and listed in its panel.
+  const providerNode = (provider) => {
     const name =
       typeof provider.label === 'string' && provider.label.length > 0
         ? provider.label
@@ -331,50 +329,82 @@ export function treeSpec(options = {}) {
     if (diagnosis !== '') marks.push(diagnosis);
     const mark = marks.join('  ');
     const label = `${name} (${providerKindLabel(provider.kind)}, ${provider.count})`;
-    return node(`provider:${String(provider.id)}`, mark === '' ? label : `${label}  ${mark}`, 'provider', {
-      stale: diagnosis !== '',
-      detail: String(provider.id),
-      mark,
-    });
-  });
+    return node(
+      `provider:${String(provider.id)}`,
+      mark === '' ? label : `${label}  ${mark}`,
+      'provider',
+      {stale: diagnosis !== '', detail: String(provider.id), mark},
+    );
+  };
 
-  const noProviders = providers.length === 0;
-  const providersTitle = `Провайдеры (${providers.length})`;
-  const rootMarks = [];
-  if (noProviders) rootMarks.push('[!] провайдеры не найдены');
-  if (unread.length > 0) rootMarks.push(`[!] не прочиталось: ${unread.length}`);
-  const providersMark = rootMarks.join('  ');
+  const subscriptions = providers.filter((provider) => provider.kind === 'subscription');
+  const awg = providers.filter((provider) => provider.kind === 'awg');
+  const found = providers.filter((provider) => provider.kind === null);
+
+  const foundNode = node(
+    'outputs:found',
+    `Найдено, не подключено (${found.length})`,
+    'found',
+    {
+      children: found.map((provider) => {
+        const name =
+          typeof provider.label === 'string' && provider.label.length > 0
+            ? provider.label
+            : String(provider.id);
+        return node(`provider:${String(provider.id)}`, `${name} — ${provider.hint}`, 'provider', {
+          detail: String(provider.id),
+          mark: String(provider.hint ?? ''),
+        });
+      }),
+    },
+  );
+
+  // «Выходы» HAS a page of its own (the former root Providers panel), so it is a
+  // link AND the parent of the two lists and «Найдено». Its mark carries the
+  // unread count, exactly like the old «Провайдеры» node did.
+  const outputsMark = unread.length > 0 ? `[!] не прочиталось: ${unread.length}` : '';
+  const outputs = node('providers', 'Выходы', 'outputs', {
+    stale: outputsMark !== '',
+    detail: String(options.providersRoot ?? ''),
+    mark: outputsMark,
+    children: [
+      node('outputs:subscriptions', `Подписки (${subscriptions.length})`, 'subscriptions', {
+        children: subscriptions.map(providerNode),
+      }),
+      node('outputs:tunnels', `Туннели AmneziaWG (${awg.length})`, 'tunnels', {
+        children: awg.map(providerNode),
+      }),
+      foundNode,
+    ],
+  });
 
   return node('root', options.title ?? 'webui.json', 'root', {
     children: [
-      node('providers', providersTitle, 'providers', {
-        stale: providersMark !== '',
-        detail: String(options.providersRoot ?? ''),
-        mark: providersMark,
-        children: providerNodes,
+      // «Шлюз» — what the clients get: the proxies and the routes. A GROUP, so it
+      // is a heading over its two child links and has no page of its own.
+      node('gateway', 'Шлюз', 'gateway', {
+        group: true,
+        children: [
+          node('proxies', `Прокси (${proxyNodes.length})`, 'proxies', {children: proxyNodes}),
+          node('routes', `Маршруты (${routeNodes.length})`, 'routes', {children: routeNodes}),
+        ],
       }),
-      // «Настройки» is a GROUP: it has no page of its own, so the tree draws it
-      // as a heading. Everything that edits sing-box lives on ONE child panel
-      // (Общие + DNS + вывод собраны вместе), and the amnezia child holds the
-      // directory the tunnel configs are written to.
+      outputs,
+      // «Настройки» is a GROUP: it has no page, only the Sing-Box and AmneziaWG
+      // children. Everything that edits sing-box lives on ONE child panel.
       node('settings', 'Настройки', 'settings', {
         group: true,
         children: [
-          node('singbox', 'Настройки Sing-Box', 'singbox'),
-          node('amnezia', 'Настройки Amnezia', 'amnezia'),
+          node('singbox', 'Sing-Box', 'singbox'),
+          node('amnezia', 'AmneziaWG', 'amnezia'),
         ],
       }),
-      node('proxies', `Прокси (${proxyNodes.length})`, 'proxies', {children: proxyNodes}),
-      node('routes', `Маршруты Sing-Box (${routeNodes.length})`, 'routes', {children: routeNodes}),
-      // The host layer. It edits nothing, so the node carries no stale mark. Like
-      // «Настройки» it is a GROUP without a page of its own, and the two former
-      // tabs are its CHILDREN now, so the tree draws them as links. The watchdog
-      // went away with the watchdog itself.
-      node('system', 'Система', 'system', {
+      // The host layer, renamed to «Службы»: a GROUP over the two former tabs.
+      node('system', 'Службы', 'system', {
         group: true,
         children: [
           node('system:singbox', 'Sing-Box', 'system'),
-          node('system:amnezia', 'Amnezia', 'system'),
+          node('system:amnezia', 'AmneziaWG', 'system'),
         ],
       }),
     ],

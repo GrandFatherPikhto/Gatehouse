@@ -1,0 +1,26 @@
+<%# Recursive tree renderer: any depth. A GROUP node is a heading without a link
+    (`group: true`); every other node is a link to its `/panel/<key>`. A broken
+    reference is a mark on the node, never a save blocker. `full` carries the
+    untruncated mark (the whole list) in the `title` attribute, so a capped label
+    stays readable without hiding anything. %>
+<ul class="tree">
+  <% for (const item of nodes) { %>
+    <li class="<%= item.stale ? 'stale' : '' %>">
+      <% if (item.group) { %>
+        <span class="group"<%- item.full ? ` title="${item.full}"` : '' %>><%= item.title %></span>
+      <% } else { %>
+        <% const active = item.key === key || String(key).startsWith(`${item.key}:`); %>
+        <a href="<%= '/panel/' + encodeURIComponent(item.key) %>"
+           hx-get="/panel/<%= encodeURIComponent(item.key) %>"
+           hx-target="#panel"
+           hx-swap="innerHTML"
+           hx-push-url="true"
+           <%- item.full ? `title="${item.full}"` : '' %>
+           class="<%= active ? 'active' : '' %>"><%= item.title %></a>
+      <% } %>
+      <% if (item.children && item.children.length > 0) { %>
+        <%- include('tree-nodes', {nodes: item.children, key}) %>
+      <% } %>
+    </li>
+  <% } %>
+</ul>

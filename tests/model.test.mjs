@@ -40,6 +40,24 @@ function openDocument(document, options = {}) {
 }
 
 /**
+ * Finds the first node of a kind anywhere in the tree. The tree is recursive
+ * since the «Шлюз · Выходы · Настройки · Службы» restructure, so a one-level
+ * `children.find` no longer reaches a nested node.
+ *
+ * @param {Record<string, unknown>} node
+ * @param {string} kind
+ * @returns {Record<string, unknown>|null}
+ */
+function findTreeKind(node, kind) {
+  if (node.kind === kind) return node;
+  for (const child of node.children ?? []) {
+    const found = findTreeKind(child, kind);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+/**
  * A minimal flat document: one proxy, one route, no profile envelope.
  *
  * @param {Record<string, unknown>} [overrides]
@@ -49,7 +67,7 @@ function flatDocument(overrides = {}) {
   return {
     version: DOCUMENT_VERSION,
     listen_ip: '127.0.0.1',
-    providers: {vpnd: {enabled: true}},
+    providers: {vpnd: {enabled: true, kind: 'subscription'}},
     output_file: 'config.json',
     urltest: {url: 'https://gstatic.com', interval: '3m', tolerance: 50},
     log: {level: 'info', timestamp: true},
@@ -298,7 +316,9 @@ describe('migration of the version-1 envelope (NEW)', () => {
 
     const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
 
-    assert.deepEqual(model.document.providers, {vpnd: {enabled: true}});
+    assert.deepEqual(model.document.providers, {
+      vpnd: {enabled: true, kind: 'subscription'},
+    });
     assert.ok(!Object.hasOwn(model.document, 'links_file'));
     assert.ok(model.lastMigration.warnings.some((warning) => /links_file/.test(warning)));
     assert.ok(
@@ -513,8 +533,8 @@ describe('stale references and the tree', () => {
     writeLinksFile(dir);
 
     const tree = model.treeSpec();
-    const proxies = tree.children.find((child) => child.kind === 'proxies');
-    const routes = tree.children.find((child) => child.kind === 'routes');
+    const proxies = findTreeKind(tree, 'proxies');
+    const routes = findTreeKind(tree, 'routes');
 
     assert.equal(proxies.children[0].stale, true);
     assert.match(proxies.children[0].mark, /нет в списке серверов: 🇩🇪 Germany - Berlin/);
@@ -528,7 +548,7 @@ describe('stale references and the tree', () => {
     );
     writeLinksFile(dir);
 
-    const routes = model.treeSpec().children.find((child) => child.kind === 'routes');
+    const routes = findTreeKind(model.treeSpec(), 'routes');
     assert.equal(routes.children[0].stale, true);
     assert.match(routes.children[0].mark, /неизвестный outbound: nope-tag/);
 
@@ -548,31 +568,44 @@ describe('stale references and the tree', () => {
     assert.doesNotThrow(() => model.save());
   });
 
-  test('the tree has the nodes of the task, flat since version 2', () => {
+  test('the tree has the groups of the task, recursive since 02.10', () => {
     const {dir, model} = openDocument(flatDocument());
     writeLinksFile(dir);
 
-    const kinds = model.treeSpec().children.map((child) => child.kind);
+    const root = model.treeSpec();
+    assert.deepEqual(
+      root.children.map((child) => child.kind),
+      ['gateway', 'outputs', 'settings', 'system'],
+    );
 
-    assert.deepEqual(kinds, ['providers', 'settings', 'proxies', 'routes', 'system']);
-    assert.ok(!kinds.includes('profiles'));
-    assert.ok(!kinds.includes('links'));
+    // «Шлюз» is a GROUP over the proxies and the routes.
+    const gateway = findTreeKind(root, 'gateway');
+    assert.equal(gateway.group, true);
+    assert.deepEqual(gateway.children.map((child) => child.kind), ['proxies', 'routes']);
 
-    // «Настройки» is a GROUP: it has no page, only the two child panels.
-    const settings = model.treeSpec().children.find((child) => child.kind === 'settings');
+    // «Выходы» HAS a page (key `providers`) and holds the two lists and «Найдено».
+    const outputs = findTreeKind(root, 'outputs');
+    assert.equal(outputs.key, 'providers');
+    assert.equal(outputs.group, false);
+    assert.deepEqual(
+      outputs.children.map((child) => child.kind),
+      ['subscriptions', 'tunnels', 'found'],
+    );
+
+    // «Настройки» is a GROUP: no page, only the two child panels.
+    const settings = findTreeKind(root, 'settings');
     assert.deepEqual(settings.children.map((child) => child.kind), ['singbox', 'amnezia']);
     assert.equal(settings.group, true);
+    assert.deepEqual(settings.children.map((child) => child.title), ['Sing-Box', 'AmneziaWG']);
 
-    // «Система» is a GROUP like «Настройки»: no page of its own, two child nodes.
-    // The journal, the server test and the watchdog live INSIDE the sing-box child
-    // (`system:singbox`), not as tree nodes of their own.
-    const system = model.treeSpec().children.find((child) => child.kind === 'system');
+    // «Службы» is a GROUP like «Настройки»: two child nodes.
+    const system = findTreeKind(root, 'system');
     assert.equal(system.group, true);
     assert.deepEqual(
       system.children.map((child) => [child.key, child.title]),
       [
         ['system:singbox', 'Sing-Box'],
-        ['system:amnezia', 'Amnezia'],
+        ['system:amnezia', 'AmneziaWG'],
       ],
     );
   });
@@ -595,8 +628,15 @@ describe('honest tree labels: the cap and the provider diagnoses (NEW)', () => {
    * @returns {Record<string, unknown>}
    */
   function providerNode(model, name) {
-    const providers = model.treeSpec().children.find((child) => child.kind === 'providers');
-    const provider = providers.children.find((child) => child.detail === name);
+    const walk = (node) => {
+      if (node.kind === 'provider' && node.detail === name) return node;
+      for (const child of node.children ?? []) {
+        const found = walk(child);
+        if (found !== null) return found;
+      }
+      return null;
+    };
+    const provider = walk(model.treeSpec());
     assert.ok(provider, `provider '${name}' must be rendered`);
     return provider;
   }
@@ -608,10 +648,7 @@ describe('honest tree labels: the cap and the provider diagnoses (NEW)', () => {
     );
     writeLinksFile(dir);
 
-    const proxyNode = model
-      .treeSpec()
-      .children.find((child) => child.kind === 'proxies')
-      .children[0];
+    const proxyNode = findTreeKind(model.treeSpec(), 'proxies').children[0];
 
     assert.equal(LABEL_NAMES_CAP, 3);
     assert.ok(proxyNode.mark.startsWith('[!] нет в списке серверов: 20 — '));
@@ -623,7 +660,9 @@ describe('honest tree labels: the cap and the provider diagnoses (NEW)', () => {
   });
 
   test('a found but disabled provider is a tree node marked выключен', () => {
-    const {dir, model} = openDocument(flatDocument({providers: {vpnd: {enabled: false}}}));
+    const {dir, model} = openDocument(
+      flatDocument({providers: {vpnd: {enabled: false, kind: 'subscription'}}}),
+    );
     writeLinksFile(dir);
 
     assert.equal(model.providersInfo().providers[0].state, 'ok');
@@ -642,10 +681,11 @@ describe('honest tree labels: the cap and the provider diagnoses (NEW)', () => {
     assert.equal(info.unread[0].state, 'missing');
     assert.equal(info.unread[0].forget, true);
 
-    const providers = model.treeSpec().children.find((child) => child.kind === 'providers');
-    assert.equal(providers.stale, true);
-    assert.match(providers.mark, /не прочиталось: 1/);
-    assert.deepEqual(providers.children, []);
+    const outputs = findTreeKind(model.treeSpec(), 'outputs');
+    assert.equal(outputs.stale, true);
+    assert.match(outputs.mark, /не прочиталось: 1/);
+    // No provider node under any of the three lists.
+    assert.equal(outputs.children.reduce((count, child) => count + child.children.length, 0), 0);
   });
 
   test('a links.txt that is a directory leaves the folder empty, not readable', () => {
@@ -674,11 +714,11 @@ describe('honest tree labels: the cap and the provider diagnoses (NEW)', () => {
     assert.match(info.unread[0].error, /валидных VLESS-ссылок/);
   });
 
-  test('no found provider marks the providers node', () => {
+  test('an empty root leaves «Выходы» unmarked and the lists empty', () => {
     const {model} = openDocument(flatDocument({providers: {}}));
-    const providers = model.treeSpec().children.find((child) => child.kind === 'providers');
-    assert.equal(providers.stale, true);
-    assert.match(providers.mark, /провайдеры не найдены/);
+    const outputs = findTreeKind(model.treeSpec(), 'outputs');
+    assert.equal(outputs.stale, false);
+    assert.deepEqual(outputs.children.map((child) => child.children.length), [0, 0, 0]);
   });
 
   test('a read folder that misses names keeps the per-proxy fourth message', () => {
@@ -697,13 +737,10 @@ describe('honest tree labels: the cap and the provider diagnoses (NEW)', () => {
     writeLinksFile(dir);
 
     assert.equal(model.providersInfo().providers[0].state, 'ok');
-    const providers = model.treeSpec().children.find((child) => child.kind === 'providers');
-    assert.equal(providers.stale, false, 'a read folder is not an error in itself');
+    const outputs = findTreeKind(model.treeSpec(), 'outputs');
+    assert.equal(outputs.stale, false, 'a read folder is not an error in itself');
 
-    const proxyNode = model
-      .treeSpec()
-      .children.find((child) => child.kind === 'proxies')
-      .children[0];
+    const proxyNode = findTreeKind(model.treeSpec(), 'proxies').children[0];
     assert.match(proxyNode.mark, /нет в списке серверов: Gone-1, Gone-2/);
   });
 });
@@ -831,9 +868,12 @@ describe('migration of the sources field into providers (NEW)', () => {
     const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
 
     assert.ok(!Object.hasOwn(model.document, 'sources'), 'the field is gone from the document');
-    assert.deepEqual(model.document.providers, {vpnd: {enabled: true}});
+    assert.deepEqual(model.document.providers, {
+      vpnd: {enabled: true, kind: 'subscription'},
+    });
     assert.match(model.providersMigrationNotice, /поле sources заменено на providers/);
-    assert.equal(model.providersInfo().providers[0].kind, 'links');
+    assert.equal(model.providersInfo().providers[0].kind, 'subscription');
+    assert.equal(model.providersInfo().providers[0].contentKind, 'links');
     assert.doesNotThrow(() => model.save(), 'the migrated document passes the schema');
   });
 
@@ -855,7 +895,9 @@ describe('migration of the sources field into providers (NEW)', () => {
 
     const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
 
-    assert.deepEqual(model.document.providers, {vpnd: {enabled: true}});
+    assert.deepEqual(model.document.providers, {
+      vpnd: {enabled: true, kind: 'subscription'},
+    });
     assert.match(model.providersMigrationNotice, /перенесите/);
   });
 
@@ -869,12 +911,18 @@ describe('migration of the sources field into providers (NEW)', () => {
     fs.writeFileSync(file, canonicalJson(flatDocument({providers: {}})), 'utf8');
     const model = new ProjectModel({path: file, stateDir: path.join(dir, 'state')});
 
+    // Enabling needs a kind first; the folder is a subscription.
+    model.setProviderKind('vpnd', 'subscription');
     model.setProviderEnabled('vpnd', true);
-    assert.deepEqual(model.getProvider('vpnd'), {enabled: true});
+    assert.deepEqual(model.getProvider('vpnd'), {kind: 'subscription', enabled: true});
     assert.ok(fs.existsSync(links), "the owner's links file is untouched");
 
     model.setProviderLabel('vpnd', 'Directly');
-    assert.deepEqual(model.getProvider('vpnd'), {enabled: true, label: 'Directly'});
+    assert.deepEqual(model.getProvider('vpnd'), {
+      kind: 'subscription',
+      enabled: true,
+      label: 'Directly',
+    });
     assert.throws(
       () => model.setProviderLabel('vpnd', 'a\u0000b'),
       (error) => error instanceof ConfigError && /управляющих символов/.test(error.message),
@@ -889,6 +937,7 @@ describe('migration of the sources field into providers (NEW)', () => {
       () => model.forgetProvider('vpnd'),
       (error) => error instanceof ConfigError && /найден на диске/.test(error.message),
     );
+    model.setProviderKind('ghost', 'subscription');
     model.setProviderEnabled('ghost', true);
     model.forgetProvider('ghost');
     assert.equal(model.getProvider('ghost'), null);

@@ -123,6 +123,14 @@ export function applyRoute(ctx, route, req) {
     }
     case '/provider': {
       const id = String(body.id ?? '').trim();
+      const wantsEnabled = forms.checkbox(body.enabled);
+      // The kind comes first, but ONLY when the provider stays disabled: a kind
+      // may not be changed while it is enabled, so applying it on an enabling
+      // submit would be refused for nothing.
+      if (Object.hasOwn(body, 'kind') && !wantsEnabled) {
+        const kind = body.kind === 'subscription' || body.kind === 'awg' ? body.kind : null;
+        model.setProviderKind(id, kind);
+      }
       model.setProviderLabel(id, String(body.label ?? ''));
       if (Object.hasOwn(body, 'suffix')) {
         model.setProviderSuffix(id, String(body.suffix ?? ''));

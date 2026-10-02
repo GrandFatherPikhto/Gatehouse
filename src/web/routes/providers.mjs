@@ -31,6 +31,21 @@ export function registerProviderRoutes(app, ctx) {
     ),
   );
 
+  // «Подключить как подписку/туннели» on the «Найдено» list: sets ONLY the kind,
+  // leaving `enabled` false so the owner ticks it on the list afterwards.
+  app.post(
+    '/provider/kind',
+    mutation(ctx, 'outputs:found', (req) => {
+      const id = String(req.body.id ?? '').trim();
+      const kind = req.body.kind === 'awg' ? 'awg' : req.body.kind === 'subscription' ? 'subscription' : null;
+      ctx.model.setProviderKind(id, kind);
+      return {
+        key: 'outputs:found',
+        notice: `Провайдеру '${id}' задан вид папки — не забудьте сохранить`,
+      };
+    }),
+  );
+
   app.post(
     '/provider/enabled',
     mutation(ctx, 'providers', (req) => {

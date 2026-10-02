@@ -307,6 +307,19 @@ preview with the policy-routing switch.
   vpnd's «VLESS TCP» (`ap10`, `type=raw`, `security=tls`), which arrives without
   `flow` although the server requires Vision: set flow → Vision once, and it
   survives subscription updates.
+* **A folder says what it IS, the owner chooses it.** `providers.<id>.kind` is
+  `subscription` (only `links.txt` feeds Sing-Box) or `awg` (only `*.conf` feeds
+  the tunnels). A folder with no kind is «found, not connected»: it is listed with
+  a hint («looks like a subscription: links.txt, 156 links») and two buttons
+  «Подключить как подписку/туннели», but it feeds nothing until a kind is chosen.
+  The foreign half of a mixed folder is warned about and left unread. The kind is
+  inferred ONCE from the content when an older document is opened, and the owner
+  is asked to save. The kind may only be changed while the provider is disabled.
+* **The tree is «Шлюз · Выходы · Настройки · Службы».** «Шлюз» groups Прокси and
+  Маршруты; «Выходы» (a page of its own) holds Подписки, Туннели AmneziaWG and
+  Найдено; «Настройки» groups Sing-Box and AmneziaWG; «Службы» groups the same two
+  (check/restart/rollback/journal/tests and the tunnels). Panel keys are unchanged,
+  so old bookmarks keep working.
 * **A tunnel is enabled with «включить», and only then does it become a proxy.**
   The normaliser `src/core/normalize.mjs` is a pure function: it adds `Table = off`,
   drops `DNS =`, and copies `AllowedIPs` plus the obfuscation (`Jc/Jmin/Jmax`,

@@ -58,7 +58,9 @@ export const DEFAULT_LINKS = `${[
  */
 export const DEFAULT_SETTINGS_BODY = {
   listen_ip: '127.0.0.1',
-  providers: {[LINKS_PROVIDER]: {enabled: true}},
+  // Since the «folder kind» task a provider must SAY what it is before it feeds
+  // the build; a links folder is a subscription.
+  providers: {[LINKS_PROVIDER]: {enabled: true, kind: 'subscription'}},
   output_file: 'config.json',
   exclude_from_auto: ['🇷🇺'],
   urltest: {url: 'https://gstatic.com', interval: '3m', tolerance: 50},

@@ -193,7 +193,7 @@ async function startEditor(options = {}) {
   fs.copyFileSync(PROVIDER_CONF, path.join(tunnelDir, 'AustriaGrazS4.conf'));
 
   const settingsFile = writeSettings(dir, {
-    providers: {vpnd: {enabled: true}, hidemyname: {enabled: true}},
+    providers: {vpnd: {enabled: true, kind: 'subscription'}, hidemyname: {enabled: true, kind: 'awg'}},
     proxies:
       options.withProxy === false
         ? [{tag: 'main-socks', type: 'socks', port: 54321}]

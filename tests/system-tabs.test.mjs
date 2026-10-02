@@ -1,4 +1,4 @@
-// The «Система» children. The host layer is a GROUP without a page of its own,
+// The «Службы» children. The host layer is a GROUP without a page of its own,
 // drawn by the tree as a heading over TWO child nodes, exactly like «Настройки».
 // A child is carried by the panel KEY: `system:singbox` (the first one) and
 // `system:amnezia`. Those tests pin the split: sing-box things must not appear on
@@ -45,7 +45,7 @@ async function startEditor() {
   fs.copyFileSync(PROVIDER_CONF, path.join(tunnelDir, 'AustriaGrazS4.conf'));
 
   const settingsFile = writeSettings(dir, {
-    providers: {vpnd: {enabled: true}, hidemyname: {enabled: true}},
+    providers: {vpnd: {enabled: true, kind: 'subscription'}, hidemyname: {enabled: true, kind: 'awg'}},
     proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
   });
   const sudoers = writeSudoers(path.join(dir, 'sudoers-gatehouse'), ['hmn-graz4']);
@@ -97,16 +97,16 @@ function pushed(panel) {
   return header === null ? null : decodeURIComponent(header);
 }
 
-describe('the «Система» children (NEW)', () => {
-  test('the tree draws «Система» as a group with two child links, and no tab strip', async () => {
+describe('the «Службы» children (NEW)', () => {
+  test('the tree draws «Службы» as a group with two child links, and no tab strip', async () => {
     const editor = await startEditor();
     try {
       const html = await (await fetch(`${editor.base}/panel/system:singbox`)).text();
 
       // The group has no page: it is a heading, never a link that leads nowhere.
-      assert.match(html, /<span class="group"[^>]*>Система<\/span>/);
+      assert.match(html, /<span class="group"[^>]*>Службы<\/span>/);
       assert.match(html, />Sing-Box<\/a>/);
-      assert.match(html, />Amnezia<\/a>/);
+      assert.match(html, />AmneziaWG<\/a>/);
       // The old in-panel navigation is gone; the tree carries the two children.
       assert.doesNotMatch(html, /class="tab/);
       assert.doesNotMatch(html, /nav class="tabs"/);
@@ -144,7 +144,7 @@ describe('the «Система» children (NEW)', () => {
 
       const html = await (await fetch(`${editor.base}/panel/system:amnezia`)).text();
 
-      assert.match(html, /class="active"[^>]*>Amnezia</);
+      assert.match(html, /class="active"[^>]*>AmneziaWG</);
       assert.match(html, /gatehouse-tunnel@hmn-graz4/);
       assert.match(html, /hx-post="\/tunnel\/toggle"/);
       assert.doesNotMatch(html, /hx-post="\/check"/);
@@ -180,7 +180,7 @@ describe('the «Система» children (NEW)', () => {
       const expected = {
         system: 'Sing-Box',
         'system:singbox': 'Sing-Box',
-        'system:amnezia': 'Amnezia',
+        'system:amnezia': 'AmneziaWG',
         'system:watchdog': 'Sing-Box',
       };
       for (const [key, child] of Object.entries(expected)) {

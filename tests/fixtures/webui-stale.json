@@ -3,7 +3,8 @@
   "listen_ip": "127.0.0.1",
   "providers": {
     "vpnd": {
-      "enabled": true
+      "enabled": true,
+      "kind": "subscription"
     }
   },
   "output_file": "config.json",

@@ -1,0 +1,70 @@
+<%# One list under «Выходы»: «Подписки», «Туннели AmneziaWG» or «Найдено, не
+    подключено». A folder is only read; here the owner ticks «включён» and, for a
+    folder with no chosen kind, connects it as a subscription or as tunnels. %>
+<h2><%= panel.title %></h2>
+
+<% if (panel.collisionText) { %>
+  <p class="error"><%= panel.collisionText %></p>
+<% } %>
+
+<% if (panel.providers.length === 0) { %>
+  <p class="hint">
+    Пусто: в каталоге нет папок этого вида. Задать вид папке можно в «Найдено, не
+    подключено».
+  </p>
+<% } else { %>
+  <table class="list">
+    <thead>
+      <tr><th>провайдер</th><th>имя папки</th><th>записей</th><th>включён</th></tr>
+    </thead>
+    <tbody>
+      <% for (const provider of panel.providers) { %>
+        <% const key = `provider:${provider.id}`; %>
+        <tr>
+          <td>
+            <a href="/panel/<%= encodeURIComponent(key) %>"
+               hx-get="/panel/<%= encodeURIComponent(key) %>"
+               hx-target="#panel"
+               hx-swap="innerHTML"
+               hx-push-url="true"><%= provider.displayName %></a>
+            <% if (provider.skippedCount > 0) { %>
+              <br><span class="error">пропущено: <%= provider.skippedCount %></span>
+            <% } %>
+          </td>
+          <td><code><%= provider.id %></code></td>
+          <td><%= provider.count %></td>
+          <td>
+            <% if (panel.section === 'found') { %>
+              <%= provider.hint %>
+              <form class="inline" hx-post="/provider/kind" hx-target="#panel" hx-swap="innerHTML" method="post" action="/provider/kind">
+                <input type="hidden" name="id" value="<%= provider.id %>">
+                <input type="hidden" name="kind" value="subscription">
+                <button type="submit" class="secondary">Подключить как подписку</button>
+              </form>
+              <form class="inline" hx-post="/provider/kind" hx-target="#panel" hx-swap="innerHTML" method="post" action="/provider/kind">
+                <input type="hidden" name="id" value="<%= provider.id %>">
+                <input type="hidden" name="kind" value="awg">
+                <button type="submit" class="secondary">Подключить как туннели</button>
+              </form>
+            <% } else { %>
+              <form class="inline" hx-post="/provider/enabled" hx-target="#panel" hx-swap="innerHTML" method="post" action="/provider/enabled">
+                <input type="hidden" name="id" value="<%= provider.id %>">
+                <label class="check">
+                  <input type="checkbox" name="enabled" value="1" <%= provider.enabled ? 'checked' : '' %>
+                         hx-post="/provider/enabled" hx-trigger="change"
+                         hx-target="#panel" hx-swap="innerHTML" hx-include="closest form">
+                  включён
+                </label>
+              </form>
+            <% } %>
+          </td>
+        </tr>
+      <% } %>
+    </tbody>
+  </table>
+<% } %>
+
+<p>
+  <a href="/panel/providers" hx-get="/panel/providers" hx-target="#panel"
+     hx-swap="innerHTML" hx-push-url="true">← ко всем выходам</a>
+</p>

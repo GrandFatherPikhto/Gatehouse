@@ -44,7 +44,9 @@ async function startEditor(overrides = {}) {
   fs.writeFileSync(path.join(tunnelDir, 'de.conf'), 'x', 'utf8');
 
   const settingsFile = writeSettings(dir, {
-    providers: {vpnd: {enabled: true}},
+    // vpnd is a subscription, hidemyname a tunnel source; `second` has NO record
+    // on purpose, so it lands in «Найдено, не подключено».
+    providers: {vpnd: {enabled: true, kind: 'subscription'}, hidemyname: {kind: 'awg'}},
     ...overrides,
   });
 
@@ -94,26 +96,26 @@ async function panel(editor, key) {
 }
 
 describe('the providers panel lists what was discovered (NEW)', () => {
-  test('the found folders are listed and there is no path field anywhere', async () => {
+  test('«Выходы» links to the three lists and names no path', async () => {
     const editor = await startEditor();
     try {
       const html = await panel(editor, 'providers');
 
-      assert.match(html, /Найденные провайдеры/);
-      assert.match(html, /provider%3Avpnd/, 'a found provider links to its own panel');
-      assert.match(html, /provider%3Asecond/, 'a folder without a record is still listed');
-      assert.match(html, /provider%3Ahidemyname/);
-      assert.match(html, /Sing-Box/, 'a links folder is labelled by what it feeds');
-      assert.match(html, /Amnezia/, 'a *.conf folder is labelled Amnezia');
-      assert.match(html, /hx-post="\/provider\/enabled"/, 'the tick is an action form');
-
-      // The browser never names a path or a kind: the old add form is gone.
+      assert.match(html, /Выходы/);
+      assert.match(html, /outputs%3Asubscriptions/);
+      assert.match(html, /outputs%3Atunnels/);
+      assert.match(html, /outputs%3Afound/);
       assert.doesNotMatch(html, /name="path"/);
-      assert.doesNotMatch(html, /name="kind"/);
       assert.doesNotMatch(html, /name="action"\s+value="add"/);
 
-      // The servers of a provider belong to ITS panel, not to the summary list.
-      assert.doesNotMatch(html, new RegExp(FI_TAG.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      const subs = await panel(editor, 'outputs:subscriptions');
+      assert.match(subs, /provider%3Avpnd/);
+      assert.match(subs, /hx-post="\/provider\/enabled"/, 'the tick is an action form');
+
+      const found = await panel(editor, 'outputs:found');
+      assert.match(found, /provider%3Asecond/);
+      assert.match(found, /похоже на подписку/, 'a links folder is described');
+      assert.match(found, /hx-post="\/provider\/kind"/, 'connect as a kind');
     } finally {
       await editor.close();
     }
@@ -122,13 +124,16 @@ describe('the providers panel lists what was discovered (NEW)', () => {
   test('the tick flips a provider and says so', async () => {
     const editor = await startEditor();
     try {
-      const on = await post(editor.base, '/provider/enabled', {id: 'second', enabled: '1'});
-      assert.match(await on.text(), /Провайдер[^<]*second[^<]*включён/);
-      assert.deepEqual(editor.model.getProvider('second'), {enabled: true});
+      const off = await post(editor.base, '/provider/enabled', {id: 'vpnd'});
+      assert.match(await off.text(), /Провайдер[^<]*vpnd[^<]*выключен/);
+      assert.deepEqual(editor.model.getProvider('vpnd'), {
+        kind: 'subscription',
+        enabled: false,
+      });
 
-      const off = await post(editor.base, '/provider/enabled', {id: 'second'});
-      assert.match(await off.text(), /Провайдер[^<]*second[^<]*выключен/);
-      assert.deepEqual(editor.model.getProvider('second'), {enabled: false});
+      const on = await post(editor.base, '/provider/enabled', {id: 'vpnd', enabled: '1'});
+      assert.match(await on.text(), /Провайдер[^<]*vpnd[^<]*включён/);
+      assert.deepEqual(editor.model.getProvider('vpnd'), {kind: 'subscription', enabled: true});
     } finally {
       await editor.close();
     }
@@ -139,10 +144,13 @@ describe('the providers panel lists what was discovered (NEW)', () => {
     try {
       assert.equal(editor.model.generate().stats.servers, 3, 'only the ticked vpnd contributes');
 
-      await post(editor.base, '/provider/enabled', {id: 'second', enabled: '1'});
-      await post(editor.base, '/save', {panel: 'providers'});
+      editor.model.setProviderEnabled('vpnd', false);
+      editor.model.save();
+      assert.throws(() => editor.model.generate(), /не найдено ни одного включённого провайдера/);
 
-      assert.equal(editor.model.generate().stats.servers, 4, 'the ticked folder joins in');
+      editor.model.setProviderEnabled('vpnd', true);
+      editor.model.save();
+      assert.equal(editor.model.generate().stats.servers, 3, 'the ticked folder joins in');
     } finally {
       await editor.close();
     }
@@ -155,11 +163,16 @@ describe('the provider panel edits the name and the tick (NEW)', () => {
     try {
       const saved = await post(editor.base, '/provider', {
         id: 'vpnd',
+        kind: 'subscription',
         label: 'Directly',
         enabled: '1',
       });
       assert.match(await saved.text(), /Настройки провайдера применены/);
-      assert.deepEqual(editor.model.getProvider('vpnd'), {enabled: true, label: 'Directly'});
+      assert.deepEqual(editor.model.getProvider('vpnd'), {
+        kind: 'subscription',
+        enabled: true,
+        label: 'Directly',
+      });
 
       const html = await panel(editor, 'provider:vpnd');
       assert.match(html, /name="label"/);
@@ -177,7 +190,12 @@ describe('the provider panel edits the name and the tick (NEW)', () => {
       const first = editor.model.generate();
       const before = fs.readFileSync(first.outputFile);
 
-      await post(editor.base, '/provider', {id: 'vpnd', label: 'Directly', enabled: '1'});
+      await post(editor.base, '/provider', {
+        id: 'vpnd',
+        kind: 'subscription',
+        label: 'Directly',
+        enabled: '1',
+      });
       await post(editor.base, '/save', {panel: 'provider'});
       const second = editor.model.generate();
 
@@ -205,7 +223,7 @@ describe('the provider panel edits the name and the tick (NEW)', () => {
     try {
       const html = await panel(editor, 'provider:hidemyname');
 
-      assert.match(html, /Amnezia/);
+      assert.match(html, /туннели/);
       assert.match(html, /Конфиги туннелей \(1\)/);
       assert.match(html, /Провайдер выключен/);
       assert.doesNotMatch(html, /action="\/tunnels"/, 'a disabled provider offers no rows');
@@ -217,7 +235,12 @@ describe('the provider panel edits the name and the tick (NEW)', () => {
 
 describe('what could not be read (NEW)', () => {
   test('a record whose folder is gone is listed and «Забыть» removes the record', async () => {
-    const editor = await startEditor({providers: {vpnd: {enabled: true}, ghost: {enabled: true}}});
+    const editor = await startEditor({
+      providers: {
+        vpnd: {enabled: true, kind: 'subscription'},
+        ghost: {enabled: true, kind: 'subscription'},
+      },
+    });
     try {
       const html = await panel(editor, 'providers');
       assert.match(html, /Не прочиталось/);
@@ -270,7 +293,7 @@ describe('the path-taking route is gone (NEW)', () => {
       });
 
       assert.equal(response.status, 404);
-      assert.deepEqual(editor.model.providerIds(), ['vpnd']);
+      assert.deepEqual(editor.model.providerIds().sort(), ['hidemyname', 'vpnd']);
     } finally {
       await editor.close();
     }

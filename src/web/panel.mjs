@@ -16,6 +16,7 @@ export const PANEL_KINDS = Object.freeze([
   'singbox',
   'amnezia',
   'providers',
+  'outputs',
   'proxies',
   'routes',
   'proxy',
@@ -46,15 +47,33 @@ export const BUILTIN_OUTBOUNDS = Object.freeze(['auto-select', 'direct']);
  */
 export function providerKindLabel(kind) {
   switch (kind) {
-    case 'links':
-      return 'Sing-Box';
-    case 'tunnels':
-      return 'Amnezia';
-    case 'mixed':
-      return 'Sing-Box + Amnezia';
+    case 'subscription':
+      return 'подписка';
+    case 'awg':
+      return 'туннели';
     default:
-      return '—';
+      return 'вид не задан';
   }
+}
+
+/**
+ * Adds the presentation fields every provider ROW needs: the display name, the
+ * kind label and the skipped count. Used by the «Выходы» page and its lists so
+ * the three views cannot drift apart.
+ *
+ * @param {Record<string, unknown>} provider
+ * @returns {Record<string, unknown>}
+ */
+function displayProvider(provider) {
+  return {
+    ...provider,
+    displayName:
+      typeof provider.label === 'string' && provider.label.length > 0
+        ? provider.label
+        : provider.id,
+    kindLabel: providerKindLabel(provider.kind),
+    skippedCount: (provider.skipped ?? []).length,
+  };
 }
 
 /**
@@ -323,7 +342,7 @@ export function buildPanel(model, key, extra = {}) {
     case 'singbox':
       return {
         ...base,
-        title: 'Настройки Sing-Box',
+        title: 'Sing-Box',
         values: model.generalValues(),
         // The checkbox list of «исключить из автовыбора»: the flags really present
         // among the loaded servers plus the stored ones that match nothing now.
@@ -339,7 +358,7 @@ export function buildPanel(model, key, extra = {}) {
     case 'amnezia':
       return {
         ...base,
-        title: 'Настройки Amnezia',
+        title: 'AmneziaWG',
         dir: model.amneziaDirInfo(),
         tunnels: model.amneziaRows(),
         regeneration: extra.regeneration ?? null,
@@ -347,26 +366,18 @@ export function buildPanel(model, key, extra = {}) {
 
     case 'providers': {
       const info = model.providersInfo();
+      const providers = info.providers.map(displayProvider);
       return {
         ...base,
-        title: 'Провайдеры',
-        // The kind label is a presentation decision, added here and not in the
-        // model: the reader reports `links`/`tunnels`, the panel says what they
-        // feed (Sing-Box / Amnezia). The display name is the human-readable label
-        // when there is one, the folder name otherwise.
+        title: 'Выходы',
         // The §2.2 refusal is shown as one sentence while the collision lasts.
         collisionText: collisionRefusal(info.collisions),
         info: {
           ...info,
-          providers: info.providers.map((provider) => ({
-            ...provider,
-            displayName:
-              typeof provider.label === 'string' && provider.label.length > 0
-                ? provider.label
-                : provider.id,
-            kindLabel: providerKindLabel(provider.kind),
-            skippedCount: (provider.skipped ?? []).length,
-          })),
+          providers,
+          subscriptions: providers.filter((provider) => provider.kind === 'subscription'),
+          awg: providers.filter((provider) => provider.kind === 'awg'),
+          found: providers.filter((provider) => provider.kind === null),
           unread: info.unread.map((entry) => ({
             ...entry,
             displayName:
@@ -376,6 +387,28 @@ export function buildPanel(model, key, extra = {}) {
             stateLabel: unreadStateLabel(entry.state),
           })),
         },
+      };
+    }
+
+    // The three lists under «Выходы». The key carries the section after the
+    // colon: `outputs:subscriptions`, `outputs:tunnels`, `outputs:found`.
+    case 'outputs': {
+      const info = model.providersInfo();
+      const section = name === 'tunnels' ? 'awg' : name === 'found' ? null : 'subscription';
+      const titles = {
+        subscription: 'Подписки',
+        awg: 'Туннели AmneziaWG',
+        null: 'Найдено, не подключено',
+      };
+      const providers = info.providers
+        .filter((provider) => provider.kind === section)
+        .map(displayProvider);
+      return {
+        ...base,
+        title: titles[section],
+        section: section === null ? 'found' : section,
+        providers,
+        collisionText: collisionRefusal(info.collisions),
       };
     }
 
@@ -392,9 +425,13 @@ export function buildPanel(model, key, extra = {}) {
         providerId: String(provider.id),
         displayName: label,
         enabled: provider.enabled === true,
-        // What the origin FEEDS: Sing-Box for a links file, Amnezia for a tunnel
-        // directory. It is a label of the panel, not of the folder.
+        // §3.5: the kind selector is active ONLY while the provider is disabled.
+        // Named `folderKind`, NOT `kind`: the panel dispatcher keys off `kind`.
+        folderKind: provider.kind,
+        kindEditable: provider.enabled !== true,
         kindLabel: providerKindLabel(provider.kind),
+        // §3.6: the Happ/v2RayTun headers of the file, for the subscription panel.
+        headers: provider.headers ?? {title: null, expire: null},
         // One row per `.conf`: the «включить» mark and the two editable names.
         // Only an ENABLED provider offers them — a disabled one says so instead.
         tunnelRows: provider.enabled === true ? model.providerTunnelRows(name) : [],
@@ -419,7 +456,7 @@ export function buildPanel(model, key, extra = {}) {
       return {...base, title: 'Прокси', tags: model.proxyTags()};
 
     case 'routes':
-      return {...base, title: 'Маршруты Sing-Box', names: model.routeNames()};
+      return {...base, title: 'Маршруты', names: model.routeNames()};
 
     case 'proxy': {
       const proxy = model.getProxy(name);

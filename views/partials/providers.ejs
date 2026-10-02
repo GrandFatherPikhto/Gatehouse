@@ -6,12 +6,11 @@
 
 <p class="hint">
   Провайдеры читаются из каталога <code><%= panel.info.root %></code>
-  (<%= panel.info.rootSource %>). Каждая подпапка — провайдер: <code>links.txt</code>
-  даёт серверы Sing-Box, <code>*.conf</code> — конфиги туннелей Amnezia. Имя папки —
-  это идентификатор (он остаётся в <code>tunnels[].provider</code> и в
-  <code>webui.json</code>), а имена серверов берутся из ссылок плюс приписка на панели
-  провайдера. Провайдер без галочки найден, но выключен: его серверов в
-  <code>config.json</code> нет.
+  (<%= panel.info.rootSource %>). Каждая подпапка — провайдер, а вид папки задаёт
+  владелец: «подписка» читает только <code>links.txt</code>, «туннели» — только
+  <code>*.conf</code>. Папка без вида попадает в «Найдено, не подключено» и в сборке
+  не участвует. Имя папки — идентификатор (он остаётся в
+  <code>tunnels[].provider</code> и <code>webui.json</code>).
 </p>
 
 <% if (panel.info.rootState.message) { %>
@@ -22,50 +21,23 @@
   <p class="error"><%= panel.collisionText %></p>
 <% } %>
 
-<h3>Найденные провайдеры</h3>
-<% if (panel.info.providers.length === 0) { %>
-  <p class="hint">
-    Провайдеры не найдены: положите папку с <code>links.txt</code> или
-    <code>*.conf</code> в <code><%= panel.info.root %></code>.
-  </p>
-<% } else { %>
-  <table class="list">
-    <thead>
-      <tr><th>провайдер</th><th>имя папки</th><th>тип</th><th>записей</th><th>включён</th></tr>
-    </thead>
-    <tbody>
-      <% for (const provider of panel.info.providers) { %>
-        <% const key = `provider:${provider.id}`; %>
-        <tr>
-          <td>
-            <a href="/panel/<%= encodeURIComponent(key) %>"
-               hx-get="/panel/<%= encodeURIComponent(key) %>"
-               hx-target="#panel"
-               hx-swap="innerHTML"
-               hx-push-url="true"><%= provider.displayName %></a>
-            <% if (provider.skippedCount > 0) { %>
-              <br><span class="error">пропущено: <%= provider.skippedCount %></span>
-            <% } %>
-          </td>
-          <td><code><%= provider.id %></code></td>
-          <td><%= provider.kindLabel %></td>
-          <td><%= provider.count %></td>
-          <td>
-            <form class="inline" hx-post="/provider/enabled" hx-target="#panel" hx-swap="innerHTML" method="post" action="/provider/enabled">
-              <input type="hidden" name="id" value="<%= provider.id %>">
-              <label class="check">
-                <input type="checkbox" name="enabled" value="1" <%= provider.enabled ? 'checked' : '' %>
-                       hx-post="/provider/enabled" hx-trigger="change"
-                       hx-target="#panel" hx-swap="innerHTML" hx-include="closest form">
-                включён
-              </label>
-            </form>
-          </td>
-        </tr>
-      <% } %>
-    </tbody>
-  </table>
-<% } %>
+<h3>Выходы</h3>
+<ul class="list">
+  <% for (const [key, label, list] of [
+       ['outputs:subscriptions', 'Подписки', panel.info.subscriptions],
+       ['outputs:tunnels', 'Туннели AmneziaWG', panel.info.awg],
+       ['outputs:found', 'Найдено, не подключено', panel.info.found],
+     ]) { %>
+    <li>
+      <a href="/panel/<%= encodeURIComponent(key) %>"
+         hx-get="/panel/<%= encodeURIComponent(key) %>"
+         hx-target="#panel"
+         hx-swap="innerHTML"
+         hx-push-url="true"><%= label %>: <%= list.length %><% if (list.some((p) => p.enabled)) { %>
+         (включено <%= list.filter((p) => p.enabled).length %>)<% } %></a>
+    </li>
+  <% } %>
+</ul>
 
 <h3>Не прочиталось</h3>
 <% if (panel.info.unread.length === 0) { %>

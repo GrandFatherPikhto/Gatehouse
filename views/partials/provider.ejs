@@ -21,51 +21,68 @@
     <label for="label">имя</label>
     <input type="text" id="label" name="label" value="<%= panel.provider.label ?? '' %>"
            maxlength="64" size="40" placeholder="<%= panel.providerId %>">
-    <label for="suffix">приписка к именам серверов</label>
-    <input type="text" id="suffix" name="suffix" value="<%= panel.suffix %>"
-           maxlength="16" size="16" placeholder="(нет)">
-    <p class="hint">
-      Пусто — имена как в ссылках. Нужна, когда у двух включённых провайдеров одинаковые
-      имена серверов (например, vpnd и vpnd-ws). Смена приписки переименовывает эти
-      серверы в прокси и маршрутах.
-      <% if (panel.firstServerName) { %>
-        <br>Пример: <code><%= panel.firstServerName %></code>
-      <% } %>
-    </p>
+
+    <label for="kind">вид</label>
+    <% if (panel.kindEditable) { %>
+      <select id="kind" name="kind">
+        <option value="subscription" <%= panel.folderKind === 'subscription' ? 'selected' : '' %>>Подписка</option>
+        <option value="awg" <%= panel.folderKind === 'awg' ? 'selected' : '' %>>Туннели AmneziaWG</option>
+      </select>
+    <% } else { %>
+      <strong><%= panel.folderKind === 'subscription' ? 'Подписка' : 'Туннели AmneziaWG' %></strong>
+      <span class="hint">чтобы сменить вид, выключите провайдера</span>
+    <% } %>
+
+    <% if (panel.folderKind === 'subscription') { %>
+      <label for="suffix">приписка к именам серверов</label>
+      <input type="text" id="suffix" name="suffix" value="<%= panel.suffix %>"
+             maxlength="16" size="16" placeholder="(нет)">
+      <p class="hint">
+        Пусто — имена как в ссылках. Нужна, когда у двух включённых провайдеров одинаковые
+        имена серверов (например, vpnd и vpnd-ws). Смена приписки переименовывает эти
+        серверы в прокси и маршрутах.
+        <% if (panel.firstServerName) { %>
+          <br>Пример: <code><%= panel.firstServerName %></code>
+        <% } %>
+      </p>
+    <% } %>
+
     <label class="check">
       <input type="checkbox" name="enabled" value="1" <%= panel.enabled ? 'checked' : '' %>>
       включён (серверы попадают в <code>config.json</code>)
     </label>
 
-    <details class="overrides" <%= panel.overrides.open ? 'open' : '' %>>
-      <summary>Тонкие настройки</summary>
-      <p class="hint">
-        Авто — как в ссылках. Переопределение действует на все серверы подписки и
-        переживает её обновление.
-      </p>
-      <label for="flow">flow (Vision)</label>
-      <select id="flow" name="flow">
-        <option value="auto" <%= panel.overrides.flow === 'auto' ? 'selected' : '' %>>Авто</option>
-        <option value="vision" <%= panel.overrides.flow === 'vision' ? 'selected' : '' %>>Vision</option>
-        <option value="none" <%= panel.overrides.flow === 'none' ? 'selected' : '' %>>без flow</option>
-      </select>
-      <span class="hint">
-        <% if (panel.overrides.nonTcpOnly) { %>
-          к этим ссылкам не применяется (<%= panel.overrides.nonTcpSample %>)
-        <% } else { %>
-          в ссылках: <%= panel.overrides.flowActual %>
-        <% } %>
-      </span>
-      <br>
-      <label for="fp">отпечаток (fp)</label>
-      <select id="fp" name="fp">
-        <option value="auto" <%= panel.overrides.fp === 'auto' ? 'selected' : '' %>>Авто</option>
-        <% for (const fingerprint of panel.overrides.fingerprints) { %>
-          <option value="<%= fingerprint %>" <%= panel.overrides.fp === fingerprint ? 'selected' : '' %>><%= fingerprint %></option>
-        <% } %>
-      </select>
-      <span class="hint">в ссылках: <%= panel.overrides.fpActual %></span>
-    </details>
+    <% if (panel.folderKind === 'subscription') { %>
+      <details class="overrides" <%= panel.overrides.open ? 'open' : '' %>>
+        <summary>Тонкие настройки</summary>
+        <p class="hint">
+          Авто — как в ссылках. Переопределение действует на все серверы подписки и
+          переживает её обновление.
+        </p>
+        <label for="flow">flow (Vision)</label>
+        <select id="flow" name="flow">
+          <option value="auto" <%= panel.overrides.flow === 'auto' ? 'selected' : '' %>>Авто</option>
+          <option value="vision" <%= panel.overrides.flow === 'vision' ? 'selected' : '' %>>Vision</option>
+          <option value="none" <%= panel.overrides.flow === 'none' ? 'selected' : '' %>>без flow</option>
+        </select>
+        <span class="hint">
+          <% if (panel.overrides.nonTcpOnly) { %>
+            к этим ссылкам не применяется (<%= panel.overrides.nonTcpSample %>)
+          <% } else { %>
+            в ссылках: <%= panel.overrides.flowActual %>
+          <% } %>
+        </span>
+        <br>
+        <label for="fp">отпечаток (fp)</label>
+        <select id="fp" name="fp">
+          <option value="auto" <%= panel.overrides.fp === 'auto' ? 'selected' : '' %>>Авто</option>
+          <% for (const fingerprint of panel.overrides.fingerprints) { %>
+            <option value="<%= fingerprint %>" <%= panel.overrides.fp === fingerprint ? 'selected' : '' %>><%= fingerprint %></option>
+          <% } %>
+        </select>
+        <span class="hint">в ссылках: <%= panel.overrides.fpActual %></span>
+      </details>
+    <% } %>
   </fieldset>
 </form>
 

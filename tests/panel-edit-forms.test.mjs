@@ -210,6 +210,12 @@ const EDITABLE_ACTION_FORMS = Object.freeze({
   // unread record carries a «Забыть» button. There is nothing to «apply» on the
   // panel as a whole, so neither is `id="panel-form"`.
   providers: [{route: '/provider/enabled', hidden: null}],
+  // The three «Выходы» lists carry the same tick, and «Найдено» also connects a
+  // folder with «Подключить как подписку/туннели» (`/provider/kind`).
+  outputs: [
+    {route: '/provider/enabled', hidden: null},
+    {route: '/provider/kind', hidden: null},
+  ],
 });
 
 /**

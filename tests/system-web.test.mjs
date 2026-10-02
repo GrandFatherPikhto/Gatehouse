@@ -430,7 +430,7 @@ describe('system panels render', () => {
     const editor = await startEditor();
     try {
       const page = await (await fetch(`${editor.base}/`)).text();
-      assert.match(page, /Система/);
+      assert.match(page, /Службы/);
 
       for (const kind of ['system', 'system:singbox', 'system:amnezia', 'system:watchdog']) {
         const response = await fetch(`${editor.base}/panel/${kind}`);

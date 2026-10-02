@@ -315,7 +315,7 @@ test('fixtures: the committed settings.json is schema-valid and complete', () =>
 
   assert.equal(document.version, 2);
   assert.equal(settingsDir, FIXTURES_DIR);
-  assert.deepEqual(settings.providers, {vpnd: {enabled: true}});
+  assert.deepEqual(settings.providers, {vpnd: {enabled: true, kind: 'subscription'}});
   assert.equal(settings.proxies.length, 2);
   assert.deepEqual(settings.exclude_from_auto, ['🇷🇺']);
 });

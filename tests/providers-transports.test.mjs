@@ -67,7 +67,7 @@ describe('suffix (task §2.1 / §5.7)', () => {
       link('a.example.com', TAG, TLS, '11111111-1111-1111-1111-111111111111') +
         link('b.example.com', TAG, TLS, '22222222-2222-2222-2222-222222222222'),
     );
-    const read = readProviders({vpnd: {enabled: true, suffix: 'WS'}}, root);
+    const read = readProviders({vpnd: {enabled: true, kind: 'subscription', suffix: 'WS'}}, root);
     const provider = read.providers.find((item) => item.id === 'vpnd');
     assert.deepEqual(provider.tags, [`${TAG} WS`, `${TAG} #2 WS`]);
     assert.deepEqual(provider.baseTags, [TAG, `${TAG} #2`]);
@@ -75,7 +75,7 @@ describe('suffix (task §2.1 / §5.7)', () => {
 
   test('without a suffix the names are exactly as in the links', () => {
     const {root} = sameNameProject();
-    const read = readProviders({vpnd: {enabled: true}}, root);
+    const read = readProviders({vpnd: {enabled: true, kind: 'subscription'}}, root);
     assert.deepEqual(read.providers.find((item) => item.id === 'vpnd').tags, [TAG]);
   });
 });
@@ -84,7 +84,7 @@ describe('name collisions (task §2.2 / §5.8)', () => {
   test('generation refuses with the §2.2 text', () => {
     const {dir, root} = sameNameProject();
     const settingsFile = writeSettings(dir, {
-      providers: {vpnd: {enabled: true}, 'vpnd-ws': {enabled: true}},
+      providers: {vpnd: {enabled: true, kind: 'subscription'}, 'vpnd-ws': {enabled: true, kind: 'subscription'}},
     });
     assert.throws(
       () => generateConfigFile(settingsFile, {providersRoot: root}),
@@ -98,7 +98,7 @@ describe('name collisions (task §2.2 / §5.8)', () => {
 
   test('setProviderEnabled refuses and leaves the document byte for byte', () => {
     const {dir} = sameNameProject();
-    const model = openModel(dir, {vpnd: {enabled: true}});
+    const model = openModel(dir, {vpnd: {enabled: true, kind: 'subscription'}});
     const before = model.toText();
     assert.throws(() => model.setProviderEnabled('vpnd-ws', true), ConfigError);
     assert.equal(model.toText(), before);
@@ -107,7 +107,7 @@ describe('name collisions (task §2.2 / §5.8)', () => {
   test('a suffix on one provider lets generation pass with distinct names', () => {
     const {dir, root} = sameNameProject();
     const settingsFile = writeSettings(dir, {
-      providers: {vpnd: {enabled: true}, 'vpnd-ws': {enabled: true, suffix: 'WS'}},
+      providers: {vpnd: {enabled: true, kind: 'subscription'}, 'vpnd-ws': {enabled: true, kind: 'subscription', suffix: 'WS'}},
       proxies: SERVERLESS_PROXIES,
     });
     const {config} = generateConfigFile(settingsFile, {providersRoot: root});
@@ -122,7 +122,7 @@ describe('setProviderSuffix renames servers (task §2.3 / §5.9)', () => {
     const root = path.join(dir, 'providers');
     writeProvider(root, 'vpnd', link('vpnd.example.com', TAG, TLS, 'aaaaaaaa-0000-0000-0000-000000000001'));
     writeProvider(root, 'other', link('other.example.com', TAG_B, TLS, 'aaaaaaaa-0000-0000-0000-000000000002'));
-    return openModel(dir, {vpnd: {enabled: true}, other: {enabled: true}}, {
+    return openModel(dir, {vpnd: {enabled: true, kind: 'subscription'}, other: {enabled: true, kind: 'subscription'}}, {
       proxies: [
         {tag: 'plain', type: 'socks', port: 54321, servers: [TAG]},
         {tag: 'fixed', type: 'socks', port: 54322, servers: [TAG], pinned: true},
@@ -148,7 +148,7 @@ describe('setProviderSuffix renames servers (task §2.3 / §5.9)', () => {
 
   test('a suffix that would collide is refused without touching the document', () => {
     const {dir} = sameNameProject();
-    const model = openModel(dir, {vpnd: {enabled: true}, 'vpnd-ws': {enabled: true, suffix: 'WS'}});
+    const model = openModel(dir, {vpnd: {enabled: true, kind: 'subscription'}, 'vpnd-ws': {enabled: true, kind: 'subscription', suffix: 'WS'}});
     const before = model.toText();
     assert.throws(() => model.setProviderSuffix('vpnd-ws', ''), ConfigError);
     assert.equal(model.toText(), before);
@@ -157,7 +157,7 @@ describe('setProviderSuffix renames servers (task §2.3 / §5.9)', () => {
   test('an invalid suffix is refused by the model', () => {
     const dir = makeTempDir();
     writeProvider(path.join(dir, 'providers'), 'vpnd', link('a.example.com'));
-    const model = openModel(dir, {vpnd: {enabled: true}});
+    const model = openModel(dir, {vpnd: {enabled: true, kind: 'subscription'}});
     for (const bad of [' WS', 'WS ', 'x'.repeat(17), 'bad\u0000char']) {
       const before = model.toText();
       assert.throws(() => model.setProviderSuffix('vpnd', bad), ConfigError, JSON.stringify(bad));
@@ -181,7 +181,7 @@ describe('overrides (task §2.5 / §5.12)', () => {
   test('flow vision adds the flow a TLS+raw link does not carry', () => {
     const {dir, root} = rawProject();
     const settingsFile = writeSettings(dir, {
-      providers: {vpnd: {enabled: true, overrides: {flow: 'vision'}}},
+      providers: {vpnd: {enabled: true, kind: 'subscription', overrides: {flow: 'vision'}}},
       proxies: SERVERLESS_PROXIES,
     });
     const {config} = generateConfigFile(settingsFile, {providersRoot: root});
@@ -192,7 +192,7 @@ describe('overrides (task §2.5 / §5.12)', () => {
   test('fp safari rewrites the fingerprint of every tls link', () => {
     const {dir, root} = rawProject();
     const settingsFile = writeSettings(dir, {
-      providers: {vpnd: {enabled: true, overrides: {fp: 'safari'}}},
+      providers: {vpnd: {enabled: true, kind: 'subscription', overrides: {fp: 'safari'}}},
       proxies: SERVERLESS_PROXIES,
     });
     const {config} = generateConfigFile(settingsFile, {providersRoot: root});
@@ -202,14 +202,14 @@ describe('overrides (task §2.5 / §5.12)', () => {
 
   test('without overrides the reader output equals the bare parser output', () => {
     const {root} = rawProject();
-    const read = readProviders({vpnd: {enabled: true}}, root);
+    const read = readProviders({vpnd: {enabled: true, kind: 'subscription'}}, root);
     const outbound = read.providers.find((item) => item.id === 'vpnd').outbounds[0];
     assert.deepEqual(outbound, parseVless(link('vpnd.example.com', TAG, 'type=raw&security=tls&sni=x.example.com').trim()));
   });
 
   test('setProviderOverrides stores, clears one key and drops an empty object', () => {
     const {dir} = rawProject();
-    const model = openModel(dir, {vpnd: {enabled: true}});
+    const model = openModel(dir, {vpnd: {enabled: true, kind: 'subscription'}});
 
     model.setProviderOverrides('vpnd', {flow: 'vision', fp: 'safari'});
     assert.deepEqual(model.getProvider('vpnd').overrides, {flow: 'vision', fp: 'safari'});
@@ -279,7 +279,7 @@ describe('warnings of a disabled provider (task §5а)', () => {
 
   test('the panel sees them, generation does not', () => {
     const {root} = mixedProject();
-    const read = readProviders({vpnd: {enabled: true}}, root);
+    const read = readProviders({vpnd: {enabled: true, kind: 'subscription'}}, root);
     const broken = read.providers.find((item) => item.id === 'broken');
     assert.equal(broken.skipped.length, 1);
     assert.equal(broken.warnings.length, 1);
@@ -288,7 +288,7 @@ describe('warnings of a disabled provider (task §5а)', () => {
 
   test('an enabled broken provider does contribute its warnings', () => {
     const {root} = mixedProject();
-    const read = readProviders({vpnd: {enabled: true}, broken: {enabled: true}}, root);
+    const read = readProviders({vpnd: {enabled: true, kind: 'subscription'}, broken: {enabled: true, kind: 'subscription'}}, root);
     assert.equal(read.warnings.length, 1);
     assert.match(read.warnings[0], /неизвестный транспорт 'xhttp'/);
   });
@@ -307,7 +307,7 @@ describe('provider panels render the new blocks (task §5.11)', () => {
     const bad =
       'vless://aaaaaaaa-0000-0000-0000-000000000002@x.example.com:443?type=xhttp&security=tls&sni=x.example.com#Skipped';
     writeProvider(root, 'vpnd', `# comment\n${ws}\n${bad}\n`);
-    const settingsFile = writeSettings(dir, {providers: {vpnd: {enabled: true}}});
+    const settingsFile = writeSettings(dir, {providers: {vpnd: {enabled: true, kind: 'subscription'}}});
 
     const {server, url} = await startServer({
       env: {
@@ -327,7 +327,7 @@ describe('provider panels render the new blocks (task §5.11)', () => {
       assert.match(provider, /Skipped/);
       assert.doesNotMatch(provider, /aaaaaaaa-0000-0000-0000-000000000002/);
 
-      const list = await (await fetch(`${base}/panel/providers`)).text();
+      const list = await (await fetch(`${base}/panel/outputs:subscriptions`)).text();
       assert.match(list, /пропущено: 1/);
     } finally {
       await new Promise((resolve) => server.close(resolve));

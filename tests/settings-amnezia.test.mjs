@@ -1,5 +1,5 @@
 // «Настройки»: the group node of the tree, the sing-box panel that absorbed
-// «Общие»/«DNS»/«Вывод», and «Настройки Amnezia» — the output directory of the
+// «Общие»/«DNS»/«Вывод», and «AmneziaWG» — the output directory of the
 // tunnel configs plus the regeneration of every enabled tunnel.
 //
 // The path itself is the interesting part: the write, the delete and the start-up
@@ -51,7 +51,7 @@ async function startEditor(options = {}) {
   }
 
   const settingsFile = writeSettings(dir, {
-    providers: {vpnd: {enabled: true}, hidemyname: {enabled: true}},
+    providers: {vpnd: {enabled: true, kind: 'subscription'}, hidemyname: {enabled: true, kind: 'awg'}},
     proxies: [{tag: 'main-socks', type: 'socks', port: 54321}],
     ...(options.document ?? {}),
   });
@@ -137,13 +137,13 @@ describe('the «Настройки» group of the tree (NEW)', () => {
       assert.doesNotMatch(html, /\/panel\/settings/, 'a group has no page to open');
       assert.match(html, /panel\/singbox/);
       assert.match(html, /panel\/amnezia/);
-      assert.match(html, /Настройки Sing-Box/);
-      assert.match(html, /Настройки Amnezia/);
+      assert.match(html, /Sing-Box/);
+      assert.match(html, /AmneziaWG/);
 
       // The flat nodes are gone with their panels.
       assert.doesNotMatch(html, /panel\/general/);
       assert.doesNotMatch(html, /panel\/dns/);
-      assert.doesNotMatch(html, /panel\/output/);
+      assert.doesNotMatch(html, /panel\/output"/, 'the old flat output panel is gone');
     } finally {
       await editor.close();
     }
@@ -158,7 +158,7 @@ describe('the «Настройки» group of the tree (NEW)', () => {
       assert.match(html, /name="listen_ip"/);
       assert.match(html, /<textarea[^>]*name="dns"/);
       assert.match(html, /name="output_file"/);
-      assert.match(html, /Настройки Sing-Box/);
+      assert.match(html, /Sing-Box/);
     } finally {
       await editor.close();
     }

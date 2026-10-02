@@ -34,7 +34,14 @@ import path from 'node:path';
 
 import {ConfigError, isMapping} from './errors.mjs';
 import {DEFAULT_PROVIDERS_ROOT} from './paths.mjs';
-import {applyOverrides, decodeUtf8Ignore, parseLinks, parseVless, pythonStrip} from './vless.mjs';
+import {
+  applyOverrides,
+  decodeUtf8Ignore,
+  parseLinks,
+  parseSubscriptionHeaders,
+  parseVless,
+  pythonStrip,
+} from './vless.mjs';
 
 // The default root now lives in `paths.mjs`, next to the tunnel directory, so
 // the build keeps its directories in one place. The name stays published here:
@@ -246,15 +253,56 @@ function readLinks(filePath, id, warnings, skipped) {
 }
 
 /**
- * One provider folder, classified by what it holds.
+ * Reads the Happ/v2RayTun headers of a subscription file, or empty values.
+ *
+ * @param {string} filePath
+ * @returns {{title: string|null, expire: number|null}}
+ */
+function readSubscriptionHeaders(filePath) {
+  try {
+    return parseSubscriptionHeaders(decodeUtf8Ignore(fs.readFileSync(filePath)));
+  } catch {
+    return {title: null, expire: null};
+  }
+}
+
+/**
+ * Human hint of what a folder WITHOUT a chosen kind looks like, for the
+ * «Найдено, не подключено» list (§3.5). Never a decision — just a hint.
+ *
+ * @param {string} contentKind `links`|`tunnels`|`mixed`|`empty`
+ * @param {number} links
+ * @param {number} confs
+ * @returns {string}
+ */
+export function describeContent(contentKind, links, confs) {
+  switch (contentKind) {
+    case 'links':
+      return `похоже на подписку: ${LINKS_FILENAME}, ${links} ссылок`;
+    case 'tunnels':
+      return `похоже на туннели: ${confs} конфигов`;
+    case 'mixed':
+      return `смешанная: ${LINKS_FILENAME} и ${confs} конфигов`;
+    default:
+      return 'пусто';
+  }
+}
+
+/**
+ * One provider folder, read according to the kind the OWNER chose (§3).
+ *
+ * `kind` is `subscription` (only `links.txt`), `awg` (only `*.conf`) or `null`
+ * («Найдено, не подключено»: nothing is read, the content is only described).
+ * The foreign half of a mixed folder is warned about and NOT read.
  *
  * @param {string} id Folder name, already validated.
  * @param {string} dir Absolute folder path.
  * @param {string[]} warnings Per-provider collector (see `readProviders`).
  * @param {Array<{label: string, reason: string}>} skipped Per-provider skips.
+ * @param {'subscription'|'awg'|null} kind Stored kind of the provider.
  * @returns {Record<string, unknown>}
  */
-function readProviderFolder(id, dir, warnings, skipped) {
+function readProviderFolder(id, dir, warnings, skipped, kind) {
   const base = {id, name: id, path: dir, type: 'folder', discovered: true};
 
   let stat;
@@ -264,11 +312,15 @@ function readProviderFolder(id, dir, warnings, skipped) {
     return {
       ...base,
       exists: false,
-      kind: 'missing',
+      kind: null,
+      contentKind: 'missing',
       count: 0,
       tags: [],
+      baseTags: [],
       entries: [],
       outbounds: [],
+      hint: '',
+      headers: {title: null, expire: null},
       state: 'missing',
       owner: null,
       mode: null,
@@ -287,11 +339,15 @@ function readProviderFolder(id, dir, warnings, skipped) {
     return {
       ...base,
       exists: true,
-      kind: 'unreadable',
+      kind: null,
+      contentKind: 'unreadable',
       count: 0,
       tags: [],
+      baseTags: [],
       entries: [],
       outbounds: [],
+      hint: '',
+      headers: {title: null, expire: null},
       state,
       owner,
       mode,
@@ -302,11 +358,10 @@ function readProviderFolder(id, dir, warnings, skipped) {
     };
   }
 
-  const entries = names.filter((name) => name.endsWith(TUNNEL_EXTENSION)).sort();
+  const confFiles = names.filter((name) => name.endsWith(TUNNEL_EXTENSION)).sort();
   const linksPath = path.join(dir, LINKS_FILENAME);
 
-  // A directory named `links.txt` is not a links file: it is ignored, and the
-  // folder then holds only what it holds.
+  // A directory named `links.txt` is not a links file: it is ignored.
   let hasLinks = false;
   try {
     hasLinks = fs.existsSync(linksPath) && fs.statSync(linksPath).isFile();
@@ -314,45 +369,129 @@ function readProviderFolder(id, dir, warnings, skipped) {
     hasLinks = false;
   }
 
-  let outbounds = [];
+  const contentKind =
+    hasLinks && confFiles.length > 0
+      ? 'mixed'
+      : hasLinks
+        ? 'links'
+        : confFiles.length > 0
+          ? 'tunnels'
+          : 'empty';
+
+  // The foreign half of a folder with a CHOSEN kind is warned about and left
+  // unread (§3.1). A mixed folder WITHOUT a kind is left for the migration.
+  if (kind === 'subscription' && confFiles.length > 0) {
+    warnings.push(
+      `Предупреждение: лишнее в папке '${id}': ${confFiles.length} конфигов туннелей — ` +
+        'разнесите по разным папкам',
+    );
+  }
+  if (kind === 'awg' && hasLinks) {
+    warnings.push(
+      `Предупреждение: лишнее в папке '${id}': ${LINKS_FILENAME} — разнесите по разным папкам`,
+    );
+  }
+
+  const wantLinks = kind === 'subscription' || (kind === null && hasLinks);
+  let rawOutbounds = [];
   let linksState = 'ok';
   let linksError = null;
-  if (hasLinks) {
+  if (wantLinks && hasLinks) {
     const read = readLinks(linksPath, id, warnings, skipped);
-    outbounds = read.outbounds;
+    rawOutbounds = read.outbounds;
     linksState = read.state;
     linksError = read.error;
   }
 
-  if (!hasLinks && entries.length === 0) {
+  const headers =
+    kind === 'subscription' && hasLinks
+      ? readSubscriptionHeaders(linksPath)
+      : {title: null, expire: null};
+
+  if (kind === null) {
+    // «Найдено, не подключено»: nothing participates in the build, but the
+    // content is described so the owner can choose a kind (§3.5).
+    const empty = contentKind === 'empty';
     return {
       ...base,
       exists: true,
-      kind: 'empty',
-      count: 0,
-      tags: [],
+      kind: null,
+      contentKind,
+      count: contentKind === 'tunnels' ? confFiles.length : rawOutbounds.length,
+      tags: rawOutbounds.map((outbound) => outbound.tag),
+      baseTags: rawOutbounds.map((outbound) => outbound.tag),
       entries: [],
       outbounds: [],
-      state: 'empty',
+      hint: describeContent(contentKind, rawOutbounds.length, confFiles.length),
+      headers,
+      state: empty ? 'empty' : 'ok',
       owner,
       mode,
-      error: `нет ни ${LINKS_FILENAME}, ни конфигов туннелей (*${TUNNEL_EXTENSION})`,
+      error: empty
+        ? `нет ни ${LINKS_FILENAME}, ни конфигов туннелей (*${TUNNEL_EXTENSION})`
+        : null,
     };
   }
 
-  const kind = hasLinks ? (entries.length > 0 ? 'mixed' : 'links') : 'tunnels';
+  const subscription = kind === 'subscription';
+  const outbounds = subscription ? rawOutbounds : [];
+  const entries = subscription ? [] : confFiles;
+
+  if (subscription && !hasLinks) {
+    return {
+      ...base,
+      exists: true,
+      kind,
+      contentKind,
+      count: 0,
+      tags: [],
+      baseTags: [],
+      entries: [],
+      outbounds: [],
+      hint: describeContent(contentKind, 0, confFiles.length),
+      headers,
+      state: 'empty',
+      owner,
+      mode,
+      error: `нет ${LINKS_FILENAME}`,
+    };
+  }
+  if (!subscription && entries.length === 0) {
+    return {
+      ...base,
+      exists: true,
+      kind,
+      contentKind,
+      count: 0,
+      tags: [],
+      baseTags: [],
+      entries: [],
+      outbounds: [],
+      hint: describeContent(contentKind, rawOutbounds.length, 0),
+      headers,
+      state: 'empty',
+      owner,
+      mode,
+      error: `нет конфигов туннелей (*${TUNNEL_EXTENSION})`,
+    };
+  }
+
   return {
     ...base,
     exists: true,
     kind,
-    count: kind === 'tunnels' ? entries.length : outbounds.length,
+    contentKind,
+    count: subscription ? outbounds.length : entries.length,
     tags: outbounds.map((outbound) => outbound.tag),
+    baseTags: outbounds.map((outbound) => outbound.tag),
     entries,
     outbounds,
-    state: hasLinks ? linksState : 'ok',
+    hint: describeContent(contentKind, rawOutbounds.length, confFiles.length),
+    headers,
+    state: subscription ? linksState : 'ok',
     owner,
     mode,
-    error: hasLinks ? linksError : null,
+    error: subscription ? linksError : null,
   };
 }
 
@@ -360,7 +499,8 @@ function readProviderFolder(id, dir, warnings, skipped) {
  * Turns one document record into the provider fields it contributes.
  *
  * @param {unknown} record
- * @returns {{record: Record<string, unknown>, enabled: boolean, label: string|null}}
+ * @returns {{record: Record<string, unknown>, enabled: boolean, label: string|null,
+ *   kind: 'subscription'|'awg'|null}}
  */
 function recordView(record) {
   const map = isMapping(record) ? record : {};
@@ -368,6 +508,7 @@ function recordView(record) {
     record: map,
     enabled: map.enabled === true,
     label: typeof map.label === 'string' && map.label.length > 0 ? map.label : null,
+    kind: map.kind === 'subscription' || map.kind === 'awg' ? map.kind : null,
   };
 }
 
@@ -470,9 +611,12 @@ export function readProviders(records, root, warnings = []) {
     const localWarnings = [];
     const localSkipped = [];
     const provider = {
-      ...readProviderFolder(name, full, localWarnings, localSkipped),
+      ...readProviderFolder(name, full, localWarnings, localSkipped, view.kind),
       record: view.record,
-      enabled: view.enabled,
+      // A folder with no chosen kind never feeds the build, even if the record
+      // still says `enabled: true` from before (§3.1).
+      enabled: view.enabled && view.kind !== null,
+      storedKind: view.kind,
       label: view.label,
       forget: false,
     };

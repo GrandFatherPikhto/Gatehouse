@@ -36,7 +36,7 @@ import {
   writeAtomic,
 } from '../storage.mjs';
 import {migrateLegacyDocument, newDocument} from './document.mjs';
-import {migrateProviders, resolvedProvidersRoot} from './providers.mjs';
+import {migrateProviderKinds, migrateProviders, resolvedProvidersRoot} from './providers.mjs';
 
 /**
  * The state of one open `webui.json`.
@@ -211,13 +211,16 @@ export class ProjectSession {
       // schema no longer knows `sources` and `dropRemovedSettings` would otherwise
       // drop it without ever enabling a provider.
       const migrated = migrateProviders(document, root, settingsDir, linksFile !== null);
+      // §3.2: the folder kind is inferred once, from the content on disk, and the
+      // owner is asked to save. It runs AFTER `sources` became `providers`.
+      const kinds = migrateProviderKinds(document, root);
       validateSettings(document, resolved);
       const snapshot = takeSnapshot(resolved, this.stateDir, {keep: this.snapshotKeep});
       writeAtomic(resolved, canonicalJson(document));
       this.document = document;
       this.lastMigration = {
         snapshot: snapshot === null ? null : snapshot.path,
-        warnings: [...warnings, ...migrated],
+        warnings: [...warnings, ...migrated, ...kinds],
       };
       this.lastProvidersMigration = null;
     } else {
@@ -225,11 +228,14 @@ export class ProjectSession {
       // become `providers`, not vanish. Neither touches the file here — the fields
       // leave it on the next ordinary save.
       const migrated = migrateProviders(raw, root, settingsDir, false);
+      const kinds = migrateProviderKinds(raw, root);
+      const providerWarnings = [...migrated, ...kinds];
       this.lastRemoved = dropRemovedSettings(raw);
       validateSettings(raw, resolved);
       this.document = raw;
       this.lastMigration = null;
-      this.lastProvidersMigration = migrated.length > 0 ? {warnings: migrated} : null;
+      this.lastProvidersMigration =
+        providerWarnings.length > 0 ? {warnings: providerWarnings} : null;
     }
 
     this.path = resolved;

@@ -102,9 +102,13 @@ function parseArgs(argv) {
 function printProxySettings(proxies, listenIp) {
   process.stdout.write('\n=== Настройки прокси ===\n');
   for (const proxy of proxies) {
-    const servers = proxy.servers.length > 0
-      ? proxy.servers.join(', ')
-      : 'auto-select (все, кроме exclude_from_auto)';
+    // A tunnel proxy owns no pool: its single exit is the interface, and the
+    // summary must say so instead of the misleading «auto-select» (§5а).
+    const servers = proxy.tunnel
+      ? `туннель ${proxy.tunnel.interface}`
+      : proxy.servers.length > 0
+        ? proxy.servers.join(', ')
+        : 'auto-select (все, кроме exclude_from_auto)';
     process.stdout.write(`  [${proxy.type.toUpperCase()}] ${proxy.tag}\n`);
     process.stdout.write(`      ip:      ${listenIp}\n`);
     process.stdout.write(`      port:    ${proxy.port}\n`);

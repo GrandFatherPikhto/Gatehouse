@@ -33,6 +33,10 @@
             "description": "Whether the provider's servers take part in the generated config. Missing means false.",
             "type": "boolean"
           },
+          "kind": {
+            "description": "What the folder IS, chosen by the owner: `subscription` reads only links.txt, `awg` reads only *.conf. Missing means «found, not connected»: the folder is listed with a hint but never feeds the config or the tunnels.",
+            "enum": ["subscription", "awg"]
+          },
           "label": {
             "description": "Human-readable name shown instead of the folder name. Trimmed; shown only, never stored in tags or config.json.",
             "type": "string",

@@ -162,8 +162,8 @@ describe('pages and static files', () => {
       assert.equal(response.status, 200);
 
       const html = await response.text();
-      assert.match(html, /Настройки Sing-Box/);
-      assert.match(html, /Провайдеры \(1\)/);
+      assert.match(html, /Sing-Box/);
+      assert.match(html, /Выходы/);
       assert.match(html, /href="\/static\/app.css"/);
       // No CDN: the bundle must be referenced on our own host.
       assert.match(html, /src="\/static\/vendor\/htmx\.min\.js"/);
@@ -239,7 +239,7 @@ describe('pages and static files', () => {
       assert.equal(unknown.status, 200);
       assert.match(html, /неизвестный раздел/);
       assert.match(html, /nonsense/);
-      assert.match(html, /Настройки Sing-Box/, 'it falls back to a panel that exists');
+      assert.match(html, /Sing-Box/, 'it falls back to a panel that exists');
 
       const missing = await fetch(`${editor.base}/panel/${encodeURIComponent('proxy:ghost')}`);
       const missingHtml = await missing.text();
@@ -765,7 +765,7 @@ describe('environment of the server', () => {
       const html = await response.text();
       assert.equal(response.status, 200);
       assert.match(html, /webui\.json/);
-      assert.match(html, /Настройки Sing-Box/);
+      assert.match(html, /Sing-Box/);
       assert.match(html, /файл ещё не создан/, 'nothing was written to disk yet');
       assert.ok(!fs.existsSync(missing), 'a fresh document is not saved until asked');
     } finally {
