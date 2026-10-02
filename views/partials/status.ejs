@@ -90,12 +90,18 @@
     <% } %>
   </ul>
 <% } %>
+<%# A step is ✅ ok, ⚠️ a warning that did not stop the chain (a service that would
+    not stop, task 19 §4), or ❌ a failure. `step.detail` carries the full command
+    output, shown on demand so the bar line stays short (task 19 §2). %>
 <% if (apply.steps && apply.steps.length > 0) { %>
   <ol class="apply-steps">
     <% for (const step of apply.steps) { %>
-      <li class="<%= step.ok ? 'ok' : 'bad' %>">
-        <span class="mark"><%= step.ok ? '✅' : '❌' %></span>
+      <li class="<%= step.warn ? 'warn' : step.ok ? 'ok' : 'bad' %>">
+        <span class="mark"><%= step.warn ? '⚠️' : step.ok ? '✅' : '❌' %></span>
         <strong><%= step.step %></strong> — <%= step.message %>
+        <% if (step.detail) { %>
+          <details><summary>подробно</summary><pre class="output"><%= step.detail %></pre></details>
+        <% } %>
       </li>
     <% } %>
   </ol>

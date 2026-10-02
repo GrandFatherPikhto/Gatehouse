@@ -3,18 +3,21 @@
     важнее него, остаётся. Снимок осмысленно звать из места поломки — «покажи
     почему», а не «слежу за строками». %>
 <%# The heading is rendered by the «Система» container: this partial is one section
-    of its sing-box tab now. %>
+    of a tab. The UNIT and the PANEL KEY come as parameters, so the same partial
+    serves the sing-box tab and the Xray tab without hardcoding either. %>
+<% const journalUnit = typeof unit === 'string' && unit.length > 0 ? unit : panel.unit; %>
+<% const journalKey = typeof key === 'string' && key.length > 0 ? key : 'system:singbox'; %>
 <p class="hint">
-  Юнит: <code><%= panel.unit %></code>. Читается без привилегий (нужно членство в
+  Юнит: <code><%= journalUnit %></code>. Читается без привилегий (нужно членство в
   группе <code>adm</code>). Сейчас это снимок: последние
   <strong><%= panel.lines %></strong> строк одним запросом, без живого потока.
 </p>
 
-<form method="get" action="/panel/system:singbox"
-      hx-get="/panel/system:singbox" hx-target="#panel" hx-swap="innerHTML">
+<form method="get" action="/panel/<%= journalKey %>"
+      hx-get="/panel/<%= journalKey %>" hx-target="#panel" hx-swap="innerHTML">
   <label for="journal-unit">Юнит</label>
   <input id="journal-unit" name="unit"
-         value="<%= panel.snapshot ? panel.snapshot.unit : panel.unit %>">
+         value="<%= panel.snapshot ? panel.snapshot.unit : journalUnit %>">
 
   <label for="journal-level">Минимальный уровень</label>
   <% const currentLevel = panel.snapshot ? panel.snapshot.level : panel.level; %>

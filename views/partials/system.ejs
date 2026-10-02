@@ -190,7 +190,7 @@
     <% } %>
 
     <h3>Журнал Xray</h3>
-    <%- include('journal', {panel}) %>
+    <%- include('journal', {panel, unit: panel.xrayUnit, key: 'system:xray'}) %>
   <% } %>
 
 <% } else { %>
@@ -223,7 +223,7 @@
   </p>
 
   <h3>Журнал sing-box</h3>
-  <%- include('journal', {panel}) %>
+  <%- include('journal', {panel, unit: panel.unit, key: 'system:singbox'}) %>
 
   <h3>Тест серверов</h3>
   <%- include('tests', {panel}) %>

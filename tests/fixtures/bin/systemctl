@@ -33,12 +33,26 @@ if (process.env.FAKE_SYSTEMCTL_ARGV_LOG) {
 
 const list = (value) => String(value ?? '').split(',').map((item) => item.trim()).filter(Boolean);
 
+// A unit that was RESTARTED/STARTED/ENABLED during this test run is remembered in
+// this file, so `is-active` flips to `active` afterwards. This is what lets a test
+// reproduce "Xray was stopped, Apply brings it up" without a live systemd
+// (task 19 §3). Absent file: nothing is remembered, the older stateless behaviour.
+const stateFile = process.env.FAKE_SYSTEMCTL_STATE_FILE;
+const activated = () => {
+  if (typeof stateFile !== 'string' || stateFile.length === 0) return [];
+  try {
+    return String(fs.readFileSync(stateFile, 'utf8')).split('\n').filter(Boolean);
+  } catch {
+    return [];
+  }
+};
+
 const gateUnit = process.env.GATEHOUSE_UNIT || 'sing-box';
 const forcedInactive = list(process.env.FAKE_SYSTEMCTL_INACTIVE);
 
 if (argv[0] === 'is-active') {
   const unit = argv[1];
-  let active = list(process.env.FAKE_SYSTEMCTL_ACTIVE).includes(unit);
+  let active = list(process.env.FAKE_SYSTEMCTL_ACTIVE).includes(unit) || activated().includes(unit);
   if (unit === gateUnit && !forcedInactive.includes(unit)) active = true;
   process.stdout.write(`${active ? 'active' : 'inactive'}\n`);
   process.exit(0);
@@ -54,9 +68,32 @@ if (argv[0] === 'is-enabled') {
 
 process.stdout.write(`fake systemctl: ${argv.join(' ')}\n`);
 
+// A TARGETED failure: only commands whose joined argv contains the marker fail.
+// This is how "stop xray fails, everything else is fine" is reproduced without
+// breaking the sing-box restart (task 19 §4).
+const failMatch = process.env.FAKE_SYSTEMCTL_FAIL_MATCH;
+if (typeof failMatch === 'string' && failMatch.length > 0 && argv.join(' ').includes(failMatch)) {
+  process.stderr.write(`fake systemctl: failed to ${argv.slice(0, 1).join('')} ${argv.slice(1).join(' ')}\n`);
+  process.exit(1);
+}
+
 if (process.env.FAKE_SYSTEMCTL_FAIL) {
   process.stderr.write('fake systemctl: unit sing-box.service not found\n');
   process.exit(1);
+}
+
+// Only a command that SUCCEEDED remembers the unit as started. The verb is not
+// always `argv[0]`: the same file doubles as the `sudo` stand-in, so a restart
+// arrives as `-n <systemctl> restart <unit>`.
+if (typeof stateFile === 'string' && stateFile.length > 0) {
+  const verb = argv.find((item) => item === 'restart' || item === 'start' || item === 'enable');
+  if (verb !== undefined) {
+    try {
+      fs.appendFileSync(stateFile, `${argv[argv.length - 1]}\n`);
+    } catch {
+      // a state file that cannot be written is not a reason to fail the command
+    }
+  }
 }
 
 process.exit(0);

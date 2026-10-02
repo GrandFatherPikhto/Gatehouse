@@ -9,7 +9,14 @@ import path from 'node:path';
 import {describe, test} from 'node:test';
 
 import {startServer} from '../src/web/server.mjs';
-import {FAKE_BIN_DIR, FIXTURES_DIR, fakeSystemEnv, makeTempDir, writeSettings} from './helpers.mjs';
+import {
+  DEFAULT_LINKS,
+  FAKE_BIN_DIR,
+  FIXTURES_DIR,
+  fakeSystemEnv,
+  makeTempDir,
+  writeSettings,
+} from './helpers.mjs';
 
 const XRAY_FIXTURE = path.join(FIXTURES_DIR, 'providers-xray', 'stash', 'xray-configs.json');
 const XRAY_BIN = path.join(FAKE_BIN_DIR, 'xray');
@@ -29,7 +36,15 @@ async function startEditor(options = {}) {
   fs.mkdirSync(stashDir, {recursive: true});
   fs.copyFileSync(XRAY_FIXTURE, path.join(stashDir, 'xray-configs.json'));
 
-  const providers = options.providers ?? {stash: {enabled: true, kind: 'xray'}};
+  const providers =
+    options.providers ??
+    (options.subscription === true
+      ? {vpnd: {enabled: true, kind: 'subscription'}}
+      : {stash: {enabled: true, kind: 'xray'}});
+  if (options.subscription === true) {
+    fs.mkdirSync(path.join(providersRoot, 'vpnd'), {recursive: true});
+    fs.writeFileSync(path.join(providersRoot, 'vpnd', 'links.txt'), DEFAULT_LINKS, 'utf8');
+  }
   const settingsFile = writeSettings(dir, {
     providers,
     proxies: options.proxies ?? [
@@ -79,6 +94,25 @@ describe('the provider panel of kind xray (§5)', () => {
       assert.match(html, /Конфиги Xray/);
     } finally {
       await editor.close();
+    }
+  });
+
+  test('an xray panel has NO flow/fp; a subscription panel HAS them (§6)', async () => {
+    const xray = await startEditor();
+    const subscription = await startEditor({subscription: true});
+    try {
+      const xrayHtml = await (await fetch(`${xray.base}/panel/provider:stash`)).text();
+      assert.doesNotMatch(xrayHtml, /name="flow"/);
+      assert.doesNotMatch(xrayHtml, /name="fp"/);
+      assert.doesNotMatch(xrayHtml, /Пропущено ссылок/);
+      assert.match(xrayHtml, /из тегов выходов и адресов/);
+
+      const subHtml = await (await fetch(`${subscription.base}/panel/provider:vpnd`)).text();
+      assert.match(subHtml, /name="flow"/);
+      assert.match(subHtml, /name="fp"/);
+    } finally {
+      await xray.close();
+      await subscription.close();
     }
   });
 
@@ -133,6 +167,31 @@ describe('«Службы → Xray» (§5)', () => {
       assert.match(html, /sudo systemctl enable xray/);
       assert.match(html, /Xray 26\.9\.30 \(fake\)/);
       assert.match(html, /Журнал Xray/);
+    } finally {
+      await editor.close();
+    }
+  });
+});
+
+describe('the journal of the service tabs (§5)', () => {
+  test('system:xray reads the xray unit and refreshes the xray panel', async () => {
+    const editor = await startEditor();
+    try {
+      const html = await (await fetch(`${editor.base}/panel/system:xray`)).text();
+      assert.match(html, /Юнит: <code>xray<\/code>/);
+      assert.match(html, /action="\/panel\/system:xray"/);
+      assert.match(html, /Журнал Xray/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('system:singbox keeps its own journal', async () => {
+    const editor = await startEditor();
+    try {
+      const html = await (await fetch(`${editor.base}/panel/system:singbox`)).text();
+      assert.match(html, /Юнит: <code>sing-box<\/code>/);
+      assert.match(html, /action="\/panel\/system:singbox"/);
     } finally {
       await editor.close();
     }

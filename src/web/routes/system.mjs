@@ -22,6 +22,8 @@ import {
   stopXray,
   testOutbounds,
   waitForActive,
+  xrayDiagnosis,
+  xrayPermissions,
   xrayState,
 } from '../../system/index.mjs';
 import {
@@ -88,6 +90,17 @@ function removeQuietly(file) {
 }
 
 /**
+ * The full output of a command, for the step's `detail` (a `<details>` under the
+ * line). Empty when there is nothing to show, so the template can skip it.
+ *
+ * @param {{stdout?: string, stderr?: string}} result
+ * @returns {string}
+ */
+function commandOutput(result) {
+  return `${result?.stderr ?? ''}\n${result?.stdout ?? ''}`.trim();
+}
+
+/**
  * Restarts sing-box and confirms the unit really came up. The `Restart=always`
  * unit may be `activating` for a moment, so the poll waits for two consecutive
  * `active` reads.
@@ -111,24 +124,27 @@ async function restartAndConfirm(ctx) {
 }
 
 /**
- * Restarts the Xray unit and confirms it really came up.
+ * Restarts the Xray unit and confirms it really came up. The refusal text is the
+ * last meaningful line of Xray's own output (`xrayDiagnosis`), not `Command
+ * failed`; the full output travels in `detail`.
  *
  * @param {ReturnType<import('../context.mjs').buildContext>} ctx
- * @returns {Promise<{ok: boolean, message: string}>}
+ * @returns {Promise<{ok: boolean, message: string, detail: string}>}
  */
 async function restartXrayAndConfirm(ctx) {
   const result = await restartXray({env: ctx.systemEnv});
   if (!result.ok) {
-    return {
-      ok: false,
-      message: result.stderr.trim() || result.error || 'перезапуск Xray не удался',
-    };
+    return {ok: false, message: xrayDiagnosis(result), detail: commandOutput(result)};
   }
   const active = await waitForActive({env: ctx.systemEnv, unit: ctx.system.xrayUnit});
   if (!active.ok) {
-    return {ok: false, message: `xray не поднялся (is-active: ${active.last || 'без ответа'})`};
+    return {
+      ok: false,
+      message: `xray не поднялся (is-active: ${active.last || 'без ответа'})`,
+      detail: '',
+    };
   }
-  return {ok: true, message: 'xray поднялся'};
+  return {ok: true, message: 'xray поднялся', detail: ''};
 }
 
 /**
@@ -151,10 +167,14 @@ export function registerSystemRoutes(app, ctx) {
       const tempPath = `${configPath}.new`;
       const xrayConfigPath = String(ctx.system.xrayConfig);
       const xrayTempPath = `${xrayConfigPath}.new`;
-      /** @type {Array<{ok: boolean, step: string, message: string, at: string}>} */
+      /** @type {Array<{ok: boolean, warn?: boolean, step: string, message: string,
+       *   detail?: string, at: string}>} */
       const steps = [];
-      const record = (ok, step, message) => {
-        steps.push({ok, step, message, at: new Date().toISOString()});
+      const record = (ok, step, message, detail = null, warn = false) => {
+        const entry = {ok, step, message, at: new Date().toISOString()};
+        if (warn) entry.warn = true;
+        if (typeof detail === 'string' && detail.length > 0) entry.detail = detail;
+        steps.push(entry);
       };
       const finish = (outcome, extra = {}) => {
         state.lastApply = {...outcome, at: new Date().toISOString(), steps};
@@ -265,8 +285,11 @@ export function registerSystemRoutes(app, ctx) {
           const xrayCheck = await checkXrayConfig(xrayTempPath, {env: systemEnv});
           if (!xrayCheck.ok) {
             cleanup();
-            const why = xrayCheck.stderr.trim() || xrayCheck.error || 'xray run -test не прошёл';
-            record(false, 'проверка схемы', `Xray: ${why}`);
+            // The MESSAGE the owner sees is Xray's own last meaningful line; the
+            // full output travels in the step (`<details>`). `Command failed` hid
+            // the cause before (task 19 §2).
+            const why = xrayDiagnosis(xrayCheck);
+            record(false, 'проверка схемы', `Xray: ${why}`, commandOutput(xrayCheck));
             return finish({
               ok: false,
               step: 'проверка схемы',
@@ -282,13 +305,18 @@ export function registerSystemRoutes(app, ctx) {
           xrayCount > 0 ? 'sing-box check и xray run -test прошли' : 'sing-box check прошёл',
         );
 
-        // 4. already applied? Both configs must match; do not break connections.
+        // 4. What is already true? Both configs must match AND the runtime must be
+        // sound: matching files are NOT "applied" while Xray is down and servers
+        // ride on it (task 19 §3). `xrayState` is read here, before the rename.
         const singboxSame = fs.existsSync(configPath) && sameBytes(tempPath, configPath);
         const xraySame =
           xrayCount === 0
             ? true
             : fs.existsSync(xrayConfigPath) && sameBytes(xrayTempPath, xrayConfigPath);
-        if (singboxSame && xraySame) {
+        const xrayRuntime = await xrayState({env: systemEnv, xray: ctx.system.xray});
+        const xrayRunning = xrayRuntime.active === true;
+        const xrayHealthy = xrayCount === 0 ? !xrayRunning : xrayRunning;
+        if (singboxSame && xraySame && xrayHealthy) {
           cleanup();
           record(true, 'применение', 'совпадает с боевыми файлами');
           return finish({
@@ -300,29 +328,41 @@ export function registerSystemRoutes(app, ctx) {
           });
         }
 
-        // 5. snapshot + rename both (never copy: the rename is atomic)
+        // 5. snapshot + rename ONLY the configs that changed; an identical temp file
+        // is dropped. `rename` stays inside the directory, so it stays atomic.
         phase = 'установка файла';
-        const snapshot = fs.existsSync(configPath)
-          ? snapshotConfig(configPath, model.stateDir, {keep: CONFIG_SNAPSHOT_KEEP})
-          : null;
+        const singboxChanged = !singboxSame;
+        const xrayChanged = xrayCount > 0 && !xraySame;
+        const snapshot =
+          singboxChanged && fs.existsSync(configPath)
+            ? snapshotConfig(configPath, model.stateDir, {keep: CONFIG_SNAPSHOT_KEEP})
+            : null;
         const xraySnapshot =
-          xrayCount > 0 && fs.existsSync(xrayConfigPath)
+          xrayChanged && fs.existsSync(xrayConfigPath)
             ? snapshotXrayConfig(xrayConfigPath, model.stateDir, {keep: CONFIG_SNAPSHOT_KEEP})
             : null;
-        fs.renameSync(tempPath, configPath);
-        const xrayChanged = xrayCount > 0 && !xraySame;
-        if (xrayCount > 0) {
-          fs.renameSync(xrayTempPath, xrayConfigPath);
-          record(true, 'установка файла', path.basename(xrayConfigPath));
+        if (singboxChanged) {
+          fs.renameSync(tempPath, configPath);
+          record(true, 'установка файла', path.basename(configPath));
+        } else {
+          removeQuietly(tempPath);
         }
-        // With no Xray servers there is no Xray temp file to remove: generation
-        // wrote none, and touching the default path would need rights we do not
-        // have on a desktop.
-
-        // 6. Xray: restart if its config changed, else leave it; no servers — stop it
-        let xrayRestarted = false;
         if (xrayCount > 0) {
           if (xrayChanged) {
+            fs.renameSync(xrayTempPath, xrayConfigPath);
+            record(true, 'установка файла', path.basename(xrayConfigPath));
+          } else {
+            removeQuietly(xrayTempPath);
+          }
+        }
+
+        // 6. Xray: restart when its config changed OR the service is not running
+        // (a reboot without autostart leaves sing-box pointing at dead ports);
+        // with no servers — stop it, and CHECK that the stop really happened.
+        let xrayRestarted = false;
+        let stopWarning = null;
+        if (xrayCount > 0) {
+          if (xrayChanged || !xrayRunning) {
             phase = 'перезапуск Xray';
             const up = await restartXrayAndConfirm(ctx);
             if (!up.ok) {
@@ -333,10 +373,9 @@ export function registerSystemRoutes(app, ctx) {
                 snapshot,
                 xraySnapshot,
                 xrayCount,
-                restartSingBoxAgain: true,
                 ctx,
               });
-              record(false, 'перезапуск Xray', up.message);
+              record(false, 'перезапуск Xray', up.message, up.detail);
               return finish({
                 ok: false,
                 step: 'перезапуск Xray',
@@ -348,54 +387,77 @@ export function registerSystemRoutes(app, ctx) {
               });
             }
             xrayRestarted = true;
-            record(true, 'перезапуск Xray', up.message);
+            record(
+              true,
+              xrayChanged ? 'перезапуск Xray' : 'запуск Xray',
+              xrayChanged ? up.message : 'служба не работала — запущена',
+            );
           } else {
             record(true, 'перезапуск Xray', 'конфиг Xray не изменился — не трогали');
           }
-        } else {
+        } else if (xrayRunning) {
           phase = 'остановка Xray';
-          const current = await xrayState({env: systemEnv});
-          if (current.active) {
-            await stopXray({env: systemEnv});
+          const stopped = await stopXray({env: systemEnv});
+          if (stopped.ok) {
             record(true, 'остановка Xray', 'серверов Xray нет — служба остановлена');
           } else {
-            record(true, 'Xray', 'серверов Xray нет — служба не запущена');
+            const why = xrayDiagnosis(stopped);
+            const rights = xrayPermissions(ctx.system.sudoers, {
+              systemctl: ctx.system.systemctl,
+            });
+            const hint =
+              rights.missing.length > 0 ? ` Нет прав: ${rights.missing.join('; ')}` : '';
+            stopWarning = `Xray не остановлен: ${why}.${hint}`;
+            record(true, 'остановка Xray', `не остановлен: ${why}`, commandOutput(stopped), true);
           }
+        } else {
+          record(true, 'Xray', 'серверов Xray нет — служба не запущена');
         }
 
-        // 7. sing-box — restart and confirm, as before
-        phase = 'перезапуск';
-        const up = await restartAndConfirm(ctx);
-        if (!up.ok) {
-          const restored =
-            snapshot === null ? null : restoreLatestConfig(model.stateDir, configPath);
-          if (xrayCount > 0 && xrayRestarted) {
-            restoreLatestXrayConfig(model.stateDir, xrayConfigPath);
-            await restartXrayAndConfirm(ctx);
+        // 7. sing-box — restart ONLY if its config changed
+        if (singboxChanged) {
+          phase = 'перезапуск';
+          const up = await restartAndConfirm(ctx);
+          if (!up.ok) {
+            const restored =
+              snapshot === null ? null : restoreLatestConfig(model.stateDir, configPath);
+            if (xrayCount > 0 && xrayRestarted) {
+              restoreLatestXrayConfig(model.stateDir, xrayConfigPath);
+              await restartXrayAndConfirm(ctx);
+            }
+            const again = restored === null ? {ok: false} : await restartAndConfirm(ctx);
+            record(false, 'перезапуск', up.message);
+            return finish({
+              ok: false,
+              step: 'перезапуск',
+              message:
+                `Применение не удалось на шаге «перезапуск»: ${up.message}` +
+                (restored === null
+                  ? ' — снимка нет, автоматический откат невозможен'
+                  : again.ok
+                    ? ' — выполнен откат, служба вернулась'
+                    : ' — откат сделан, но служба не поднялась'),
+              rolledBack: restored !== null,
+              panel: failKey,
+            });
           }
-          const again = restored === null ? {ok: false} : await restartAndConfirm(ctx);
-          record(false, 'перезапуск', up.message);
-          return finish({
-            ok: false,
-            step: 'перезапуск',
-            message:
-              `Применение не удалось на шаге «перезапуск»: ${up.message}` +
-              (restored === null
-                ? ' — снимка нет, автоматический откат невозможен'
-                : again.ok
-                  ? ' — выполнен откат, служба вернулась'
-                  : ' — откат сделан, но служба не поднялась'),
-            rolledBack: restored !== null,
-            panel: failKey,
-          });
+          record(true, 'перезапуск', up.message);
+        } else {
+          record(true, 'перезапуск', 'конфиг sing-box не изменился — не перезапускали');
         }
-        record(true, 'перезапуск', up.message);
+
         return finish({
           ok: true,
           step: 'готово',
-          message: xrayCount > 0
-            ? 'Применено: config.json и конфиг Xray установлены, службы перезапущены'
-            : 'Применено: config.json установлен и sing-box перезапущен',
+          message:
+            stopWarning ??
+            (xrayCount > 0
+              ? singboxChanged
+                ? 'Применено: config.json и конфиг Xray установлены, службы перезапущены'
+                : 'Применено: Xray запущен'
+              : singboxChanged
+                ? 'Применено: config.json установлен и sing-box перезапущен'
+                : 'Применено'),
           rolledBack: false,
           panel: ownKey,
         });

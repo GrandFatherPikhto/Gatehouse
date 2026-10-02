@@ -640,7 +640,12 @@ export function xrayInstalled(options = {}) {
 export async function checkXrayConfig(configPath, options = {}) {
   const config = systemConfig(options.env, options);
   const file = options.xray ?? config.xray;
-  const args = ['run', '-test', '-c', String(configPath)];
+  // `-format json` is REQUIRED: Xray picks the format from the file EXTENSION,
+  // and the apply chain checks a neighbouring `config.json.new`. Without the flag
+  // Xray answers `Failed to get format of …config.json.new` — caught by the sandbox
+  // check, not by the fake. The `.new` suffix stays: the `rename` must stay inside
+  // the directory to remain atomic.
+  const args = ['run', '-test', '-format', 'json', '-c', String(configPath)];
   const result = await run(file, args, {
     timeout: positive(options.timeout, config.testTimeout),
     env: options.env,
@@ -656,6 +661,34 @@ export async function checkXrayConfig(configPath, options = {}) {
     configPath: String(configPath),
     args,
   };
+}
+
+/**
+ * The last meaningful line of an Xray run, for the refusal text.
+ *
+ * Xray prints a banner (`Xray 26.x … A unified platform …`), sometimes
+ * `[Warning] …`, and then the real error. Showing all of it in a bar line is
+ * noise; showing only `Command failed` (what `execFile` gives) hides the cause.
+ * This keeps the LAST non-noise line, trimmed to a sane length; the full output
+ * travels in the step's `detail`.
+ *
+ * @param {{stdout?: string, stderr?: string, error?: string|null}} result
+ * @returns {string}
+ */
+export function xrayDiagnosis(result) {
+  const text = `${result?.stderr ?? ''}\n${result?.stdout ?? ''}`;
+  const lines = String(text)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => !/^Xray\s+\d/i.test(line))
+    .filter((line) => !/unified platform/i.test(line))
+    .filter((line) => !/^\[warning\]/i.test(line))
+    .filter((line) => !/^Configuration OK/i.test(line));
+  if (lines.length > 0) return lines[lines.length - 1].slice(0, 500);
+  return typeof result?.error === 'string' && result.error.length > 0
+    ? result.error
+    : 'xray не сказал, что не так';
 }
 
 /**

@@ -15,8 +15,14 @@
     <p class="hint">
       Идентификатор — имя папки <code><%= panel.providerId %></code>. Он остаётся в
       <code>tunnels[].provider</code>, ключах панелей и <code>webui.json</code> и не
-      меняется; имена серверов берутся из ссылок и приписки ниже. Человекочитаемое имя
-      показывается только в редакторе.
+      меняется;
+      <% if (panel.folderKind === 'xray') { %>
+        имена серверов — из тегов выходов и адресов (<code><тег> (<хост>)</code>)
+        плюс приписка ниже.
+      <% } else { %>
+        имена серверов берутся из ссылок и приписки ниже.
+      <% } %>
+      Человекочитаемое имя показывается только в редакторе.
     </p>
     <label for="label">имя</label>
     <%# The file's own profile title is offered as a PLACEHOLDER only: the label is
@@ -79,9 +85,11 @@
     </label>
 
     <div data-kind-block="subscription" <%= panel.folderKind === 'awg' ? 'hidden' : '' %>>
-      <%# The тонкие настройки are a SUBSCRIPTION concern and do not apply to
-          Xray configs, so that block is hidden for kind «xray». %>
-      <details class="overrides" <%= panel.overrides.open ? 'open' : '' %> <%= panel.folderKind === 'xray' ? 'hidden' : '' %>>
+      <%# The тонкие настройки (flow, fp) are a SUBSCRIPTION concern and do not
+          apply to Xray configs, so the block is not rendered for kind «xray»
+          (task 19 §6). %>
+      <% if (panel.folderKind !== 'xray') { %>
+      <details class="overrides" <%= panel.overrides.open ? 'open' : '' %>>
         <summary>Тонкие настройки</summary>
         <p class="hint">
           Авто — как в ссылках. Переопределение действует на все серверы подписки и
@@ -110,6 +118,7 @@
         </select>
         <span class="hint">в ссылках: <%= panel.overrides.fpActual %></span>
       </details>
+      <% } %>
     </div>
   </fieldset>
 </form>
@@ -129,7 +138,9 @@
   <% } %>
 </p>
 
-<% if (panel.skippedCount > 0) { %>
+<%# For kind «xray» the skipped entries are OUTBOUNDS, not links; they are listed
+    inside the server block above, so the generic list is skipped. %>
+<% if (panel.skippedCount > 0 && panel.folderKind !== 'xray') { %>
   <h3>Пропущено ссылок: <%= panel.skippedCount %></h3>
   <ul class="warnings">
     <% for (const item of panel.skipped) { %>

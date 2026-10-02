@@ -10,7 +10,8 @@ import path from 'node:path';
 import process from 'node:process';
 
 import {ConfigError, DEFAULT_SETTINGS_FILE} from '../src/core/errors.mjs';
-import {generateConfigFile} from '../src/core/settings.mjs';
+import {generateConfigFile, previewPair} from '../src/core/settings.mjs';
+import {plural} from '../src/core/sources.mjs';
 
 const USAGE = `Использование: node tools/generate.mjs [опции]
 
@@ -137,6 +138,46 @@ export async function run(argv) {
   }
 
   try {
+    // The CLI writes ONLY config.json: it neither writes the Xray config nor
+    // persists the handed-out ports. A server whose port is not yet in the
+    // document would leave sing-box pointing at a port nobody listens on, and the
+    // number could change on the next build — refuse (task 19 §7). A preview
+    // builds both configs in memory, so nothing is written before the check.
+    const providersRoot =
+      typeof process.env.GATEHOUSE_PROVIDERS === 'string' && process.env.GATEHOUSE_PROVIDERS.length > 0
+        ? process.env.GATEHOUSE_PROVIDERS
+        : undefined;
+    const preview = previewPair(options.settings, {
+      links: options.links,
+      listenIp: options.listenIp,
+      providersRoot,
+    });
+    const xrayCount = preview.xray.servers.length;
+    if (xrayCount > 0) {
+      process.stderr.write(
+        `Предупреждение: ${xrayCount} ${plural(
+          xrayCount,
+          'сервер',
+          'сервера',
+          'серверов',
+        )} через Xray: CLI не пишет конфиг Xray и не сохраняет порты — ` +
+          'применяйте из интерфейса.\n',
+      );
+    }
+    const unsavedPorts = Object.keys(preview.xray.assigned);
+    if (unsavedPorts.length > 0) {
+      process.stderr.write(
+        `Ошибка: ${unsavedPorts.length} ${plural(
+          unsavedPorts.length,
+          'порт',
+          'порта',
+          'портов',
+        )} Xray не сохранены в webui.json: CLI не пишет конфиг Xray и не сохраняет ` +
+          'порты — применяйте из интерфейса.\n',
+      );
+      return 1;
+    }
+
     const {outputFile, stats, warnings} = generateConfigFile(options.settings, {
       output: options.output,
       links: options.links,

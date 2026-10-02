@@ -24,6 +24,7 @@ import fs from 'node:fs';
 
 import {ConfigError} from '../core/errors.mjs';
 import {stringifyConfig} from '../core/settings.mjs';
+import {plural} from '../core/sources.mjs';
 import {LABEL_NAMES_CAP} from '../model/stale.mjs';
 import {listConfigSnapshots} from '../model/storage.mjs';
 
@@ -226,6 +227,31 @@ export function applyBar(ctx) {
       canRollback: false,
       saveButton: true,
       applyButton: false,
+      lastApply,
+      steps,
+    };
+  }
+
+  // Task 19 §3: enabled servers go through Xray, and the service is not running
+  // (stopped by hand, crashed, or the router rebooted without autostart). The
+  // live files may match the document, but those ports are dead — say so before
+  // the owner presses anything.
+  const xrayServers = model.enabledXrayServers().length;
+  const xrayRuntime = ctx.state?.xray ?? {};
+  if (xrayServers > 0 && xrayRuntime.active !== true) {
+    return {
+      state: 'warning',
+      message: `Xray не работает — ${xrayServers} ${plural(
+        xrayServers,
+        'сервер',
+        'сервера',
+        'серверов',
+      )} недоступны`,
+      detail: 'нажмите «Применить» или «Службы → Xray» → «Перезапустить»',
+      lastAppliedAt: appliedAt(lastApply),
+      canRollback,
+      saveButton: true,
+      applyButton: true,
       lastApply,
       steps,
     };

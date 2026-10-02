@@ -4,21 +4,62 @@
 // for the editor (and its tests) to observe which unit would have been acted on,
 // while the real router is never reached by `npm run dev`.
 //
-// `is-active`/`is-enabled` answer the happy path on purpose: the apply chain
-// polls `systemctl is-active sing-box` after a restart, and a stub that answered
-// `inactive` would make the sandbox roll the config back on every Apply.
+// By DEFAULT `is-active`/`is-enabled` answer the happy path: `active`/`enabled`
+// for every unit. The apply chain polls `systemctl is-active` after a restart,
+// and a stub that answered `inactive` would make the sandbox roll the config back
+// on every Apply.
+//
+// Two environment switches let the MANUAL sandbox check reproduce a stopped
+// service (task 19 §8.2), without a live systemd:
+//   * `FAKE_SYSTEMCTL_INACTIVE`  — comma-separated units that answer `inactive`;
+//   * `FAKE_SYSTEMCTL_DISABLED`  — comma-separated units that answer `disabled`;
+//   * `FAKE_SYSTEMCTL_STATE_FILE` — a file where units that were restarted are
+//     remembered, so `is-active` flips to `active` after a successful restart.
 //
 // The output format is free but unambiguous on purpose: one line, a marker and
 // the JSON array of arguments, so a test can assert on the exact argv without
 // depending on the rest of the log.
+import fs from 'node:fs';
+
 const args = process.argv.slice(2);
+const list = (value) => String(value ?? '').split(',').map((item) => item.trim()).filter(Boolean);
+
+const stateFile = process.env.FAKE_SYSTEMCTL_STATE_FILE;
+const started = () => {
+  if (typeof stateFile !== 'string' || stateFile.length === 0) return [];
+  try {
+    return String(fs.readFileSync(stateFile, 'utf8')).split('\n').filter(Boolean);
+  } catch {
+    return [];
+  }
+};
+
 if (args[0] === 'is-active') {
-  process.stdout.write('active\n');
+  const unit = args[1];
+  const forced = list(process.env.FAKE_SYSTEMCTL_INACTIVE).includes(unit);
+  const active = (!forced || started().includes(unit));
+  process.stdout.write(`${active ? 'active' : 'inactive'}\n`);
   process.exit(0);
 }
 if (args[0] === 'is-enabled') {
-  process.stdout.write('enabled\n');
+  const unit = args[1];
+  const disabled = list(process.env.FAKE_SYSTEMCTL_DISABLED).includes(unit);
+  process.stdout.write(`${disabled ? 'disabled' : 'enabled'}\n`);
   process.exit(0);
 }
+
 process.stdout.write(`fake-systemctl ${JSON.stringify(args)}\n`);
+
+// A unit that was restarted/started/enabled is remembered as running.
+if (typeof stateFile === 'string' && stateFile.length > 0) {
+  const verb = args.find((item) => item === 'restart' || item === 'start' || item === 'enable');
+  if (verb !== undefined) {
+    try {
+      fs.appendFileSync(stateFile, `${args[args.length - 1]}\n`);
+    } catch {
+      // a state file that cannot be written is not a reason to fail
+    }
+  }
+}
+
 process.exit(0);
