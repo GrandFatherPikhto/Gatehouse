@@ -270,18 +270,43 @@ preview with the policy-routing switch.
   new folder on disk never moves `config.json` behind the owner's back. What could
   not be read is listed with the reason (no access, empty, not one valid link, a
   folder name unfit for an identifier, a record whose folder is gone). The links
-  are merged into one list, and **an identifier is appended only when two enabled
-  providers hand out the same name**, so a single-provider project keeps its tags
-  and `config.json` stays byte-identical. The human-readable `label` is SHOWN only
-  and never reaches tags, keys or `config.json`. On the «Провайдеры» panel the
-  folders are listed with a tick and a «Забыть» button for a record whose folder
-  is gone; there is NO add form — a folder is created on disk. Clicking a provider
-  opens its panel: a Sing-Box provider shows the servers it hands out, an Amnezia
-  provider its `.conf` files (only when the provider is enabled), each opening the
+  are merged into one list; **two ENABLED providers handing out the same server
+  name is a REFUSAL, not a rename** — generation stops with the names in hand and
+  the panel says how to fix it, because silently picking one would send traffic to
+  an exit the owner did not choose. A single-provider project keeps its tags and
+  `config.json` byte-identical. The human-readable `label` is SHOWN only and never
+  reaches tags, keys or `config.json`. On the «Провайдеры» panel the folders are
+  listed with a tick and a «Забыть» button for a record whose folder is gone; there
+  is NO add form — a folder is created on disk. Clicking a provider opens its
+  panel: a Sing-Box provider shows the servers it hands out, an Amnezia provider
+  its `.conf` files (only when the provider is enabled), each opening the
   normalisation preview. No action touches the files on disk: «Забыть» means
   "forget the record", never "delete the owner's folder". A document written before
   this form (a bare `sources` list) is still read; the editor converts it into
   `providers` on open and says so.
+* **One subscription variant is one provider is one folder.** The same servers
+  handed out over Reality and over WebSocket are two folders — `vpnd/` and
+  `vpnd-ws/` — and both may be enabled at once; `urltest` then picks the live one.
+  The names are identical in both, so give one of them a **suffix** (the «приписка
+  к именам серверов» field, at most 16 characters): `🇦🇱 Albania - Tirana 1` becomes
+  `🇦🇱 Albania - Tirana 1 WS`. The suffix is appended after the in-file duplicate
+  numbering (`… #2 WS`), and changing it renames those servers in the proxies and
+  routes (pinned proxies included), so a pinning does not break.
+* **VLESS transports are read from the link, never from the file or folder name.**
+  `type` is honoured for `ws`, `grpc`, `httpupgrade`, `http`/`h2` and `quic`
+  (`tcp`/`raw` is the bare TCP of before); `alpn`, `path`, `host` and the Xray
+  `?ed=` early data are carried through, while `flow` is applied only over TCP
+  (Vision cannot run over WebSocket). A link with an unknown transport (`xhttp`,
+  `kcp`, …), an unknown `security`, `allowInsecure=1`, or a `grpc` without a
+  `serviceName` is **skipped with a warning** instead of silently becoming a broken
+  outbound; the panel lists the skipped links and the protocol summary (Reality,
+  TLS · WS, …) and never prints the UUID.
+* **«Тонкие настройки» correct a subscription without editing the file.** `flow`
+  (`vision`/`none`) and `fp` (uTLS fingerprint) are stored per provider under
+  `overrides` and applied to every server of that subscription. This exists for
+  vpnd's «VLESS TCP» (`ap10`, `type=raw`, `security=tls`), which arrives without
+  `flow` although the server requires Vision: set flow → Vision once, and it
+  survives subscription updates.
 * **A tunnel is enabled with «включить», and only then does it become a proxy.**
   The normaliser `src/core/normalize.mjs` is a pure function: it adds `Table = off`,
   drops `DNS =`, and copies `AllowedIPs` plus the obfuscation (`Jc/Jmin/Jmax`,

@@ -80,6 +80,19 @@ export class ProjectModel extends ProjectSession {
     return providers.setProviderLabel(this, id, label);
   }
 
+  /**
+   * Sets (or clears) the suffix appended to every server name; renames the
+   * provider's servers in proxies and routes and refuses a collision (§2.2).
+   */
+  setProviderSuffix(id, suffix) {
+    return providers.setProviderSuffix(this, id, suffix);
+  }
+
+  /** Sets the per-subscription overrides (`flow`, `fp`); «Авто» deletes a key. */
+  setProviderOverrides(id, values) {
+    return providers.setProviderOverrides(this, id, values);
+  }
+
   /** Forgets a record whose folder is gone; a folder on disk is never dropped. */
   forgetProvider(id) {
     return providers.forgetProvider(this, id);

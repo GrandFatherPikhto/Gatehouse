@@ -248,48 +248,325 @@ function resolvePort(portText) {
   return port === 0 ? 443 : port;
 }
 
+/** Transport parameter values sing-box accepts, mapped to the internal kind. */
+const TRANSPORT_TYPES = Object.freeze({
+  ws: 'ws',
+  grpc: 'grpc',
+  httpupgrade: 'httpupgrade',
+  http: 'http',
+  h2: 'http',
+  quic: 'quic',
+});
+
+/** Human names of the transports, for `transportLabel`. */
+const TRANSPORT_LABELS = Object.freeze({
+  ws: 'WS',
+  grpc: 'gRPC',
+  httpupgrade: 'HTTPUpgrade',
+  http: 'HTTP',
+  quic: 'QUIC',
+});
+
+/** Values `providers.<id>.overrides.fp` accepts; the schema repeats the list. */
+export const UTLS_FINGERPRINTS = Object.freeze([
+  'chrome',
+  'firefox',
+  'safari',
+  'edge',
+  'ios',
+  'android',
+  'random',
+  'randomized',
+]);
+
+/**
+ * A label for one link that NEVER leaks the UUID: the name from the `#fragment`
+ * when there is one, the `host:port` otherwise. Every skip message carries this
+ * label, so a warning can be shown to the owner without printing a credential.
+ *
+ * @param {string} rawUrl
+ * @returns {string}
+ */
+export function linkLabel(rawUrl) {
+  try {
+    const parts = splitVlessUrl(rawUrl);
+    if (parts.fragment) {
+      const name = unquote(parts.fragment).trim();
+      if (name.length > 0) return name;
+    }
+    const {hostname, portText} = splitNetloc(parts.netloc);
+    if (hostname) return portText === null ? `${hostname}:443` : `${hostname}:${portText}`;
+  } catch {
+    // A link too broken to label falls back to a neutral word.
+  }
+  return 'ссылка';
+}
+
+/**
+ * Records a skipped link as a warning string (for the generator) and as a
+ * structured `{label, reason}` record (for the panel).
+ *
+ * @param {string[]} warnings
+ * @param {Array<{label: string, reason: string}>} skipped
+ * @param {string} label
+ * @param {string} reason
+ * @returns {null}
+ */
+function skipLink(warnings, skipped, label, reason) {
+  warnings.push(`${label}: ${reason}`);
+  skipped.push({label, reason});
+  return null;
+}
+
+/**
+ * The transport kind of an outbound: `tcp` when it carries no `transport`.
+ *
+ * @param {Record<string, unknown>} outbound
+ * @returns {string}
+ */
+export function transportKind(outbound) {
+  const type = outbound && outbound.transport ? outbound.transport.type : undefined;
+  return typeof type === 'string' && type.length > 0 ? type : 'tcp';
+}
+
+/**
+ * The protocol label of one server, for the panel: `<protection>` for a bare
+ * TCP server, `<protection> · <transport>` otherwise. The three protection
+ * values are `Reality`, `TLS` and `без шифрования`.
+ *
+ * @param {Record<string, unknown>} outbound
+ * @returns {string}
+ */
+export function transportLabel(outbound) {
+  const tls = outbound ? outbound.tls : null;
+  const protection =
+    tls && tls.reality && tls.reality.enabled
+      ? 'Reality'
+      : tls && tls.enabled
+        ? 'TLS'
+        : 'без шифрования';
+  const name = TRANSPORT_LABELS[transportKind(outbound)];
+  return name === undefined ? protection : `${protection} · ${name}`;
+}
+
+/**
+ * Rebuilds an outbound in the canonical key order of the generator:
+ * `type, tag, server, server_port, uuid, flow?, tls?, transport?`. JS keeps
+ * string key insertion order, so this is what keeps `config.json` byte-stable
+ * when a key is added after the fact (an override of `flow`, for example).
+ *
+ * @param {Record<string, unknown>} outbound
+ * @returns {Record<string, unknown>}
+ */
+function canonicalOutbound(outbound) {
+  const ordered = {
+    type: outbound.type,
+    tag: outbound.tag,
+    server: outbound.server,
+    server_port: outbound.server_port,
+    uuid: outbound.uuid,
+  };
+  if (outbound.flow !== undefined) ordered.flow = outbound.flow;
+  if (outbound.tls !== undefined) ordered.tls = outbound.tls;
+  if (outbound.transport !== undefined) ordered.transport = outbound.transport;
+  return ordered;
+}
+
+/**
+ * Builds the `ws` transport of a link, including the Xray early-data form: an
+ * `?ed=<number>` in the path becomes `max_early_data` +
+ * `early_data_header_name` and is removed from the path, while every other query
+ * parameter is kept untouched.
+ *
+ * @param {URLSearchParams} query
+ * @returns {Record<string, unknown>}
+ */
+function buildWsTransport(query) {
+  let path = unquote(getFirst(query, 'path') || '/');
+  let maxEarlyData;
+  const mark = path.indexOf('?');
+  if (mark !== -1) {
+    const base = path.slice(0, mark);
+    const kept = [];
+    for (const piece of path.slice(mark + 1).split('&')) {
+      const eq = piece.indexOf('=');
+      const key = eq === -1 ? piece : piece.slice(0, eq);
+      const value = eq === -1 ? '' : piece.slice(eq + 1);
+      if (key === 'ed' && /^\d+$/.test(value)) maxEarlyData = Number(value);
+      else kept.push(piece);
+    }
+    path = kept.length > 0 ? `${base}?${kept.join('&')}` : base;
+  }
+
+  const transport = {type: 'ws', path};
+  const host = getFirst(query, 'host');
+  if (host) transport.headers = {Host: host};
+  if (maxEarlyData !== undefined) {
+    transport.max_early_data = maxEarlyData;
+    transport.early_data_header_name = 'Sec-WebSocket-Protocol';
+  }
+  return transport;
+}
+
+/**
+ * Applies the per-subscription `overrides` (§2.5) to one parsed outbound and
+ * returns a new object in the canonical key order.
+ *
+ * `flow` only concerns links over TCP (`type` absent / `tcp` / `raw`): `vision`
+ * forces `xtls-rprx-vision`, `none` removes it, anything else keeps the link as
+ * parsed. `fp` rewrites `tls.utls.fingerprint` of every link that carries `tls`.
+ *
+ * @param {Record<string, unknown>} outbound
+ * @param {{flow?: string, fp?: string}} [overrides]
+ * @returns {Record<string, unknown>}
+ */
+export function applyOverrides(outbound, overrides = {}) {
+  const next = {...outbound};
+  if ((overrides.flow === 'vision' || overrides.flow === 'none') && transportKind(next) === 'tcp') {
+    if (overrides.flow === 'vision') next.flow = 'xtls-rprx-vision';
+    else delete next.flow;
+  }
+  if (typeof overrides.fp === 'string' && next.tls && next.tls.utls) {
+    next.tls = {...next.tls, utls: {...next.tls.utls, fingerprint: overrides.fp}};
+  }
+  return canonicalOutbound(next);
+}
+
 /**
  * Parses one VLESS link into a sing-box outbound, or null when the link must be
- * skipped. Skipped links are not errors: a warning is collected instead, which
- * is what the reference printed to stderr.
+ * skipped. Skipped links are not errors: each becomes a warning (for the
+ * generator) and a `{label, reason}` record (for the panel). A `#`-comment line
+ * and a line without a scheme are skipped silently, as the owner expects.
  *
  * @param {string} rawUrl
  * @param {string[]} [warnings] Collector for non-fatal problems.
+ * @param {Array<{label: string, reason: string}>} [skipped] Structured skips.
  * @returns {Record<string, unknown>|null}
  */
-export function parseVless(rawUrl, warnings = []) {
-  const preview = pythonStrip(rawUrl).slice(0, 80);
+export function parseVless(rawUrl, warnings = [], skipped = []) {
+  let label = 'ссылка';
   try {
     const parts = splitVlessUrl(rawUrl);
-    if (parts.scheme !== 'vless') return null;
+    if (parts.scheme === '') return null; // blank, `#…` and non-URL lines
+    if (parts.scheme !== 'vless') {
+      label = linkLabel(rawUrl);
+      return skipLink(warnings, skipped, label, 'не vless://-ссылка, пропущена');
+    }
 
+    label = linkLabel(rawUrl);
     const {username: uuid, hostname: server, portText} = splitNetloc(parts.netloc);
     if (!uuid || !server) {
-      warnings.push(`Пропущена ссылка без UUID или сервера: ${preview}`);
-      return null;
+      return skipLink(warnings, skipped, label, 'ссылка без UUID или сервера');
     }
 
     const port = resolvePort(portText);
     const tag = parts.fragment ? unquote(parts.fragment) : `vpnd-${server}`;
     const query = new URLSearchParams(parts.query);
-    const security = getFirst(query, 'security');
 
-    const outbound = {
-      type: 'vless',
-      tag,
-      server,
-      server_port: port,
-      uuid,
-    };
+    const securityRaw = getFirst(query, 'security');
+    const security = securityRaw.toLowerCase();
 
+    const insecure = getFirst(query, 'allowInsecure') || getFirst(query, 'insecure');
+    if (insecure === '1' || insecure.toLowerCase() === 'true') {
+      return skipLink(
+        warnings,
+        skipped,
+        label,
+        'отключение проверки сертификата не поддерживается сознательно',
+      );
+    }
+
+    if (security !== '' && security !== 'none' && security !== 'tls' && security !== 'reality') {
+      return skipLink(warnings, skipped, label, `неизвестный security '${securityRaw}'`);
+    }
+
+    // --- transport ---------------------------------------------------------
+    const typeRaw = getFirst(query, 'type');
+    const type = typeRaw.toLowerCase();
+    let kind = 'tcp';
+    if (type === '' || type === 'tcp' || type === 'raw') kind = 'tcp';
+    else if (Object.hasOwn(TRANSPORT_TYPES, type)) kind = TRANSPORT_TYPES[type];
+    else {
+      return skipLink(
+        warnings,
+        skipped,
+        label,
+        `неизвестный транспорт '${typeRaw}': sing-box его не поддерживает`,
+      );
+    }
+
+    const headerType = getFirst(query, 'headerType');
+    if (kind === 'tcp' && headerType && headerType.toLowerCase() !== 'none') {
+      return skipLink(
+        warnings,
+        skipped,
+        label,
+        `HTTP-маскировка (headerType=${headerType}) не поддерживается`,
+      );
+    }
+
+    let transport;
+    if (kind === 'ws') {
+      transport = buildWsTransport(query);
+    } else if (kind === 'grpc') {
+      const serviceName = getFirst(query, 'serviceName');
+      if (!serviceName) {
+        return skipLink(warnings, skipped, label, 'grpc без serviceName: некуда подключиться');
+      }
+      transport = {type: 'grpc', service_name: serviceName};
+    } else if (kind === 'httpupgrade') {
+      transport = {type: 'httpupgrade', path: unquote(getFirst(query, 'path') || '/')};
+      const host = getFirst(query, 'host');
+      if (host) transport.host = host;
+    } else if (kind === 'http') {
+      const hosts = getFirst(query, 'host')
+        .split(',')
+        .map((host) => host.trim())
+        .filter((host) => host.length > 0);
+      transport = {type: 'http'};
+      if (hosts.length > 0) transport.host = hosts;
+      transport.path = unquote(getFirst(query, 'path'));
+    } else if (kind === 'quic') {
+      const quicSecurity = getFirst(query, 'quicSecurity');
+      if (quicSecurity && quicSecurity.toLowerCase() !== 'none') {
+        return skipLink(
+          warnings,
+          skipped,
+          label,
+          `quic: quicSecurity '${quicSecurity}' не поддерживается`,
+        );
+      }
+      if (headerType && headerType.toLowerCase() !== 'none') {
+        return skipLink(
+          warnings,
+          skipped,
+          label,
+          `quic: headerType '${headerType}' не поддерживается`,
+        );
+      }
+      transport = {type: 'quic'};
+    }
+
+    // --- flow: Vision works only over bare TCP -----------------------------
+    const flowInLink = getFirst(query, 'flow');
+    let flow;
+    if (kind === 'tcp') {
+      if (security === 'reality') flow = flowInLink || 'xtls-rprx-vision';
+      else if (security === 'tls') flow = flowInLink || undefined;
+    } else if (flowInLink) {
+      warnings.push(`${label}: flow '${flowInLink}' отброшен: Vision работает только поверх TCP`);
+      skipped.push({
+        label,
+        reason: `flow '${flowInLink}' отброшен: Vision работает только поверх TCP`,
+      });
+    }
+
+    // --- security ----------------------------------------------------------
+    let tls;
     if (security === 'reality') {
       const pbk = getFirst(query, 'pbk');
-      if (!pbk) {
-        warnings.push(`Пропущена reality-ссылка без pbk: ${preview}`);
-        return null;
-      }
-      outbound.flow = getFirst(query, 'flow', 'xtls-rprx-vision');
-      outbound.tls = {
+      if (!pbk) return skipLink(warnings, skipped, label, 'reality-ссылка без pbk');
+      tls = {
         enabled: true,
         server_name: getFirst(query, 'sni'),
         utls: {enabled: true, fingerprint: getFirst(query, 'fp', 'chrome')},
@@ -300,18 +577,28 @@ export function parseVless(rawUrl, warnings = []) {
         },
       };
     } else if (security === 'tls') {
-      outbound.tls = {
+      tls = {
         enabled: true,
         server_name: getFirst(query, 'sni'),
         utls: {enabled: true, fingerprint: getFirst(query, 'fp', 'chrome')},
       };
     }
-    // Without security (plain tcp) neither flow nor tls is set at all.
 
+    if (tls) {
+      const alpn = getFirst(query, 'alpn')
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+      if (alpn.length > 0) tls.alpn = alpn;
+    }
+
+    const outbound = {type: 'vless', tag, server, server_port: port, uuid};
+    if (flow !== undefined) outbound.flow = flow;
+    if (tls !== undefined) outbound.tls = tls;
+    if (transport !== undefined) outbound.transport = transport;
     return outbound;
   } catch (error) {
-    warnings.push(`Ошибка парсинга ссылки: ${error.message}`);
-    return null;
+    return skipLink(warnings, skipped, label, `Ошибка парсинга ссылки: ${error.message}`);
   }
 }
 
@@ -340,14 +627,15 @@ export const BOM_WARNING =
 
 /**
  * Reads the links file and returns the outbounds (throws ConfigError when there
- * is nothing usable). Blank lines are skipped silently, unparsable links become
- * warnings.
+ * is nothing usable). Blank lines and `#`-comment lines are skipped silently;
+ * unparsable links become warnings and `{label, reason}` records.
  *
  * @param {string} filePath
  * @param {string[]} [warnings]
+ * @param {Array<{label: string, reason: string}>} [skipped]
  * @returns {Array<Record<string, unknown>>}
  */
-export function parseLinks(filePath, warnings = []) {
+export function parseLinks(filePath, warnings = [], skipped = []) {
   if (!fs.existsSync(filePath)) {
     throw new ConfigError(`файл ссылок ${filePath} не найден`);
   }
@@ -373,8 +661,11 @@ export function parseLinks(filePath, warnings = []) {
   // Python opened the file in text mode, so universal newlines turned \r\n and
   // a lone \r into \n before readlines() split the text.
   for (const line of text.split(LINE_BREAK)) {
-    if (!pythonStrip(line)) continue;
-    const outbound = parseVless(line, warnings);
+    const stripped = pythonStrip(line);
+    if (!stripped) continue;
+    // A `#` line is a comment the owner uses to switch a server off by hand.
+    if (stripped.startsWith('#')) continue;
+    const outbound = parseVless(line, warnings, skipped);
     if (outbound) outbounds.push(outbound);
   }
 

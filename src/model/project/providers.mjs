@@ -15,10 +15,17 @@ import path from 'node:path';
 
 import {ConfigError, isMapping} from '../../core/errors.mjs';
 import {
+  SUFFIX_MAX_LENGTH,
+  cleanSuffix,
+  collisionRefusal,
   isProviderId,
+  providerOverrides as recordOverrides,
   providersRootInfo as rootInfoOf,
   readProviders,
 } from '../../core/sources.mjs';
+import {UTLS_FINGERPRINTS} from '../../core/vless.mjs';
+import * as proxies from './proxies.mjs';
+import * as routes from './routes.mjs';
 
 /** Stored `providers` map as a plain object: `id -> {enabled, label?}`. */
 export function providersMap(model) {
@@ -125,15 +132,16 @@ export function setProvidersDir(model, value) {
  * with an honest reason. `providers` carries the folders that were READ (a links
  * file and/or tunnel configs); `unread` carries everything that could not be
  * read, with the reason. `tags` are the merged outbound tags of the enabled
- * providers, carrying a provider identifier only on a name collision — which is
- * what keeps a one-provider project's `config.json` byte-identical.
+ * providers, de-duplicated for DISPLAY; a name two enabled providers share is
+ * reported in `collisions` and generation refuses with it (§2.2).
  *
  * @param {import('../project.mjs').ProjectModel} model
  * @returns {{root: string, rootSource: string,
  *   rootState: {state: string, owner: string|null, mode: string|null,
  *   message: string|null}, providers: Array<Record<string, unknown>>,
  *   unread: Array<Record<string, unknown>>,
- *   outbounds: Array<Record<string, unknown>>, tags: string[], error: string|null,
+ *   outbounds: Array<Record<string, unknown>>, tags: string[],
+ *   collisions: Array<{tag: string, providers: string[]}>, error: string|null,
  *   warnings: string[]}}
  */
 export function providersInfo(model) {
@@ -149,15 +157,117 @@ export function providersInfo(model) {
     unread: read.unread,
     outbounds: read.outbounds,
     tags: read.tags,
+    collisions: read.collisions,
     error: read.rootState.message,
     warnings,
   };
 }
 
 /**
+ * The §2.2 refusal for the CURRENT names, or `null` when nothing collides.
+ *
+ * @param {import('../project.mjs').ProjectModel} model
+ * @returns {string|null}
+ */
+function providerCollisionRefusal(model) {
+  return collisionRefusal(providersInfo(model).collisions);
+}
+
+/**
+ * Puts the document back exactly as it was and restores the dirty flag, so a
+ * refused edit leaves no trace for the owner to save.
+ *
+ * @param {import('../project.mjs').ProjectModel} model
+ * @param {string} before Canonical text captured before the edit.
+ * @param {boolean} wasDirty
+ */
+function rollback(model, before, wasDirty) {
+  model.restoreText(before);
+  if (wasDirty) model.markDirty();
+  else model.markClean();
+}
+
+/**
+ * Rejects a suffix the schema would reject (§2.1): at most
+ * `SUFFIX_MAX_LENGTH` characters, no control characters and no leading or
+ * trailing whitespace. An empty suffix is allowed and means «no suffix».
+ *
+ * @param {string} value
+ */
+function assertSuffix(value) {
+  if (value.length === 0) return;
+  if (value.length > SUFFIX_MAX_LENGTH) {
+    throw new ConfigError(`приписка не длиннее ${SUFFIX_MAX_LENGTH} символов`);
+  }
+  if (value !== value.trim()) {
+    throw new ConfigError('приписка не должна начинаться или заканчиваться пробелом');
+  }
+  if (/[\u0000-\u001f\u007f]/.test(value)) {
+    throw new ConfigError('приписка не должна содержать управляющих символов');
+  }
+}
+
+/**
+ * Rewrites the servers of one provider in `proxies[].servers` and in
+ * `routes.<name>.outbound` when its suffix changes (§2.3).
+ *
+ * The mapping is built from the provider's BASE tags (the names in its
+ * `links.txt`, after the in-file dedup), so it never guesses by stripping text.
+ * Pinned proxies are rewritten too: it is the same server, only its name moves,
+ * and `assertPinned` is deliberately NOT applied here. `exclude_from_auto` is
+ * untouched: it holds country-flag prefixes and the suffix sits at the end.
+ *
+ * @param {import('../project.mjs').ProjectModel} model
+ * @param {string[]} baseTags Names as they come out of the provider's file.
+ * @param {string} oldSuffix
+ * @param {string} newSuffix
+ * @returns {{proxies: string[], routes: string[]}}
+ */
+function renameProviderServers(model, baseTags, oldSuffix, newSuffix) {
+  const mapping = new Map();
+  for (const base of baseTags) {
+    const from = oldSuffix.length > 0 ? `${base} ${oldSuffix}` : base;
+    const to = newSuffix.length > 0 ? `${base} ${newSuffix}` : base;
+    if (from !== to) mapping.set(from, to);
+  }
+
+  const touchedProxies = [];
+  for (const proxy of proxies.proxies(model)) {
+    if (!isMapping(proxy) || !Array.isArray(proxy.servers)) continue;
+    let changed = false;
+    proxy.servers = proxy.servers.map((server) => {
+      if (mapping.has(server)) {
+        changed = true;
+        return mapping.get(server);
+      }
+      return server;
+    });
+    if (changed) touchedProxies.push(proxy.tag);
+  }
+
+  const touchedRoutes = [];
+  const routeMap = routes.routes(model);
+  for (const [name, entry] of Object.entries(routeMap)) {
+    if (!isMapping(entry)) continue;
+    if (typeof entry.outbound === 'string' && mapping.has(entry.outbound)) {
+      entry.outbound = mapping.get(entry.outbound);
+      touchedRoutes.push(name);
+    }
+  }
+
+  if (touchedProxies.length > 0 || touchedRoutes.length > 0) model.markDirty();
+  return {proxies: touchedProxies, routes: touchedRoutes};
+}
+
+/**
  * Turns a discovered provider on or off. A provider absent from the map is
  * "found, disabled", so enabling has to CREATE the record and disabling keeps
  * it — an explicit `false` is a decision, not an absence.
+ *
+ * Enabling REFUSES when it would make two enabled providers hand out the same
+ * server name (§2.2): the document is put back untouched and generation would
+ * refuse anyway, this only says so before the owner saves. Disabling is always
+ * allowed.
  *
  * @param {import('../project.mjs').ProjectModel} model
  * @param {string} id Provider identifier (folder name).
@@ -171,9 +281,20 @@ export function setProviderEnabled(model, id, enabled) {
   }
   const providers = ensureProviders(model);
   const current = isMapping(providers[clean]) ? providers[clean] : {};
+  const before = model.toText();
+  const wasDirty = model.dirty;
+
   providers[clean] = {...current, enabled: enabled === true};
   model.markDirty();
-  return providers[clean];
+
+  if (enabled === true) {
+    const refusal = providerCollisionRefusal(model);
+    if (refusal !== null) {
+      rollback(model, before, wasDirty);
+      throw new ConfigError(refusal);
+    }
+  }
+  return getProvider(model, clean) ?? {};
 }
 
 /**
@@ -206,6 +327,98 @@ export function setProviderLabel(model, id, label) {
   } else {
     providers[clean] = {...current, label: text};
   }
+  model.markDirty();
+  return getProvider(model, clean) ?? {};
+}
+
+/**
+ * Sets (or clears) the «suffix appended to server names» of a provider (§2.1).
+ *
+ * Renames the provider's servers in `proxies[].servers` and
+ * `routes.<name>.outbound` so an edit of the suffix does not break every
+ * pinning (§2.3). A suffix that would make two enabled providers collide is
+ * refused with the document left untouched.
+ *
+ * @param {import('../project.mjs').ProjectModel} model
+ * @param {string} id
+ * @param {string} suffix Empty clears it, so names are exactly as in the links.
+ * @returns {{proxies: string[], routes: string[]}} What was renamed.
+ */
+export function setProviderSuffix(model, id, suffix) {
+  const clean = String(id ?? '').trim();
+  if (!isProviderId(clean)) {
+    throw new ConfigError(`имя провайдера '${clean}' не подходит для идентификатора`);
+  }
+  const text = String(suffix ?? '');
+  assertSuffix(text);
+
+  const providers = ensureProviders(model);
+  const current = isMapping(providers[clean]) ? providers[clean] : {};
+  const oldSuffix = cleanSuffix(current);
+
+  // The base names come from the provider's own file (independent of the
+  // suffix), so the mapping never guesses by stripping text off a name.
+  const provider = providersInfo(model).providers.find((item) => item.id === clean) ?? null;
+  const baseTags = provider === null ? [] : provider.baseTags;
+
+  const before = model.toText();
+  const wasDirty = model.dirty;
+
+  const next = {...current};
+  if (text.length === 0) delete next.suffix;
+  else next.suffix = text;
+  providers[clean] = next;
+  model.markDirty();
+
+  const affected = renameProviderServers(model, baseTags, oldSuffix, text);
+
+  const refusal = providerCollisionRefusal(model);
+  if (refusal !== null) {
+    rollback(model, before, wasDirty);
+    throw new ConfigError(refusal);
+  }
+  return affected;
+}
+
+/**
+ * Sets the per-subscription «тонкие настройки» of a provider (§2.5).
+ *
+ * `flow` is `vision` | `none` | absent (Авто); `fp` is one of
+ * `UTLS_FINGERPRINTS` or absent. «Авто» DELETES the key, and an empty
+ * `overrides` object is not stored at all. An invalid value is refused with the
+ * document untouched.
+ *
+ * @param {import('../project.mjs').ProjectModel} model
+ * @param {string} id
+ * @param {{flow?: string, fp?: string}} [values]
+ * @returns {Record<string, unknown>} The stored record.
+ */
+export function setProviderOverrides(model, id, values = {}) {
+  const clean = String(id ?? '').trim();
+  if (!isProviderId(clean)) {
+    throw new ConfigError(`имя провайдера '${clean}' не подходит для идентификатора`);
+  }
+  const providers = ensureProviders(model);
+  const current = isMapping(providers[clean]) ? providers[clean] : {};
+  const overrides = {...recordOverrides(current)};
+
+  if (Object.hasOwn(values, 'flow')) {
+    const flow = values.flow;
+    if (flow === null || flow === undefined || flow === '' || flow === 'auto') delete overrides.flow;
+    else if (flow === 'vision' || flow === 'none') overrides.flow = flow;
+    else throw new ConfigError("flow: допустимо 'vision', 'none' или авто");
+  }
+  if (Object.hasOwn(values, 'fp')) {
+    const fp = values.fp;
+    if (fp === null || fp === undefined || fp === '' || fp === 'auto') delete overrides.fp;
+    else if (UTLS_FINGERPRINTS.includes(fp)) overrides.fp = fp;
+    else throw new ConfigError(`fp: допустимо ${UTLS_FINGERPRINTS.join(', ')} или авто`);
+  }
+
+  const next = {...current};
+  if (Object.keys(overrides).length === 0) delete next.overrides;
+  else next.overrides = overrides;
+  providers[clean] = next;
   model.markDirty();
   return getProvider(model, clean) ?? {};
 }

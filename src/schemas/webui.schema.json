@@ -39,6 +39,28 @@
             "minLength": 1,
             "maxLength": 64,
             "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+          },
+          "suffix": {
+            "description": "Text appended to every server name of this provider after a single space, so two enabled providers handing out identical names stay distinguishable. Empty or missing means the names are exactly as in the links. Added after the in-file duplicate numbering (`… #2 WS`).",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16,
+            "pattern": "^(?:[^\\s\\u0000-\\u001F\\u007F]|[^\\s\\u0000-\\u001F\\u007F][^\\u0000-\\u001F\\u007F]{0,14}[^\\s\\u0000-\\u001F\\u007F])$"
+          },
+          "overrides": {
+            "description": "Per-subscription corrections that survive a subscription update. Missing keys mean «Авто» (as written in the link). Applied to every server of this provider in one place.",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "flow": {
+                "description": "XTLS Vision over TCP only: `vision` forces `xtls-rprx-vision`, `none` removes it, missing means «Авто» (from the link). Ignored for ws/grpc/httpupgrade and other non-TCP transports.",
+                "enum": ["vision", "none"]
+              },
+              "fp": {
+                "description": "uTLS fingerprint applied to `tls.utls.fingerprint` of every link of the subscription that carries `tls`. Missing means «Авто» (from the link).",
+                "enum": ["chrome", "firefox", "safari", "edge", "ios", "android", "random", "randomized"]
+              }
+            }
           }
         }
       }

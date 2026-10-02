@@ -108,20 +108,31 @@ describe('parseVless: broken links return null (test_parse_vless_broken_links_re
   }
 });
 
-// Reference: test_parse_vless_non_vless_scheme_return_none
-describe('parseVless: other schemes return null silently (test_parse_vless_non_vless_scheme_return_none)', () => {
+// §1.4 of the transports task: a foreign scheme is no longer dropped in silence —
+// it becomes a warning (and a `{label, reason}` skip) that names the link
+// WITHOUT the UUID. An empty line stays silent.
+describe('parseVless: a foreign scheme is skipped with a warning', () => {
+  test('a blank line is skipped silently', () => {
+    const warnings = [];
+    assert.equal(parseVless('', warnings), null);
+    assert.deepEqual(warnings, []);
+  });
+
   const foreign = [
-    '',
-    'vmess://uuid-1@fi.example.com:443#vmess',
-    'https://fi.example.com/sub#thing',
-    'ss://YWVzOnBhc3M@fi.example.com:8388#shadowsocks',
+    ['vmess://uuid-1@fi.example.com:443#vmess', 'vmess'],
+    ['https://fi.example.com/sub#thing', 'thing'],
+    ['ss://YWVzOnBhc3M@fi.example.com:8388#shadowsocks', 'shadowsocks'],
   ];
 
-  for (const url of foreign) {
+  for (const [url, label] of foreign) {
     test(JSON.stringify(url), () => {
       const warnings = [];
-      assert.equal(parseVless(url, warnings), null);
-      assert.deepEqual(warnings, []);
+      const skipped = [];
+      assert.equal(parseVless(url, warnings, skipped), null);
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /не vless:\/\/-ссылка, пропущена/);
+      assert.deepEqual(skipped, [{label, reason: 'не vless://-ссылка, пропущена'}]);
+      assert.doesNotMatch(warnings[0], /uuid/i, 'the warning never carries the UUID');
     });
   }
 });

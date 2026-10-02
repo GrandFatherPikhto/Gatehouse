@@ -34,7 +34,7 @@ import path from 'node:path';
 
 import {ConfigError, isMapping} from './errors.mjs';
 import {DEFAULT_PROVIDERS_ROOT} from './paths.mjs';
-import {decodeUtf8Ignore, parseLinks, parseVless, pythonStrip} from './vless.mjs';
+import {applyOverrides, decodeUtf8Ignore, parseLinks, parseVless, pythonStrip} from './vless.mjs';
 
 // The default root now lives in `paths.mjs`, next to the tunnel directory, so
 // the build keeps its directories in one place. The name stays published here:
@@ -47,8 +47,8 @@ export const LINKS_FILENAME = 'links.txt';
 /** Extension of a tunnel config (AmneziaWG / WireGuard). */
 export const TUNNEL_EXTENSION = '.conf';
 
-/** Character that separates a colliding tag from its provider identifier. */
-export const PROVIDER_LABEL_SEPARATOR = ' · ';
+/** Longest `providers.<id>.suffix` the schema accepts (see webui.schema.json). */
+export const SUFFIX_MAX_LENGTH = 16;
 
 /**
  * What a provider identifier (a folder name) may look like: `[A-Za-z0-9_.-]`,
@@ -207,10 +207,11 @@ function rawTags(filePath) {
  *
  * @param {string} filePath
  * @param {string} id
- * @param {string[]} warnings
+ * @param {string[]} warnings Per-provider collector, not the global one.
+ * @param {Array<{label: string, reason: string}>} skipped Per-provider skips.
  * @returns {{outbounds: Array<Record<string, unknown>>, state: string, error: string|null}}
  */
-function readLinks(filePath, id, warnings) {
+function readLinks(filePath, id, warnings, skipped) {
   try {
     fs.accessSync(filePath, fs.constants.R_OK);
     if (fs.statSync(filePath).isDirectory()) throw new Error('EISDIR');
@@ -236,7 +237,7 @@ function readLinks(filePath, id, warnings) {
   }
 
   try {
-    return {outbounds: parseLinks(filePath, warnings), state: 'ok', error: null};
+    return {outbounds: parseLinks(filePath, warnings, skipped), state: 'ok', error: null};
   } catch (caught) {
     if (!(caught instanceof ConfigError)) throw caught;
     const empty = /валидных VLESS-ссылок не обнаружено/.test(caught.message);
@@ -249,10 +250,11 @@ function readLinks(filePath, id, warnings) {
  *
  * @param {string} id Folder name, already validated.
  * @param {string} dir Absolute folder path.
- * @param {string[]} warnings
+ * @param {string[]} warnings Per-provider collector (see `readProviders`).
+ * @param {Array<{label: string, reason: string}>} skipped Per-provider skips.
  * @returns {Record<string, unknown>}
  */
-function readProviderFolder(id, dir, warnings) {
+function readProviderFolder(id, dir, warnings, skipped) {
   const base = {id, name: id, path: dir, type: 'folder', discovered: true};
 
   let stat;
@@ -316,7 +318,7 @@ function readProviderFolder(id, dir, warnings) {
   let linksState = 'ok';
   let linksError = null;
   if (hasLinks) {
-    const read = readLinks(linksPath, id, warnings);
+    const read = readLinks(linksPath, id, warnings, skipped);
     outbounds = read.outbounds;
     linksState = read.state;
     linksError = read.error;
@@ -378,18 +380,25 @@ function recordView(record) {
  * process may not read, an empty folder, a links file without a single valid link,
  * and a record whose folder is gone (which the owner may «forget»).
  *
- * `outbounds` and `tags` come from the ENABLED providers only. A tag that two
- * enabled providers share is suffixed with ` · <id>`; a unique tag keeps its name
- * byte for byte, which is what keeps a one-provider project's `config.json`
- * identical.
+ * Names are settled HERE and nowhere else: after the in-file `dedupTags`, the
+ * owner's `suffix` is appended and the per-subscription `overrides` are applied,
+ * so generation, tree, the proxy picker and the panel see one and the same name.
+ *
+ * `outbounds`/`tags` come from the ENABLED providers only and are de-duplicated
+ * for display; a name handed out by two enabled providers is NOT renamed — it is
+ * reported in `collisions`, and generation refuses with it (§2.2).
+ *
+ * Warnings of a DISABLED provider never reach the global list (generation does
+ * not read that folder) but stay on `provider.warnings` for the panel.
  *
  * @param {unknown} records `providers` field of the document (id -> record).
  * @param {string} root Absolute providers root.
- * @param {string[]} [warnings]
+ * @param {string[]} [warnings] Global collector, for the generator.
  * @returns {{root: string, rootState: {state: string, owner: string|null,
  *   mode: string|null, message: string|null}, providers: Array<Record<string, unknown>>,
  *   unread: Array<Record<string, unknown>>, outbounds: Array<Record<string, unknown>>,
- *   tags: string[], warnings: string[]}}
+ *   tags: string[], collisions: Array<{tag: string, providers: string[]}>,
+ *   warnings: string[]}}
  */
 export function readProviders(records, root, warnings = []) {
   const map = isMapping(records) ? records : {};
@@ -408,6 +417,7 @@ export function readProviders(records, root, warnings = []) {
       unread: [],
       outbounds: [],
       tags: [],
+      collisions: [],
       warnings,
     };
   }
@@ -457,13 +467,38 @@ export function readProviders(records, root, warnings = []) {
     }
 
     const view = recordView(map[name]);
+    const localWarnings = [];
+    const localSkipped = [];
     const provider = {
-      ...readProviderFolder(name, full, warnings),
+      ...readProviderFolder(name, full, localWarnings, localSkipped),
       record: view.record,
       enabled: view.enabled,
       label: view.label,
       forget: false,
     };
+
+    // The suffix is appended AFTER the in-file dedup, so `… #2` becomes
+    // `… #2 WS`. Overrides are applied to the same objects, in the same place.
+    const suffix = cleanSuffix(view.record);
+    const overrides = providerOverrides(view.record);
+    const baseTags = provider.tags;
+    let outbounds = provider.outbounds;
+    if (suffix.length > 0 || Object.keys(overrides).length > 0) {
+      outbounds = outbounds.map((outbound) =>
+        applyOverrides(withSuffix(outbound, suffix), overrides),
+      );
+    }
+    provider.baseTags = baseTags;
+    provider.outbounds = outbounds;
+    provider.tags = outbounds.map((outbound) => outbound.tag);
+    provider.suffix = suffix;
+    provider.warnings = localWarnings;
+    provider.skipped = localSkipped;
+
+    // Generation reads only the ENABLED folders, so only their warnings belong
+    // in the generator output; the panel still sees every provider's own list.
+    if (provider.enabled) warnings.push(...localWarnings);
+
     if (provider.state === 'ok') providers.push(provider);
     else unread.push(provider);
   }
@@ -498,19 +533,29 @@ export function readProviders(records, root, warnings = []) {
     }
   }
 
-  const seen = new Map();
+  // A name two ENABLED providers share is a collision, not a rename: the first
+  // provider in the identifier order keeps the name for DISPLAY only, and
+  // generation refuses with the full list.
+  const byTag = new Map();
   for (const item of collected) {
     const tag = String(item.outbound.tag);
-    seen.set(tag, (seen.get(tag) ?? 0) + 1);
+    if (!byTag.has(tag)) byTag.set(tag, []);
+    const ids = byTag.get(tag);
+    if (!ids.includes(item.provider)) ids.push(item.provider);
+  }
+  const collisions = [];
+  for (const [tag, ids] of byTag) {
+    if (ids.length > 1) collisions.push({tag, providers: ids});
   }
 
-  const outbounds = collected.map((item) => {
+  const outbounds = [];
+  const seen = new Set();
+  for (const item of collected) {
     const tag = String(item.outbound.tag);
-    if ((seen.get(tag) ?? 0) > 1) {
-      return {...item.outbound, tag: `${tag}${PROVIDER_LABEL_SEPARATOR}${item.provider}`};
-    }
-    return item.outbound;
-  });
+    if (seen.has(tag)) continue;
+    seen.add(tag);
+    outbounds.push(item.outbound);
+  }
 
   return {
     root,
@@ -524,8 +569,80 @@ export function readProviders(records, root, warnings = []) {
     unread,
     outbounds,
     tags: outbounds.map((outbound) => outbound.tag),
+    collisions,
     warnings,
   };
+}
+
+/**
+ * The `suffix` stored for a provider, or `''` when there is none or it does not
+ * fit the schema (1–16 characters, no control characters, no leading/trailing
+ * whitespace). The model refuses an invalid value; a hand-edited file is read as
+ * if the field were absent instead of breaking generation.
+ *
+ * @param {unknown} record
+ * @returns {string}
+ */
+export function cleanSuffix(record) {
+  const value = isMapping(record) ? record.suffix : undefined;
+  if (typeof value !== 'string') return '';
+  if (value.length < 1 || value.length > SUFFIX_MAX_LENGTH) return '';
+  if (value !== value.trim()) return '';
+  if (/[\u0000-\u001f\u007f]/.test(value)) return '';
+  return value;
+}
+
+/**
+ * `providers.<id>.overrides` as a plain object, or `{}`.
+ *
+ * @param {unknown} record
+ * @returns {{flow?: string, fp?: string}}
+ */
+export function providerOverrides(record) {
+  const value = isMapping(record) ? record.overrides : undefined;
+  return isMapping(value) ? value : {};
+}
+
+/**
+ * Appends the provider suffix to one outbound tag, after a single space.
+ *
+ * @param {Record<string, unknown>} outbound
+ * @param {string} suffix
+ * @returns {Record<string, unknown>}
+ */
+function withSuffix(outbound, suffix) {
+  if (suffix.length === 0) return outbound;
+  return {...outbound, tag: `${outbound.tag} ${suffix}`};
+}
+
+/**
+ * The refusal text for provider name collisions (§2.2), grouped by provider
+ * pair with at most three examples; `null` when there is no collision.
+ *
+ * @param {Array<{tag: string, providers: string[]}>} collisions
+ * @returns {string|null}
+ */
+export function collisionRefusal(collisions) {
+  if (!Array.isArray(collisions) || collisions.length === 0) return null;
+  const byPair = new Map();
+  for (const {tag, providers} of collisions) {
+    const pair = [...providers].sort();
+    const key = pair.join('\u0000');
+    if (!byPair.has(key)) byPair.set(key, {providers: pair, tags: []});
+    byPair.get(key).tags.push(tag);
+  }
+  const sentences = [];
+  for (const {providers, tags} of byPair.values()) {
+    const examples = tags
+      .slice(0, 3)
+      .map((tag) => `'${tag}'`)
+      .join(', ');
+    sentences.push(
+      `провайдеры ${providers.join(' и ')} дают ${tags.length} одинаковых имён серверов ` +
+        `(например, ${examples}): задайте приписку одному из них или выключите один`,
+    );
+  }
+  return sentences.join('\n');
 }
 
 /**

@@ -12,7 +12,6 @@ import {describe, test} from 'node:test';
 
 import {
   DEFAULT_PROVIDERS_ROOT,
-  PROVIDER_LABEL_SEPARATOR,
   isProviderId,
   readProviders,
   resolveProvidersRoot,
@@ -126,7 +125,7 @@ describe('discovery of provider folders', () => {
     assert.equal(ghost.forget, true);
   });
 
-  test('a tag two enabled providers share is suffixed with the identifier', () => {
+  test('a name two enabled providers share is a collision, not a rename', () => {
     const dir = makeTempDir();
     const root = path.join(dir, 'providers');
     const shared = `${vlessLink('11111111-1111-1111-1111-111111111111', 'a.example.com', FI_TAG)}\n`;
@@ -137,10 +136,27 @@ describe('discovery of provider folders', () => {
     }
 
     const read = readProviders({one: {enabled: true}, two: {enabled: true}}, root);
-    assert.deepEqual(read.tags.sort(), [
-      `${FI_TAG}${PROVIDER_LABEL_SEPARATOR}one`,
-      `${FI_TAG}${PROVIDER_LABEL_SEPARATOR}two`,
-    ]);
+    assert.deepEqual(read.collisions, [{tag: FI_TAG, providers: ['one', 'two']}]);
+    // Display keeps one copy of the name, the first provider in identifier order.
+    assert.deepEqual(read.tags, [FI_TAG]);
+  });
+
+  test('a suffix makes the two names distinct and removes the collision', () => {
+    const dir = makeTempDir();
+    const root = path.join(dir, 'providers');
+    const shared = `${vlessLink('11111111-1111-1111-1111-111111111111', 'a.example.com', FI_TAG)}\n`;
+    const other = `${vlessLink('22222222-2222-2222-2222-222222222222', 'b.example.com', FI_TAG)}\n`;
+    for (const [id, text] of [['one', shared], ['two', other]]) {
+      fs.mkdirSync(path.join(root, id), {recursive: true});
+      fs.writeFileSync(path.join(root, id, 'links.txt'), text);
+    }
+
+    const read = readProviders(
+      {one: {enabled: true}, two: {enabled: true, suffix: 'WS'}},
+      root,
+    );
+    assert.deepEqual(read.collisions, []);
+    assert.deepEqual(read.tags.sort(), [FI_TAG, `${FI_TAG} WS`]);
   });
 
   test('an absent root is one sentence, and no lists', () => {

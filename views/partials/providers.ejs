@@ -8,13 +8,18 @@
   Провайдеры читаются из каталога <code><%= panel.info.root %></code>
   (<%= panel.info.rootSource %>). Каждая подпапка — провайдер: <code>links.txt</code>
   даёт серверы Sing-Box, <code>*.conf</code> — конфиги туннелей Amnezia. Имя папки —
-  это идентификатор (он идёт в теги серверов и в <code>config.json</code>),
-  человекочитаемое имя правится на панели провайдера. Провайдер без галочки найден,
-  но выключен: его серверов в <code>config.json</code> нет.
+  это идентификатор (он остаётся в <code>tunnels[].provider</code> и в
+  <code>webui.json</code>), а имена серверов берутся из ссылок плюс приписка на панели
+  провайдера. Провайдер без галочки найден, но выключен: его серверов в
+  <code>config.json</code> нет.
 </p>
 
 <% if (panel.info.rootState.message) { %>
   <p class="error"><%= panel.info.rootState.message %></p>
+<% } %>
+
+<% if (panel.collisionText) { %>
+  <p class="error"><%= panel.collisionText %></p>
 <% } %>
 
 <h3>Найденные провайдеры</h3>
@@ -38,6 +43,9 @@
                hx-target="#panel"
                hx-swap="innerHTML"
                hx-push-url="true"><%= provider.displayName %></a>
+            <% if (provider.skippedCount > 0) { %>
+              <br><span class="error">пропущено: <%= provider.skippedCount %></span>
+            <% } %>
           </td>
           <td><code><%= provider.id %></code></td>
           <td><%= provider.kindLabel %></td>

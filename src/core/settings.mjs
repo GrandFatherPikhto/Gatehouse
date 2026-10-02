@@ -22,7 +22,7 @@ import Ajv from 'ajv';
 
 import {buildConfig} from './build.mjs';
 import {ConfigError, DEFAULT_SETTINGS_FILE, isMapping} from './errors.mjs';
-import {readProviders, resolveProvidersRoot} from './sources.mjs';
+import {collisionRefusal, readProviders, resolveProvidersRoot} from './sources.mjs';
 import {parseLinks} from './vless.mjs';
 
 const SCHEMA_URL = new URL('../schemas/webui.schema.json', import.meta.url);
@@ -353,6 +353,13 @@ function readOutbounds(settings, settingsDir, linksOverride, warnings, providers
       ? providersRoot
       : resolveProvidersRoot(settingsDir);
   const read = readProviders(settings.providers, root, warnings);
+
+  // Two enabled providers handing out the same server name must stop the
+  // generation: silently picking one would put traffic on an exit the owner did
+  // not choose. The refusal names the providers and the colliding names (§2.2).
+  const refusal = collisionRefusal(read.collisions);
+  if (refusal !== null) throw new ConfigError(refusal);
+
   if (read.outbounds.length === 0) {
     const reasons = [];
     if (read.rootState.message !== null) reasons.push(read.rootState.message);

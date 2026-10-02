@@ -17,9 +17,10 @@ webui.json
 # --- Local data ------------------------------------------------------------
 # Subscription dumps and personal server lists never go to the repository.
 *.txt
-# ...except the synthetic test fixture: without it the suite cannot run
+# ...except the synthetic test fixtures: without them the suite cannot run
 # from a clean clone (this exact problem already bit the Python project).
 !tests/fixtures/providers/vpnd/links.txt
+!tests/fixtures/providers-transports/links.txt
 # ...and the sandbox sample, which is synthetic and safe to commit.
 !dev/root.example/providers/vpnd/links.txt
 

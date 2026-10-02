@@ -124,6 +124,15 @@ export function applyRoute(ctx, route, req) {
     case '/provider': {
       const id = String(body.id ?? '').trim();
       model.setProviderLabel(id, String(body.label ?? ''));
+      if (Object.hasOwn(body, 'suffix')) {
+        model.setProviderSuffix(id, String(body.suffix ?? ''));
+      }
+      // Only the fields the form really carries: a direct POST of `id`+`label`
+      // must not wipe the stored overrides by sending two empty fields.
+      const overrides = {};
+      if (Object.hasOwn(body, 'flow')) overrides.flow = String(body.flow ?? '');
+      if (Object.hasOwn(body, 'fp')) overrides.fp = String(body.fp ?? '');
+      if (Object.keys(overrides).length > 0) model.setProviderOverrides(id, overrides);
       model.setProviderEnabled(id, forms.checkbox(body.enabled));
       return {applied: true, key: panelKey('provider', id)};
     }

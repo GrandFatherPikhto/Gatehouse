@@ -1,0 +1,11 @@
+# Synthetic fixture: one VLESS link per transport the reader understands.
+# UUIDs and keys are invented, every host is under example.com.
+vless://aaaaaaaa-0000-0000-0000-000000000001@reality.example.com:443?security=reality&pbk=REALITY_PUBKEY&sid=ab12&sni=reality.example.com&fp=chrome#Reality%20TCP
+vless://aaaaaaaa-0000-0000-0000-000000000002@tls.example.com:443?security=tls&sni=tls.example.com&fp=firefox#TLS%20TCP
+vless://aaaaaaaa-0000-0000-0000-000000000003@plain.example.com:443#Plain%20TCP
+vless://aaaaaaaa-0000-0000-0000-000000000004@ws.example.com:443?type=ws&path=/al/1&host=ws.example.com&security=tls&sni=ws.example.com&fp=firefox&alpn=http%2F1.1#TLS%20WS
+vless://aaaaaaaa-0000-0000-0000-000000000005@grpc.example.com:443?type=grpc&serviceName=grpcsvc&security=tls&sni=grpc.example.com#TLS%20gRPC
+vless://aaaaaaaa-0000-0000-0000-000000000006@upgrade.example.com:443?type=httpupgrade&path=/upgrade&host=upgrade.example.com&security=tls&sni=upgrade.example.com#TLS%20HTTPUpgrade
+vless://aaaaaaaa-0000-0000-0000-000000000007@http.example.com:443?type=http&host=a.example.com,b.example.com&path=/h2&security=tls&sni=http.example.com#TLS%20HTTP
+vless://aaaaaaaa-0000-0000-0000-000000000008@quic.example.com:443?type=quic&security=tls&sni=quic.example.com#TLS%20QUIC
+vless://aaaaaaaa-0000-0000-0000-000000000009@raw.example.com:443?type=raw&security=tls&sni=raw.example.com#TLS%20raw

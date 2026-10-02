@@ -7,6 +7,8 @@
 // React means reimplementing these builders and the templates, not the model.
 
 import {ConfigError, DEFAULT_EXCLUDE, PROXY_TYPES, isMapping} from '../core/errors.mjs';
+import {collisionRefusal} from '../core/sources.mjs';
+import {UTLS_FINGERPRINTS, transportKind, transportLabel} from '../core/vless.mjs';
 import {listConfigSnapshots} from '../model/storage.mjs';
 
 /** Keys of the tree, without a name part. */
@@ -208,6 +210,87 @@ export function autoExcludePrefixes(model) {
 }
 
 /**
+ * Counts the servers of one provider by their protocol label (§3.2) — the word
+ * the interface uses for what the code calls a transport.
+ *
+ * @param {Array<Record<string, unknown>>} outbounds
+ * @returns {Array<{label: string, count: number, plain: boolean}>}
+ */
+function transportSummary(outbounds) {
+  const counts = new Map();
+  for (const outbound of outbounds) {
+    const label = transportLabel(outbound);
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([label, count]) => ({
+    label,
+    count,
+    // «без шифрования …» is highlighted: the traffic is visible to the carrier.
+    plain: label.startsWith('без шифрования'),
+  }));
+}
+
+/**
+ * Human list of `{value: count}` pairs, most frequent first (`firefox — 140,
+ * chrome — 8`). An empty map renders as «нет».
+ *
+ * @param {Map<string, number>} counts
+ * @returns {string}
+ */
+function describeCounts(counts) {
+  if (counts.size === 0) return 'нет';
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([value, count]) => `${value} — ${count}`)
+    .join(', ');
+}
+
+/**
+ * View model of the collapsible «Тонкие настройки» block (§2.5): the stored
+ * choice, the ACTUAL values found in the links with their counts, and whether
+ * the block should start open (some field is not «Авто»).
+ *
+ * @param {Record<string, unknown>} provider Discovered provider.
+ * @returns {Record<string, unknown>}
+ */
+function overridesView(provider) {
+  const outbounds = provider.outbounds ?? [];
+  const stored =
+    isMapping(provider.record) && isMapping(provider.record.overrides)
+      ? provider.record.overrides
+      : {};
+
+  const tcp = outbounds.filter((outbound) => transportKind(outbound) === 'tcp');
+  const flowCounts = new Map();
+  for (const outbound of tcp) {
+    const key =
+      typeof outbound.flow === 'string' && outbound.flow.length > 0 ? outbound.flow : 'нет';
+    flowCounts.set(key, (flowCounts.get(key) ?? 0) + 1);
+  }
+  const fpCounts = new Map();
+  for (const outbound of outbounds) {
+    const tls = outbound.tls;
+    if (tls && tls.utls && typeof tls.utls.fingerprint === 'string') {
+      const key = tls.utls.fingerprint;
+      fpCounts.set(key, (fpCounts.get(key) ?? 0) + 1);
+    }
+  }
+
+  return {
+    flow: typeof stored.flow === 'string' ? stored.flow : 'auto',
+    fp: typeof stored.fp === 'string' ? stored.fp : 'auto',
+    flowActual: describeCounts(flowCounts),
+    fpActual: describeCounts(fpCounts),
+    // flow only applies to links over TCP; a subscription with none says so.
+    appliesToTcp: tcp.length > 0,
+    nonTcpOnly: outbounds.length > 0 && tcp.length === 0,
+    nonTcpSample: outbounds.length > 0 ? transportLabel(outbounds[0]) : '',
+    fingerprints: UTLS_FINGERPRINTS,
+    open: typeof stored.flow === 'string' || typeof stored.fp === 'string',
+  };
+}
+
+/**
  * Builds the view model of one panel.
  *
  * @param {import('../model/project.mjs').ProjectModel} model
@@ -271,6 +354,8 @@ export function buildPanel(model, key, extra = {}) {
         // model: the reader reports `links`/`tunnels`, the panel says what they
         // feed (Sing-Box / Amnezia). The display name is the human-readable label
         // when there is one, the folder name otherwise.
+        // The §2.2 refusal is shown as one sentence while the collision lasts.
+        collisionText: collisionRefusal(info.collisions),
         info: {
           ...info,
           providers: info.providers.map((provider) => ({
@@ -280,6 +365,7 @@ export function buildPanel(model, key, extra = {}) {
                 ? provider.label
                 : provider.id,
             kindLabel: providerKindLabel(provider.kind),
+            skippedCount: (provider.skipped ?? []).length,
           })),
           unread: info.unread.map((entry) => ({
             ...entry,
@@ -312,6 +398,20 @@ export function buildPanel(model, key, extra = {}) {
         // One row per `.conf`: the «включить» mark and the two editable names.
         // Only an ENABLED provider offers them — a disabled one says so instead.
         tunnelRows: provider.enabled === true ? model.providerTunnelRows(name) : [],
+        // §2.1–§2.5: the suffix and the «тонкие настройки» of the subscription.
+        suffix: provider.suffix ?? '',
+        firstServerName:
+          provider.tags.length > 0
+            ? provider.tags[0]
+            : (provider.baseTags.length > 0 ? provider.baseTags[0] : ''),
+        // §3.2: is it worth telling the owner the traffic would be seen.
+        transports: transportSummary(provider.outbounds),
+        // §3.3: what was skipped, with a name/host:port and a reason, no UUID.
+        skipped: provider.skipped ?? [],
+        skippedCount: (provider.skipped ?? []).length,
+        overrides: overridesView(provider),
+        // §2.2: the same refusal text as generation, shown while it lasts.
+        collisionText: collisionRefusal(info.collisions),
       };
     }
 
