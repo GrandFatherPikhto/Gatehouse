@@ -45,6 +45,7 @@
   <% } %>
   <form hx-post="/apply" hx-target="#panel" hx-swap="innerHTML" method="post" action="/apply">
     <button type="submit" class="<%= apply.state === 'pending' ? 'primary' : '' %>"
+            <%= apply.applyButton === false ? 'disabled' : '' %>
             hx-confirm="Перезапуск sing-box оборвёт текущие соединения через все прокси. Применить?">Применить</button>
   </form>
   <form hx-post="/rollback" hx-target="#panel" hx-swap="innerHTML" method="post" action="/rollback">

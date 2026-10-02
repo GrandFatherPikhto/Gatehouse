@@ -8,6 +8,7 @@
 // where that decision lives.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 /** Directory of snapshots and other runtime state, relative to the project. */
@@ -207,6 +208,106 @@ export function restoreLatestConfig(stateDir, target) {
     throw error;
   }
   return {restored: target, from: source};
+}
+
+/**
+ * True when the process may create files in `dir`.
+ *
+ * The apply chain builds `config.json` into a NEIGHBOURING temporary file and
+ * renames it into place, so it needs write access to the DIRECTORY, not just to
+ * the file. On the router `/etc/sing-box` is `root:root 755` while `config.json`
+ * is `denis:denis`, so this is the difference the owner has to fix once.
+ *
+ * @param {string} dir
+ * @returns {boolean}
+ */
+export function canWriteDir(dir) {
+  try {
+    fs.accessSync(dir, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Name of the primary group of a gid, read from `/etc/group`, or `null`.
+ *
+ * `os.userInfo()` carries the uid/gid but no group NAME, and the fix command
+ * wants a name (`root:denis`), so the group file is read — a plain read, no
+ * command, no privileges.
+ *
+ * @param {number} gid
+ * @returns {string|null}
+ */
+function groupName(gid) {
+  try {
+    for (const line of fs.readFileSync('/etc/group', 'utf8').split('\n')) {
+      const parts = line.split(':');
+      if (parts.length > 2 && Number(parts[2]) === Number(gid)) return parts[0];
+    }
+  } catch {
+    // No /etc/group (or no access): the caller falls back to the user name.
+  }
+  return null;
+}
+
+/**
+ * The account the process runs as, for the fix command. The user and group come
+ * from the PROCESS (`os.userInfo`), never from a literal: the same code runs on
+ * the owner's router and on a developer's desktop.
+ *
+ * @returns {{user: string, group: string}}
+ */
+export function processIdentity() {
+  const info = os.userInfo();
+  const user = typeof info.username === 'string' && info.username.length > 0
+    ? info.username
+    : 'gatehouse';
+  return {user, group: groupName(info.gid) ?? user};
+}
+
+/**
+ * What the interface says when the config directory may not be written: the
+ * sentence and the exact command that fixes it, built from the real directory and
+ * the real account.
+ *
+ * @param {string} dir Directory of the live `config.json`.
+ * @returns {{dir: string, user: string, group: string, message: string, command: string}}
+ */
+export function configDirInfo(dir) {
+  const {user, group} = processIdentity();
+  const command = `sudo chown root:${group} ${dir} && sudo chmod 775 ${dir}`;
+  return {
+    dir,
+    user,
+    group,
+    message: `нет права писать в каталог ${dir} — «Применить» и «Откатить» не сработают.`,
+    command,
+  };
+}
+
+/**
+ * The full refusal text (sentence + command), for a route that has to answer
+ * instead of showing an internal error.
+ *
+ * @param {{message: string, command: string}} info
+ * @returns {string}
+ */
+export function configDirRefusal(info) {
+  return `${info.message} На роутере: ${info.command}`;
+}
+
+/**
+ * True for a filesystem permission failure, which the interface answers with the
+ * fix command instead of a raw `EACCES`.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+export function isPermissionError(error) {
+  const code = error && typeof error === 'object' ? error.code : null;
+  return code === 'EACCES' || code === 'EPERM';
 }
 
 /**

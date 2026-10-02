@@ -179,6 +179,27 @@ export function applyBar(ctx) {
     };
   }
 
+  // The directory of the live `config.json` must be writable: the chain builds a
+  // neighbouring `config.json.new` and renames it, and the rollback writes its
+  // temporary file there too. Below "несохранённые правки" and a concrete
+  // failure, above "не применено": the standing problem is worth naming before a
+  // press, and the fix command goes with it.
+  const dirInfo = model.outputDirInfo();
+  if (!dirInfo.ok) {
+    return {
+      state: 'warning',
+      message: dirInfo.message,
+      detail: `На роутере: ${dirInfo.command}`,
+      lastAppliedAt: appliedAt(lastApply),
+      // Neither action can work until the rights are fixed.
+      canRollback: false,
+      saveButton: true,
+      applyButton: false,
+      lastApply,
+      steps,
+    };
+  }
+
   const comparison = compareWithLive(ctx);
   return {
     ...comparison,

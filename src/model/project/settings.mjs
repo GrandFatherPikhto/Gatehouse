@@ -7,11 +7,12 @@
 // with the sentence the form puts in front of the owner.
 
 import fs from 'node:fs';
+import path from 'node:path';
 
 import {ConfigError, DEFAULT_EXCLUDE, isMapping} from '../../core/errors.mjs';
 import {generateConfigFile, resolvePath} from '../../core/settings.mjs';
 import {asList, requireMapping, urltestBlock} from '../../core/validate.mjs';
-import {canonicalJson} from '../storage.mjs';
+import {canWriteDir, canonicalJson, configDirInfo} from '../storage.mjs';
 import {
   DEFAULT_LISTEN_IP,
   DEFAULT_LOG_LEVEL,
@@ -194,6 +195,24 @@ export function applyDns(model, text) {
 /** Reference: `resolved_output_path`. */
 export function resolvedOutputPath(model) {
   return resolvePath(model.settingsDir, outputFile(model));
+}
+
+/**
+ * Whether the DIRECTORY of the live `config.json` may be written by this process.
+ *
+ * The apply chain builds a neighbouring `config.json.new` and renames it into
+ * place, so a directory the process may not write means Apply and Rollback are
+ * impossible — the owner has to fix the rights once. The answer travels with the
+ * sentence and the exact command, so the bar can warn BEFORE a press and a route
+ * can refuse instead of showing `EACCES`.
+ *
+ * @param {import('../project.mjs').ProjectModel} model
+ * @returns {{dir: string, ok: boolean, message: string|null, command: string|null}}
+ */
+export function outputDirInfo(model) {
+  const dir = path.dirname(resolvedOutputPath(model));
+  if (canWriteDir(dir)) return {dir, ok: true, message: null, command: null};
+  return {...configDirInfo(dir), ok: false};
 }
 
 /**

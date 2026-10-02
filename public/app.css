@@ -37,6 +37,39 @@ header#status {
 .status-actions { display: flex; gap: 8px; }
 .status-actions form { margin: 0; }
 
+/* The permanent apply bar and its four states (dirty / failed / warning /
+   pending / applied). The dot repeats the colour so the state reads without
+   relying on the words alone. */
+.apply-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 6px;
+  margin: 6px 0 0;
+}
+.apply-bar .apply-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: currentColor;
+  display: inline-block;
+  flex: none;
+}
+.apply-detail { opacity: .85; }
+.apply-when { white-space: nowrap; }
+.apply-dirty { color: var(--warn); background: #fff6d9; }
+.apply-failed { color: var(--error); background: #ffe3e3; }
+.apply-warning { color: var(--warn); background: #ffe9d1; }
+.apply-pending { color: var(--warn); background: #fffbe6; }
+.apply-applied { color: var(--ok); background: #e3f6e8; }
+
+.apply-steps { list-style: none; margin: 4px 0 0; padding: 0; }
+.apply-steps li { display: flex; gap: 6px; align-items: baseline; }
+.apply-steps .ok .mark { color: var(--ok); }
+.apply-steps .bad .mark { color: var(--error); }
+
 main {
   display: grid;
   grid-template-columns: minmax(260px, 340px) 1fr;

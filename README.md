@@ -593,6 +593,16 @@ on the next ordinary save. See
 
 ## Deployment
 
+**One extra permission.** The apply chain builds `config.json.new` NEXT TO the live
+file and renames it into place (`rename` is atomic only inside one directory, so the
+temporary file lives beside the target, not in `/tmp`), and the rollback writes its
+temporary file there too. The service account therefore needs write access to the
+config DIRECTORY, not just to `config.json`:
+`sudo chown root:denis /etc/sing-box && sudo chmod 775 /etc/sing-box`. Without it the
+bar warns ahead of time and Apply/Rollback refuse with that very command instead of a
+raw `EACCES`. It does not really widen access: `denis` already owns the `config.json`
+sing-box reads.
+
 [`deploy/`](deploy/README.md:1) holds the systemd unit, the sudoers rule, the
 polkit alternative and a step-by-step `deploy/README.md`. Nothing there is applied
 automatically. The code lives in `/opt/gatehouse`, so the unit enables `ProtectHome=yes`

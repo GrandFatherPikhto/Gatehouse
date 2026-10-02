@@ -354,6 +354,15 @@ export class ProjectModel extends ProjectSession {
     return settings.resolvedOutputPath(this);
   }
 
+  /**
+   * Write access to the directory of the live `config.json` plus the fix command
+   * (`{dir, ok, message, command}`). The apply chain needs the DIRECTORY, not just
+   * the file, so this is what the bar warns about and what a route refuses with.
+   */
+  outputDirInfo() {
+    return settings.outputDirInfo(this);
+  }
+
   /** True when the generated `config.json` is on disk. */
   configExists() {
     return settings.configExists(this);

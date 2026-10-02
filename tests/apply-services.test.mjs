@@ -309,6 +309,24 @@ describe('the AmneziaWG sudoers block and carrier (§4)', () => {
     }
   });
 
+  test('the tunnel rows keep only a short «нет прав — см. блок выше»', async () => {
+    const editor = await startEditor({tunnel: true, sudoersRules: ['other-old']});
+    try {
+      await markTunnel(editor);
+      const html = await (await fetch(`${editor.base}/panel/system:amnezia`)).text();
+      // The one block above the table carries the lines; the rows do not repeat
+      // them (§3.1).
+      assert.match(html, /нет прав — см\. блок выше/);
+      assert.equal(
+        html.split('enable --now gatehouse-tunnel@hmn-graz4').length - 1,
+        1,
+        'the rule appears once, in the block, not per row',
+      );
+    } finally {
+      await editor.close();
+    }
+  });
+
   test('carrier marks the row and warns only on that tunnel', async () => {
     const editor = await startEditor({tunnel: true});
     try {
@@ -322,6 +340,62 @@ describe('the AmneziaWG sudoers block and carrier (§4)', () => {
       // The old hardcoded interface name is gone.
       assert.doesNotMatch(html, /interface === 'de'/);
     } finally {
+      await editor.close();
+    }
+  });
+});
+
+describe('the config directory rights (§1)', () => {
+  // `chmod 555` does not stop root, so the whole suite would be a false positive
+  // there; skip honestly instead of asserting something the OS ignores.
+  const asRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+  test(
+    'the bar warns with the fix command when the directory is not writable',
+    {skip: asRoot},
+    async () => {
+      const editor = await startEditor();
+      try {
+        fs.chmodSync(editor.dir, 0o555);
+        const page = await (await fetch(`${editor.base}/`)).text();
+        assert.match(page, /apply-warning/);
+        assert.match(page, /нет права писать в каталог/);
+        assert.match(page, /chmod 775/);
+        assert.match(page, /chown root:/);
+      } finally {
+        fs.chmodSync(editor.dir, 0o755);
+        await editor.close();
+      }
+    },
+  );
+
+  test(
+    '/apply refuses with the command and leaves the live file untouched',
+    {skip: asRoot},
+    async () => {
+      const editor = await startEditor();
+      try {
+        fs.chmodSync(editor.dir, 0o555);
+        const html = await (await post(editor.base, '/apply')).text();
+        assert.match(html, /нет права писать в каталог/);
+        assert.match(html, /chmod 775/);
+        assert.equal(fs.existsSync(editor.configPath), false, 'nothing was written');
+      } finally {
+        fs.chmodSync(editor.dir, 0o755);
+        await editor.close();
+      }
+    },
+  );
+
+  test('/rollback refuses with the command', {skip: asRoot}, async () => {
+    const editor = await startEditor();
+    try {
+      fs.chmodSync(editor.dir, 0o555);
+      const html = await (await post(editor.base, '/rollback')).text();
+      assert.match(html, /нет права писать в каталог/);
+      assert.match(html, /chmod 775/);
+    } finally {
+      fs.chmodSync(editor.dir, 0o755);
       await editor.close();
     }
   });

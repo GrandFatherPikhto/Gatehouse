@@ -26,7 +26,7 @@ import {
   testOutbounds,
   waitForActive,
 } from '../../system/index.mjs';
-import {restoreLatestConfig, snapshotConfig} from '../../model/storage.mjs';
+import {isPermissionError, restoreLatestConfig, snapshotConfig} from '../../model/storage.mjs';
 import {mutation} from '../edits.mjs';
 import {SSE_HEADERS, testResultView, writeEvent} from '../stream.mjs';
 import {refreshTunnelStates} from '../tunnel-state.mjs';
@@ -36,6 +36,18 @@ const CHECK_TIMEOUT = 15000;
 
 /** Keep of the `config.json` snapshots taken before each generation. */
 const CONFIG_SNAPSHOT_KEEP = 10;
+
+/**
+ * The refusal text for a config directory this process may not write: the
+ * sentence plus the exact command the owner runs on the router. One helper, so
+ * the three routes and the bar can never disagree about the wording.
+ *
+ * @param {{message: string, command: string}} info `model.outputDirInfo()`.
+ * @returns {string}
+ */
+function dirRefusal(info) {
+  return `${info.message} На роутере: ${info.command}`;
+}
 
 /**
  * Restarts sing-box and confirms the unit really came up (step 6 + 7). The
@@ -85,6 +97,17 @@ export function registerSystemRoutes(app, ctx) {
         return {key: 'singbox', apply: state.lastApply, notice: outcome.message};
       };
 
+      // The chain needs write access to the DIRECTORY of the live config: it
+      // builds a neighbouring `config.json.new` and renames it, and the rollback
+      // writes its temporary file there too. Refuse up front, with the fix
+      // command, instead of failing at the first write with `EACCES`.
+      const dirInfo = model.outputDirInfo();
+      if (!dirInfo.ok) throw new ConfigError(dirRefusal(dirInfo));
+
+      // The step a later failure really belongs to, so the refusal names the
+      // phase it stopped at instead of always saying «сборка».
+      let phase = 'сохранение';
+
       try {
         // 1. save
         if (model.dirty) {
@@ -95,6 +118,7 @@ export function registerSystemRoutes(app, ctx) {
         }
 
         // 2. build into the temporary file
+        phase = 'сборка';
         await refreshTunnelStates(ctx);
         const runningTunnels = Object.entries(state.tunnels)
           .filter(([, runtime]) => runtime.active === true)
@@ -103,6 +127,7 @@ export function registerSystemRoutes(app, ctx) {
         record(true, 'сборка', `серверов: ${generation.stats.servers}`);
 
         // 3. check the temporary file
+        phase = 'проверка схемы';
         const check = await checkConfig(tempPath, {env: systemEnv, timeout: CHECK_TIMEOUT});
         if (!check.ok) {
           fs.rmSync(tempPath, {force: true});
@@ -133,6 +158,7 @@ export function registerSystemRoutes(app, ctx) {
         }
 
         // 5. snapshot + rename (never copy: the rename is atomic)
+        phase = 'установка файла';
         const snapshot = fs.existsSync(configPath)
           ? snapshotConfig(configPath, model.stateDir, {keep: CONFIG_SNAPSHOT_KEEP})
           : null;
@@ -140,6 +166,7 @@ export function registerSystemRoutes(app, ctx) {
         record(true, 'установка файла', path.basename(configPath));
 
         // 6 + 7. restart and confirm; rollback on failure
+        phase = 'перезапуск';
         const up = await restartAndConfirm(ctx);
         if (!up.ok) {
           const restored = snapshot === null ? null : restoreLatestConfig(model.stateDir, configPath);
@@ -167,10 +194,15 @@ export function registerSystemRoutes(app, ctx) {
         });
       } catch (error) {
         fs.rmSync(tempPath, {force: true});
+        const info = model.outputDirInfo();
         const message =
-          error instanceof ConfigError ? error.message : `внутренняя ошибка: ${error.message}`;
-        record(false, 'сборка', message);
-        return finish({ok: false, step: 'сборка', message, rolledBack: false});
+          isPermissionError(error) && !info.ok
+            ? dirRefusal(info)
+            : error instanceof ConfigError
+              ? error.message
+              : `внутренняя ошибка: ${error.message}`;
+        record(false, phase, message);
+        return finish({ok: false, step: phase, message, rolledBack: false});
       }
     }),
   );
@@ -183,6 +215,8 @@ export function registerSystemRoutes(app, ctx) {
     mutation(ctx, 'singbox', async () => {
       const configPath = model.resolvedOutputPath();
       const tempPath = `${configPath}.new`;
+      const dirInfo = model.outputDirInfo();
+      if (!dirInfo.ok) throw new ConfigError(dirRefusal(dirInfo));
       const snapshot = fs.existsSync(configPath)
         ? snapshotConfig(configPath, model.stateDir, {keep: CONFIG_SNAPSHOT_KEEP})
         : null;
@@ -212,6 +246,8 @@ export function registerSystemRoutes(app, ctx) {
         };
       } catch (error) {
         fs.rmSync(tempPath, {force: true});
+        const info = model.outputDirInfo();
+        if (isPermissionError(error) && !info.ok) throw new ConfigError(dirRefusal(info));
         throw error;
       }
     }),
@@ -286,7 +322,18 @@ export function registerSystemRoutes(app, ctx) {
     '/rollback',
     mutation(ctx, 'system:singbox', async () => {
       const configPath = model.resolvedOutputPath();
-      const restored = restoreLatestConfig(model.stateDir, configPath);
+      // The rollback writes a temporary file next to the live config and renames
+      // it, so it needs the very same directory right.
+      const dirInfo = model.outputDirInfo();
+      if (!dirInfo.ok) throw new ConfigError(dirRefusal(dirInfo));
+
+      let restored;
+      try {
+        restored = restoreLatestConfig(model.stateDir, configPath);
+      } catch (error) {
+        if (isPermissionError(error)) throw new ConfigError(dirRefusal(model.outputDirInfo()));
+        throw error;
+      }
       if (restored === null) {
         throw new ConfigError('снапшотов config.json ещё нет: откатывать нечего');
       }

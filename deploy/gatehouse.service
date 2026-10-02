@@ -59,6 +59,13 @@ Environment=GATEHOUSE_STATE_DIR=/var/lib/gatehouse
 Environment=GATEHOUSE_PROVIDERS=/var/lib/gatehouse/providers
 Environment=GATEHOUSE_HOST=10.95.2.1
 Environment=GATEHOUSE_PORT=9090
+# The apply chain builds config.json.new NEXT TO the live file and renames it into
+# place, and the rollback writes its temporary file there too, so denis needs write
+# access to the DIRECTORY, not just to config.json:
+#   sudo chown root:denis /etc/sing-box && sudo chmod 775 /etc/sing-box
+# Without it the bar warns and Apply/Rollback refuse with that very command instead
+# of a raw EACCES. It does not really widen access: denis already owns the
+# config.json that sing-box reads.
 Environment=GATEHOUSE_CONFIG=/etc/sing-box/config.json
 Environment=GATEHOUSE_SINGBOX=/usr/local/bin/sing-box
 Environment=GATEHOUSE_SYSTEMCTL=/usr/bin/systemctl
