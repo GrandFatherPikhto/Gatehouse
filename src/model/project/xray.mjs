@@ -32,7 +32,11 @@ export function enabledXrayServers(model) {
   const info = providersInfo(model);
   const servers = [];
   for (const provider of info.providers) {
-    if (provider.kind !== 'xray' || provider.enabled !== true) continue;
+    if (provider.enabled !== true) continue;
+    // A kind-«xray» folder (full client configs) AND a subscription whose engine
+    // sends some or all of its servers through Xray both carry `xrayServers`
+    // (task 22 §2): one port pool, one collision check.
+    if (provider.kind !== 'xray' && provider.kind !== 'subscription') continue;
     for (const server of provider.xrayServers ?? []) servers.push(server);
   }
   return servers;

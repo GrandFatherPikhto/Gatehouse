@@ -235,10 +235,13 @@ export function splitNetloc(netloc) {
  * the reference caught and turned into a skipped link; and `port if port else 443`
  * turns an explicit port 0 into 443 as well.
  *
+ * Exported for the sibling readers (`hysteria.mjs`, `xray-links.mjs`) that parse
+ * the same authority and must resolve a port the same way.
+ *
  * @param {string|null} portText
  * @returns {number}
  */
-function resolvePort(portText) {
+export function resolvePort(portText) {
   if (portText === null) return 443;
   if (!ASCII_DIGITS.test(portText)) {
     throw new Error(`Port could not be cast to integer value as '${portText}'`);
@@ -306,13 +309,16 @@ export function linkLabel(rawUrl) {
  * Records a skipped link as a warning string (for the generator) and as a
  * structured `{label, reason}` record (for the panel).
  *
+ * Exported for the sibling readers (`hysteria.mjs`, `xray-links.mjs`): a skip
+ * must look and read the same whatever scheme produced it.
+ *
  * @param {string[]} warnings
  * @param {Array<{label: string, reason: string}>} skipped
  * @param {string} label
  * @param {string} reason
  * @returns {null}
  */
-function skipLink(warnings, skipped, label, reason) {
+export function skipLink(warnings, skipped, label, reason) {
   warnings.push(`${label}: ${reason}`);
   skipped.push({label, reason});
   return null;

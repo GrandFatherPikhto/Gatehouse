@@ -282,10 +282,12 @@ export function writeJson(filePath, config) {
  * Reference: `generate_config_file` — same override order, same error cases.
  *
  * @param {string} settingsPath
- * @param {{output?: string, links?: string, listenIp?: string, excludeFromAuto?: unknown[], warnings?: string[], runningTunnels?: Set<string>, providersRoot?: string}} [options]
+ * @param {{output?: string, links?: string, listenIp?: string, excludeFromAuto?: unknown[], warnings?: string[], runningTunnels?: Set<string>, providersRoot?: string, xrayInstalled?: boolean}} [options]
  *   `providersRoot` overrides the `GATEHOUSE_PROVIDERS` root the reader would
  *   otherwise take from the environment; the editor passes the root it resolved
- *   for the panel, so both look at the same folders.
+ *   for the panel, so both look at the same folders. `xrayInstalled` lets an
+ *   «авто» subscription skip its XHTTP servers with a warning when there is no
+ *   Xray on the host (task 22 §2).
  * @returns {{outputFile: string, stats: Record<string, unknown>, warnings: string[], config: Record<string, unknown>}}
  */
 export function generateConfigFile(settingsPath, options = {}) {
@@ -311,7 +313,14 @@ export function generateConfigFile(settingsPath, options = {}) {
       ? settings
       : {...settings, exclude_from_auto: override};
 
-  const build = readBuild(settings, settingsDir, options.links, warnings, options.providersRoot);
+  const build = readBuild(
+    settings,
+    settingsDir,
+    options.links,
+    warnings,
+    options.providersRoot,
+    options.xrayInstalled,
+  );
   // `runningTunnels` is the set of tunnel interfaces the caller found up in
   // systemd. It only feeds the §5.4 warning about a proxy on a stopped tunnel;
   // `undefined` means "not asked", which adds no warning.
@@ -384,7 +393,14 @@ export function previewPair(settingsPath, options = {}) {
   const warnings = options.warnings || [];
   const {settings, settingsDir} = loadEffectiveSettings(settingsPath);
   const listenIp = options.listenIp || settings.listen_ip || '127.0.0.1';
-  const build = readBuild(settings, settingsDir, options.links, warnings, options.providersRoot);
+  const build = readBuild(
+    settings,
+    settingsDir,
+    options.links,
+    warnings,
+    options.providersRoot,
+    options.xrayInstalled,
+  );
   const [config] = buildConfig(settings, build.outbounds, listenIp, warnings, {});
   const xrayConfig =
     build.xray.servers.length > 0
@@ -473,7 +489,7 @@ function emptyXray() {
  * @param {string|undefined} providersRoot
  * @returns {{outbounds: Array<Record<string, unknown>>, xray: ReturnType<typeof emptyXray>}}
  */
-function readBuild(settings, settingsDir, linksOverride, warnings, providersRoot) {
+function readBuild(settings, settingsDir, linksOverride, warnings, providersRoot, xrayInstalled) {
   if (typeof linksOverride === 'string' && linksOverride.length > 0) {
     return {outbounds: parseLinks(resolvePath(settingsDir, linksOverride), warnings), xray: emptyXray()};
   }
@@ -482,7 +498,9 @@ function readBuild(settings, settingsDir, linksOverride, warnings, providersRoot
     typeof providersRoot === 'string' && providersRoot.length > 0
       ? providersRoot
       : resolveProvidersRoot(settingsDir);
-  const read = readProviders(settings.providers, root, warnings);
+  const read = readProviders(settings.providers, root, warnings, {
+    xrayInstalled: xrayInstalled !== false,
+  });
 
   // Two enabled providers handing out the same server name must stop the
   // generation: silently picking one would put traffic on an exit the owner did

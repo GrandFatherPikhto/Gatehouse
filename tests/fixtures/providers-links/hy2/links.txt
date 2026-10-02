@@ -1,0 +1,4 @@
+# Synthetic Hysteria2 links (task plan_2026_10_02_gatehouse_links_xhttp_hysteria2.md).
+# Fake passwords; every host under example.com. Both the long and the short scheme.
+hysteria2://secret@hy2.example.com:443/?sni=hy2.example.com&alpn=h3&obfs=salamander&obfs-password=obfspass&mport=20000-30000&upmbps=100&downmbps=500#HY2%20Full
+hy2://plain@hy2b.example.com:8443/?insecure=1&fm=%7B%22a%22%3A1%7D#HY2%20Short

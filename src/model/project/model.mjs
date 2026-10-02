@@ -64,6 +64,14 @@ export class ProjectModel extends ProjectSession {
   }
 
   /**
+   * Records whether the Xray binary exists on the host; the web layer calls this.
+   * `true` elsewhere, so a pure-core caller keeps parsing XHTTP links.
+   */
+  setXrayInstalled(value) {
+    this.xrayInstalled = value !== false;
+  }
+
+  /**
    * Discovers every provider folder and merges the links of the ENABLED ones.
    * Nothing is thrown: an absent root and an unreadable folder are reported.
    */
@@ -92,6 +100,11 @@ export class ProjectModel extends ProjectSession {
   /** Sets the per-subscription overrides (`flow`, `fp`); «Авто» deletes a key. */
   setProviderOverrides(id, values) {
     return providers.setProviderOverrides(this, id, values);
+  }
+
+  /** Sets the subscription engine: `auto` (delete the key) or `xray`. */
+  setProviderEngine(id, engine) {
+    return providers.setProviderEngine(this, id, engine);
   }
 
   /** Sets (or clears) the folder kind: `subscription`, `awg` or `null`. */

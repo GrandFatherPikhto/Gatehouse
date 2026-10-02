@@ -65,6 +65,10 @@
                 "enum": ["chrome", "firefox", "safari", "edge", "ios", "android", "random", "randomized"]
               }
             }
+          },
+          "engine": {
+            "description": "Core of a subscription: `auto` (missing) keeps vless/hysteria2 in sing-box and sends only XHTTP links through Xray; `xray` sends EVERY server of the subscription through Xray. Ignored for other folder kinds.",
+            "enum": ["auto", "xray"]
           }
         }
       }

@@ -148,7 +148,9 @@ export function setProvidersDir(model, value) {
 export function providersInfo(model) {
   const warnings = [];
   const root = resolvedProvidersRoot(model);
-  const read = readProviders(model.document.providers, root, warnings);
+  const read = readProviders(model.document.providers, root, warnings, {
+    xrayInstalled: model.xrayInstalled !== false,
+  });
 
   return {
     root,
@@ -444,6 +446,51 @@ export function setProviderSuffix(model, id, suffix) {
     throw new ConfigError(refusal);
   }
   return affected;
+}
+
+/**
+ * Sets the per-subscription «тонкие настройки» of a provider (§2.5).
+ *
+ * `flow` is `vision` | `none` | absent (Авто); `fp` is one of
+ * `UTLS_FINGERPRINTS` or absent. «Авто» DELETES the key, and an empty
+ * `overrides` object is not stored at all. An invalid value is refused with the
+ * document untouched.
+ *
+ * @param {import('../project.mjs').ProjectModel} model
+ * @param {string} id
+ * @param {{flow?: string, fp?: string}} [values]
+ * @returns {Record<string, unknown>} The stored record.
+ */
+/**
+ * Sets (or clears) the ENGINE of a subscription: `xray` sends every server of the
+ * subscription through Xray, `auto` (the default, stored as a MISSING key) sends
+ * only the XHTTP servers there and keeps the rest in sing-box (task 22 §2).
+ *
+ * Unlike the folder kind, the engine may be changed while the provider is enabled:
+ * it is a property of how the SAME servers are carried, not of what the folder is.
+ *
+ * @param {import('../project.mjs').ProjectModel} model
+ * @param {string} id
+ * @param {unknown} engine `'auto'`|`'xray'`, or null/'' for `auto`.
+ * @returns {Record<string, unknown>} The stored record.
+ */
+export function setProviderEngine(model, id, engine) {
+  const clean = String(id ?? '').trim();
+  if (!isProviderId(clean)) {
+    throw new ConfigError(`имя провайдера '${clean}' не подходит для идентификатора`);
+  }
+  const text = String(engine ?? '').trim();
+  if (text !== '' && text !== 'auto' && text !== 'xray') {
+    throw new ConfigError(`ядро '${String(engine)}' неизвестно: допустимо 'auto' или 'xray'`);
+  }
+  const providers = ensureProviders(model);
+  const current = isMapping(providers[clean]) ? providers[clean] : {};
+  const next = {...current};
+  if (text === 'xray') next.engine = 'xray';
+  else delete next.engine;
+  providers[clean] = next;
+  model.markDirty();
+  return getProvider(model, clean) ?? {};
 }
 
 /**

@@ -34,10 +34,10 @@ import path from 'node:path';
 
 import {ConfigError, isMapping} from './errors.mjs';
 import {DEFAULT_PROVIDERS_ROOT} from './paths.mjs';
+import {parseSubscriptionLinks} from './subscription.mjs';
 import {
   applyOverrides,
   decodeUtf8Ignore,
-  parseLinks,
   parseSubscriptionHeaders,
   parseVless,
   pythonStrip,
@@ -211,21 +211,29 @@ function rawTags(filePath) {
 }
 
 /**
- * Reads the `links.txt` of one provider.
+ * Reads the `links.txt` of one provider, splitting it into the sing-box outbounds
+ * and the Xray server descriptors of the same subscription (§1, §2 of task 22).
+ *
+ * `options.engine` is the provider's `providers.<id>.engine`; `options.xrayInstalled`
+ * is false only when an «авто» subscription must skip its XHTTP servers with a
+ * warning because there is no Xray on the host.
  *
  * @param {string} filePath
  * @param {string} id
  * @param {string[]} warnings Per-provider collector, not the global one.
  * @param {Array<{label: string, reason: string}>} skipped Per-provider skips.
- * @returns {{outbounds: Array<Record<string, unknown>>, state: string, error: string|null}}
+ * @param {{engine?: 'auto'|'xray', xrayInstalled?: boolean}} [options]
+ * @returns {{outbounds: Array<Record<string, unknown>>,
+ *   xrayServers: Array<Record<string, unknown>>, state: string, error: string|null}}
  */
-function readLinks(filePath, id, warnings, skipped) {
+function readLinks(filePath, id, warnings, skipped, options = {}) {
   try {
     fs.accessSync(filePath, fs.constants.R_OK);
     if (fs.statSync(filePath).isDirectory()) throw new Error('EISDIR');
   } catch {
     return {
       outbounds: [],
+      xrayServers: [],
       state: 'unreadable',
       error: `файл ссылок ${filePath} недоступен для чтения`,
     };
@@ -245,11 +253,22 @@ function readLinks(filePath, id, warnings, skipped) {
   }
 
   try {
-    return {outbounds: parseLinks(filePath, warnings, skipped), state: 'ok', error: null};
+    const parsed = parseSubscriptionLinks(filePath, {...options, warnings, skipped});
+    return {
+      outbounds: parsed.outbounds,
+      xrayServers: parsed.xrayServers,
+      state: 'ok',
+      error: null,
+    };
   } catch (caught) {
     if (!(caught instanceof ConfigError)) throw caught;
     const empty = /валидных VLESS-ссылок не обнаружено/.test(caught.message);
-    return {outbounds: [], state: empty ? 'empty' : 'unreadable', error: caught.message};
+    return {
+      outbounds: [],
+      xrayServers: [],
+      state: empty ? 'empty' : 'unreadable',
+      error: caught.message,
+    };
   }
 }
 
@@ -278,6 +297,7 @@ function readSubscriptionHeaders(filePath) {
  */
 export function describeContent(contentKind, parts = {}) {
   const links = Number(parts.links) || 0;
+  const xrayLinks = Number(parts.xrayLinks) || 0;
   const confs = Number(parts.confs) || 0;
   const xrayConfigs = Number(parts.xrayConfigs) || 0;
   const xrayOutbounds = Number(parts.xrayOutbounds) || 0;
@@ -291,13 +311,17 @@ export function describeContent(contentKind, parts = {}) {
     )}, ${xrayServers} ${plural(xrayServers, 'сервер', 'сервера', 'серверов')})`;
 
   switch (contentKind) {
-    case 'links':
-      return `похоже на подписку: ${LINKS_FILENAME}, ${links} ${plural(
+    case 'links': {
+      const base = `похоже на подписку: ${LINKS_FILENAME}, ${links} ${plural(
         links,
         'ссылка',
         'ссылки',
         'ссылок',
       )}`;
+      // A subscription may mix engines: name how many servers go through Xray
+      // (task 22 §3), so the owner sees it before choosing the folder kind.
+      return xrayLinks > 0 ? `${base} (${xrayLinks} через Xray)` : base;
+    }
     case 'tunnels':
       return `похоже на туннели: ${confs} ${plural(confs, 'конфиг', 'конфига', 'конфигов')}`;
     case 'xray':
@@ -434,14 +458,26 @@ export function inferKind(contentKind) {
  * @param {Array<{label: string, reason: string}>} skipped Per-provider skips.
  * @param {'subscription'|'awg'|null} storedKind Kind written in the record.
  * @param {boolean} hasRecord True when `providers` has an entry for the folder.
+ * @param {{engine?: 'auto'|'xray', xrayInstalled?: boolean}} [options]
+ *   `engine` is the provider's `providers.<id>.engine`; `xrayInstalled` is handed
+ *   in by the caller that may ask the host (task 22 §2).
  * @returns {Record<string, unknown>}
  */
-function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
+function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord, options = {}) {
   const base = {id, name: id, path: dir, type: 'folder', discovered: true};
+  const engine = options.engine === 'xray' ? 'xray' : 'auto';
+  const xrayInstalled = options.xrayInstalled !== false;
   // Content counts for the diagnosis and the hint. A foreign half of a folder is
   // counted too — that is what makes the «вид не совпадает с содержимым» block and
   // the «смешанная папка» list possible (task 20 §2, §3).
-  const emptyParts = () => ({links: 0, confs: 0, xrayConfigs: 0, xrayOutbounds: 0, xrayServers: 0});
+  const emptyParts = () => ({
+    links: 0,
+    confs: 0,
+    xrayConfigs: 0,
+    xrayOutbounds: 0,
+    xrayServers: 0,
+    xrayLinks: 0,
+  });
   const zeroXray = {configs: 0, outbounds: 0, servers: 0};
 
   let stat;
@@ -584,11 +620,13 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
 
   const wantLinks = kind === 'subscription' || (kind === null && hasLinks);
   let rawOutbounds = [];
+  let rawXrayServers = [];
   let linksState = 'ok';
   let linksError = null;
   if (wantLinks && hasLinks) {
-    const read = readLinks(linksPath, id, warnings, skipped);
+    const read = readLinks(linksPath, id, warnings, skipped, {engine, xrayInstalled});
     rawOutbounds = read.outbounds;
+    rawXrayServers = read.xrayServers;
     linksState = read.state;
     linksError = read.error;
   }
@@ -611,12 +649,17 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
   // Counts for the diagnosis. The CHOSEN half was read above with the real
   // collectors; a FOREIGN half is read here with throwaway ones, so its per-line
   // warnings never reach the panel (task 20 §3).
-  let linksCount = rawOutbounds.length;
-  if (!wantLinks && hasLinks) linksCount = readLinks(linksPath, id, [], []).outbounds.length;
+  let linksCount = rawOutbounds.length + rawXrayServers.length;
+  if (!wantLinks && hasLinks) {
+    const probe = readLinks(linksPath, id, [], [], {engine, xrayInstalled});
+    linksCount = probe.outbounds.length + probe.xrayServers.length;
+  }
   let xrayCountMeta = xrayMeta;
   if (!wantXray && hasXray) xrayCountMeta = readXrayConfigs(xrayPath, [], []).meta;
   const parts = {
     links: linksCount,
+    // How many of `links` ride on Xray (task 22 §3): shown in the «Найдено» hint.
+    xrayLinks: rawXrayServers.length,
     confs: confFiles.length,
     xrayConfigs: xrayCountMeta.configs,
     xrayOutbounds: xrayCountMeta.outbounds,
@@ -634,7 +677,8 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
     // is present but has nothing usable is «empty» too: an empty folder, or a
     // `links.txt` without a single valid link.
     const noContent = contentKind === 'empty';
-    const noValidLinks = contentKind === 'links' && rawOutbounds.length === 0;
+    const noValidLinks =
+      contentKind === 'links' && rawOutbounds.length === 0 && rawXrayServers.length === 0;
     // A file that could not be READ is not «a folder that holds nothing»: the
     // hint says so and the folder is marked, so a broken `xray-configs.json` is
     // never described as «0 конфигов» (task 20 §1.3).
@@ -643,18 +687,22 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
       (contentKind === 'links' && linksState === 'unreadable');
     const empty = !brokenFile && (noContent || noValidLinks);
     const xrayNames = xrayServers.map((server) => server.name);
+    const linkTags = [
+      ...rawOutbounds.map((outbound) => outbound.tag),
+      ...rawXrayServers.map((server) => server.tag),
+    ];
     const tags =
       contentKind === 'xray' && !brokenFile
         ? xrayNames
         : contentKind === 'xray'
           ? []
-          : rawOutbounds.map((outbound) => outbound.tag);
+          : linkTags;
     const count =
       contentKind === 'tunnels'
         ? confFiles.length
         : contentKind === 'xray'
           ? xrayServers.length
-          : rawOutbounds.length;
+          : linkTags.length;
     return {
       ...base,
       exists: true,
@@ -734,7 +782,16 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
 
   const subscription = kind === 'subscription';
   const outbounds = subscription ? rawOutbounds : [];
+  // Xray server descriptors of a SUBSCRIPTION, distinct from the `xrayServers`
+  // of a kind-«xray» folder read above.
+  const subscriptionXrayServers = subscription ? rawXrayServers : [];
   const entries = subscription ? [] : confFiles;
+  // Names of ALL subscription servers, whichever engine carries them: the picker,
+  // the tree and the collision check see one namespace (task 22 §2, §3).
+  const subscriptionTags = [
+    ...outbounds.map((outbound) => outbound.tag),
+    ...subscriptionXrayServers.map((server) => server.tag),
+  ];
   // A `links.txt` without a single valid link is «empty», not «broken»: the file
   // was readable. The message names the file, so the panel can print one wording
   // for it whichever branch read the folder (task 20 §1.3, §2.3).
@@ -790,12 +847,12 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
     exists: true,
     kind,
     contentKind,
-    count: subscription ? outbounds.length : entries.length,
-    tags: outbounds.map((outbound) => outbound.tag),
-    baseTags: outbounds.map((outbound) => outbound.tag),
+    count: subscription ? subscriptionTags.length : entries.length,
+    tags: subscription ? subscriptionTags : [],
+    baseTags: subscription ? subscriptionTags : [],
     entries,
     outbounds,
-    xrayServers: [],
+    xrayServers: subscriptionXrayServers,
     xrayMeta: zeroXray,
     parts,
     hint: describeContent(contentKind, parts),
@@ -816,7 +873,7 @@ function readProviderFolder(id, dir, warnings, skipped, storedKind, hasRecord) {
  *
  * @param {unknown} record
  * @returns {{record: Record<string, unknown>, enabled: boolean, label: string|null,
- *   kind: 'subscription'|'awg'|'xray'|null}}
+ *   kind: 'subscription'|'awg'|'xray'|null, engine: 'auto'|'xray'}}
  */
 function recordView(record) {
   const map = isMapping(record) ? record : {};
@@ -828,6 +885,9 @@ function recordView(record) {
       map.kind === 'subscription' || map.kind === 'awg' || map.kind === 'xray'
         ? map.kind
         : null,
+    // `providers.<id>.engine`: «авто» (missing) sends only XHTTP to Xray, «xray»
+    // sends the whole subscription there (task 22 §2).
+    engine: map.engine === 'xray' ? 'xray' : 'auto',
   };
 }
 
@@ -852,9 +912,15 @@ function recordView(record) {
  * Warnings of a DISABLED provider never reach the global list (generation does
  * not read that folder) but stay on `provider.warnings` for the panel.
  *
+ * `xrayServers` collects the Xray servers of BOTH a kind-«xray» folder and a
+ * subscription whose engine sends some (or all) of its servers to Xray: one
+ * namespace, one port pool, one collision check (task 22 §2).
+ *
  * @param {unknown} records `providers` field of the document (id -> record).
  * @param {string} root Absolute providers root.
  * @param {string[]} [warnings] Global collector, for the generator.
+ * @param {{xrayInstalled?: boolean}} [options] `false` makes an «авто»
+ *   subscription skip its XHTTP servers with a warning (no Xray on the host).
  * @returns {{root: string, rootState: {state: string, owner: string|null,
  *   mode: string|null, message: string|null}, providers: Array<Record<string, unknown>>,
  *   unread: Array<Record<string, unknown>>, outbounds: Array<Record<string, unknown>>,
@@ -862,7 +928,7 @@ function recordView(record) {
  *   tags: string[], collisions: Array<{tag: string, providers: string[]}>,
  *   warnings: string[]}}
  */
-export function readProviders(records, root, warnings = []) {
+export function readProviders(records, root, warnings = [], options = {}) {
   const map = isMapping(records) ? records : {};
   const rootState = readRoot(root);
 
@@ -933,7 +999,10 @@ export function readProviders(records, root, warnings = []) {
     const hasRecord = Object.hasOwn(map, name);
     const localWarnings = [];
     const localSkipped = [];
-    const folder = readProviderFolder(name, full, localWarnings, localSkipped, view.kind, hasRecord);
+    const folder = readProviderFolder(name, full, localWarnings, localSkipped, view.kind, hasRecord, {
+      engine: view.engine,
+      xrayInstalled: options.xrayInstalled !== false,
+    });
     const provider = {
       ...folder,
       record: view.record,
@@ -967,6 +1036,35 @@ export function readProviders(records, root, warnings = []) {
       provider.xrayServers = servers;
       provider.baseTags = base.map((server) => server.baseName);
       provider.tags = servers.map((server) => server.name);
+    } else if (provider.kind === 'subscription' && (provider.xrayServers ?? []).length > 0) {
+      // A subscription that MIXES engines (task 22 §2): the notation of names and
+      // the тонкие настройки are settled for both lists in one place, so the
+      // picker, the tree and the collision check see one namespace.
+      const baseOutbounds = provider.outbounds ?? [];
+      const baseXray = provider.xrayServers ?? [];
+      const changed = suffix.length > 0 || Object.keys(overrides).length > 0;
+
+      const outbounds = changed
+        ? baseOutbounds.map((outbound) => applyOverrides(withSuffix(outbound, suffix), overrides))
+        : baseOutbounds;
+      const servers = (changed
+        ? baseXray.map((server) =>
+            suffix.length > 0 ? {...server, name: `${server.baseName} ${suffix}`} : server,
+          )
+        : baseXray
+      ).map((server) => ({
+        ...server,
+        outbound: applyXrayOverrides(server.outbound, overrides),
+        key: `${provider.id}/${server.baseName}`,
+      }));
+
+      provider.baseTags = [
+        ...baseOutbounds.map((outbound) => outbound.tag),
+        ...baseXray.map((server) => server.baseName),
+      ];
+      provider.outbounds = outbounds;
+      provider.xrayServers = servers;
+      provider.tags = [...outbounds.map((outbound) => outbound.tag), ...servers.map((s) => s.name)];
     } else {
       const baseTags = provider.tags;
       let outbounds = provider.outbounds;
@@ -1125,6 +1223,37 @@ export function providerOverrides(record) {
 function withSuffix(outbound, suffix) {
   if (suffix.length === 0) return outbound;
   return {...outbound, tag: `${outbound.tag} ${suffix}`};
+}
+
+/**
+ * Applies the per-subscription тонкие настройки to one XRAY outbound (§2):
+ * `fp` rewrites `tlsSettings.fingerprint` / `realitySettings.fingerprint`, `flow`
+ * rewrites `users[0].flow` of a TCP server (`vision` → `xtls-rprx-vision`,
+ * `none` → `""`). Returns a deep copy, so the provider data is never mutated.
+ *
+ * @param {unknown} outbound
+ * @param {{flow?: string, fp?: string}} overrides
+ * @returns {unknown}
+ */
+function applyXrayOverrides(outbound, overrides) {
+  if (!isMapping(outbound)) return outbound;
+  const next = structuredClone(outbound);
+  const stream = isMapping(next.streamSettings) ? next.streamSettings : null;
+  if (stream === null) return next;
+  if (typeof overrides.fp === 'string') {
+    if (isMapping(stream.tlsSettings)) stream.tlsSettings.fingerprint = overrides.fp;
+    if (isMapping(stream.realitySettings)) stream.realitySettings.fingerprint = overrides.fp;
+  }
+  if (overrides.flow === 'vision' || overrides.flow === 'none') {
+    const network = typeof stream.network === 'string' ? stream.network : 'tcp';
+    if (network === 'tcp') {
+      const vnext = Array.isArray(next.settings?.vnext) ? next.settings.vnext[0] : null;
+      if (vnext && Array.isArray(vnext.users) && isMapping(vnext.users[0])) {
+        vnext.users[0].flow = overrides.flow === 'vision' ? 'xtls-rprx-vision' : '';
+      }
+    }
+  }
+  return next;
 }
 
 /**

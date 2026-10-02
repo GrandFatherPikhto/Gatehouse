@@ -165,6 +165,11 @@ export function applyRoute(ctx, route, req) {
         if (Object.hasOwn(body, 'flow')) overrides.flow = String(body.flow ?? '');
         if (Object.hasOwn(body, 'fp')) overrides.fp = String(body.fp ?? '');
         if (Object.keys(overrides).length > 0) model.setProviderOverrides(id, overrides);
+        // The engine (task 22 §2) is applied for a subscription whatever its
+        // state — it decides how the SAME servers are carried.
+        if (Object.hasOwn(body, 'engine')) {
+          model.setProviderEngine(id, String(body.engine ?? 'auto'));
+        }
       }
 
       // «Включён» LAST: an enabling refusal (no kind, colliding names) then leaves

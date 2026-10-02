@@ -443,6 +443,7 @@ function xrayProviderView(model, provider, system) {
     key: server.key,
     name: server.name,
     protocol: server.protocol,
+    engine: 'Xray',
     address: server.address,
     remotePort: server.remotePort,
     remark: server.remark,
@@ -641,8 +642,20 @@ export function buildPanel(model, key, extra = {}) {
         // and the kind to switch to. Always present, so the panel of a folder with
         // no kind, a broken file or no access is never a dead end.
         diagnosis: providerDiagnosisView(provider),
-        // Kind `xray`: the server table and the state of the engine.
-        ...(provider.kind === 'xray' ? xrayProviderView(model, provider, system) : {}),
+        // §2: the engine of a subscription (`auto` keeps its vless/hysteria2 in
+        // sing-box; `xray` sends the whole subscription through Xray).
+        engine: provider.record?.engine === 'xray' ? 'xray' : 'auto',
+        // Names carried by sing-box, so the «Серверы» list can leave the Xray ones
+        // to the table below without repeating them.
+        singboxTags: (provider.outbounds ?? []).map((outbound) => outbound.tag),
+        // Kind `xray` AND a subscription that routes servers through Xray: the
+        // server table and the state of the engine. For a subscription the LINK
+        // skips are already shown by the generic block, so `xraySkipped` is muted.
+        ...(provider.kind === 'subscription' && (provider.xrayServers ?? []).length > 0
+          ? {...xrayProviderView(model, provider, system), xraySkipped: []}
+          : provider.kind === 'xray'
+            ? xrayProviderView(model, provider, system)
+            : {}),
       };
     }
 

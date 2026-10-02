@@ -106,6 +106,21 @@
         <% } %>
       </p>
 
+      <%# Task 22 §2: the core of a subscription. «Авто» keeps vless/hysteria2 in
+          sing-box and sends only XHTTP through Xray; «Xray» sends every server of
+          the subscription through it. It changes in any state. %>
+      <% if (panel.folderKind === 'subscription' || panel.folderKind === null) { %>
+        <label for="engine">ядро</label>
+        <select id="engine" name="engine">
+          <option value="auto" <%= panel.engine !== 'xray' ? 'selected' : '' %>>авто — Sing-Box, а что он не умеет — Xray</option>
+          <option value="xray" <%= panel.engine === 'xray' ? 'selected' : '' %>>Xray — все серверы подписки</option>
+        </select>
+        <p class="hint">
+          «Xray» отдаёт подписку целиком второму ядру. Меняется в любом состоянии;
+          применяется «Применить».
+        </p>
+      <% } %>
+
       <%# §3.6: the expiry from `#subscription-userinfo`. A passed date warns the
           same way a mark does in the tree; no date means no line at all. %>
       <% if (panel.expiry) { %>
@@ -201,13 +216,14 @@
   <% } %>
   <table class="list">
     <thead>
-      <tr><th>имя</th><th>протокол</th><th>адрес</th><th>порт Xray</th><th>из конфига</th></tr>
+      <tr><th>имя</th><th>протокол</th><th>ядро</th><th>адрес</th><th>порт Xray</th><th>из конфига</th></tr>
     </thead>
     <tbody>
       <% for (const row of panel.xrayRows) { %>
         <tr>
           <td><code><%= row.name %></code></td>
           <td><%= row.protocol %></td>
+          <td><%= row.engine %></td>
           <td><%= row.address %><% if (row.remotePort) { %>:<%= row.remotePort %><% } %></td>
           <td><code><%= row.port ?? '—' %></code></td>
           <td><%= row.remark ?? '—' %></td>
@@ -225,8 +241,11 @@
   <% } %>
 <% } %>
 
-<% if (panel.provider.tags.length > 0 && panel.folderKind !== 'xray') { %>
-  <h3>Серверы (<%= panel.provider.tags.length %>)</h3>
+<%# Names carried by sing-box. A subscription that routes some servers through Xray
+    leaves those to the «Серверы Xray» table above, so the two lists never repeat. %>
+<% const serverTags = panel.singboxTags ?? panel.provider.tags; %>
+<% if (serverTags.length > 0 && panel.folderKind !== 'xray') { %>
+  <h3>Серверы (<%= serverTags.length %>)</h3>
   <% if (!panel.enabled) { %>
     <p class="hint">
       Провайдер выключен: в <code>config.json</code> его серверов нет, пока не
@@ -234,7 +253,7 @@
     </p>
   <% } %>
   <ul class="tags">
-    <% for (const tag of panel.provider.tags) { %>
+    <% for (const tag of serverTags) { %>
       <li><%= tag %></li>
     <% } %>
   </ul>

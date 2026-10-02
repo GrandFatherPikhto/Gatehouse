@@ -28,6 +28,9 @@ webui.json
 !tests/fixtures/providers-transports/links.txt
 # ...and the sandbox sample, which is synthetic and safe to commit.
 !dev/root.example/providers/vpnd/links.txt
+# ...and the XHTTP / Hysteria2 fixtures of the task-22 suite (fake keys).
+!tests/fixtures/providers-links/xhttp/links.txt
+!tests/fixtures/providers-links/hy2/links.txt
 
 # Runtime state of the web editor: snapshots of webui.json taken before every
 # save. The location is configurable (GATEHOUSE_STATE_DIR); this is the

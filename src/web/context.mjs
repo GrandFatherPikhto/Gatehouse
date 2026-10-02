@@ -10,7 +10,7 @@ import path from 'node:path';
 import process from 'node:process';
 
 import {ProjectModel} from '../model/project.mjs';
-import {systemConfig} from '../system/index.mjs';
+import {systemConfig, xrayInstalled} from '../system/index.mjs';
 
 /**
  * True when the host-facing paths of the process point into a `dev/` directory.
@@ -79,6 +79,10 @@ export function buildContext(options = {}) {
   ) {
     model.setProvidersDir(systemEnv.GATEHOUSE_PROVIDERS);
   }
+  // Whether Xray exists on the host: an «авто» subscription skips its XHTTP
+  // servers with a warning when it does not (task 22 §2). The web layer alone
+  // may touch the host; the model just carries the answer.
+  model.setXrayInstalled(xrayInstalled({env: systemEnv, xray: system.xray}));
 
   // Runtime state of the host layer. It lives on the context, not in a module
   // global, so two editors in one process cannot see each other's "last check"

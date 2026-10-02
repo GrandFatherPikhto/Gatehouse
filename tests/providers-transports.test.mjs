@@ -267,12 +267,13 @@ describe('warnings of a disabled provider (task §5а)', () => {
     const root = path.join(dir, 'providers');
     writeProvider(root, 'vpnd', link('vpnd.example.com'));
     // A provider that PARSES (one good link) but also skips one: only then does it
-    // stay a provider instead of an «empty» unread entry.
+    // stay a provider instead of an «empty» unread entry. `kcp` is the transport
+    // NO engine of the project speaks (task 22 §1.2 keeps it a skip).
     writeProvider(
       root,
       'broken',
       link('ok.example.com', '🇧🇪 Belgium - Brussels', TLS, 'aaaaaaaa-0000-0000-0000-00000000000e') +
-        'vless://aaaaaaaa-0000-0000-0000-00000000000f@x.example.com:443?type=xhttp&security=tls&sni=x.example.com#Bad\n',
+        'vless://aaaaaaaa-0000-0000-0000-00000000000f@x.example.com:443?type=kcp&security=tls&sni=x.example.com#Bad\n',
     );
     return {root};
   }
@@ -290,7 +291,7 @@ describe('warnings of a disabled provider (task §5а)', () => {
     const {root} = mixedProject();
     const read = readProviders({vpnd: {enabled: true, kind: 'subscription'}, broken: {enabled: true, kind: 'subscription'}}, root);
     assert.equal(read.warnings.length, 1);
-    assert.match(read.warnings[0], /неизвестный транспорт 'xhttp'/);
+    assert.match(read.warnings[0], /неизвестный транспорт 'kcp'/);
   });
 });
 
@@ -304,8 +305,9 @@ describe('provider panels render the new blocks (task §5.11)', () => {
       'Good WS',
       'type=ws&path=/x&host=ws.example.com&security=tls&sni=ws.example.com',
     );
+    // `kcp` stays a skip: neither sing-box nor Xray carries it (task 22 §1.2).
     const bad =
-      'vless://aaaaaaaa-0000-0000-0000-000000000002@x.example.com:443?type=xhttp&security=tls&sni=x.example.com#Skipped';
+      'vless://aaaaaaaa-0000-0000-0000-000000000002@x.example.com:443?type=kcp&security=tls&sni=x.example.com#Skipped';
     writeProvider(root, 'vpnd', `# comment\n${ws}\n${bad}\n`);
     const settingsFile = writeSettings(dir, {providers: {vpnd: {enabled: true, kind: 'subscription'}}});
 

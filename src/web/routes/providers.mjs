@@ -64,11 +64,15 @@ export function registerProviderRoutes(app, ctx) {
     mutation(ctx, 'providers', (req) => {
       const id = String(req.body.id ?? '').trim();
       const enabled = forms.checkbox(req.body.enabled);
-      // §5: an `xray` provider may be described without Xray on the host, but it
-      // cannot be ENABLED: a shape that would never work must say so before saving.
+      // §5 / task 22 §2: an `xray` provider — and a subscription whose engine is
+      // «Xray» — may be described without Xray on the host, but it cannot be
+      // ENABLED: a shape that would never work must say so before saving. An
+      // «авто» subscription is fine: it skips its XHTTP servers with a warning.
       if (enabled) {
         const record = ctx.model.getProvider(id) ?? {};
-        if (record.kind === 'xray' && !xrayInstalled({env: ctx.systemEnv, xray: ctx.system.xray})) {
+        const needsXray =
+          record.kind === 'xray' || (record.kind === 'subscription' && record.engine === 'xray');
+        if (needsXray && !xrayInstalled({env: ctx.systemEnv, xray: ctx.system.xray})) {
           throw new ConfigError(`Xray не найден: ${ctx.system.xray}`);
         }
       }

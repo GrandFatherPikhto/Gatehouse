@@ -44,11 +44,11 @@ import {migrateProviderKinds, migrateProviders, resolvedProvidersRoot} from './p
 export class ProjectSession {
   /**
    * @param {{path?: string|null, stateDir?: string, snapshotKeep?: number,
-   *   amneziaDir?: string, providersDir?: string}} [options]
+   *   amneziaDir?: string, providersDir?: string, xrayInstalled?: boolean}} [options]
    *   `path` opens an existing file immediately; `stateDir` is where snapshots
-   *   go, `.state` beside the project by default. `amneziaDir` and `providersDir`
-   *   come from `GATEHOUSE_AMNEZIA_DIR` / `GATEHOUSE_PROVIDERS`; the web layer,
-   *   which alone may read the environment, fills them in.
+   *   go, `.state` beside the project by default. `amneziaDir`, `providersDir` and
+   *   `xrayInstalled` come from the host; the web layer, which alone may read the
+   *   environment and the filesystem, fills them in.
    */
   constructor(options = {}) {
     this.stateDir = options.stateDir ?? path.join(process.cwd(), DEFAULT_STATE_DIR);
@@ -68,6 +68,15 @@ export class ProjectSession {
      * @type {string}
      */
     this.providersDir = typeof options.providersDir === 'string' ? options.providersDir : '';
+    /**
+     * Whether the Xray binary exists on the host, handed in by the web layer.
+     * `true` by default: a pure-core caller (a test, the CLI) stays optimistic,
+     * and only the web layer, which may ask the host, knows better. It decides
+     * whether an «авто» subscription skips its XHTTP servers (task 22 §2).
+     *
+     * @type {boolean}
+     */
+    this.xrayInstalled = options.xrayInstalled !== false;
     this.path = null;
     this.document = newDocument();
     /**

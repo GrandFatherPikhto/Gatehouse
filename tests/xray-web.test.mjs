@@ -356,4 +356,58 @@ describe('enabling an xray provider without the binary (§5)', () => {
       await editor.close();
     }
   });
+
+  // Task 22 §2: an «Xray» subscription needs the binary just like a kind-«xray»
+  // folder; the refusal is the same.
+  test('a subscription whose engine is «Xray» is refused the same way', async () => {
+    const editor = await startEditor({
+      providers: {stash: {enabled: false, kind: 'subscription', engine: 'xray'}},
+      xrayBinary: '/nonexistent/xray',
+    });
+    try {
+      const html = await (
+        await post(editor.base, '/provider/enabled', {id: 'stash', enabled: '1'})
+      ).text();
+      assert.match(html, /Xray не найден: \/nonexistent\/xray/);
+    } finally {
+      await editor.close();
+    }
+  });
+});
+
+// Task 22 §3: the panel of a subscription that routes its XHTTP servers through
+// Xray shows the engine field and a server table with the engine column.
+describe('a subscription that routes servers through Xray (task 22 §3)', () => {
+  test('shows the engine field and the server table with the engine column', async () => {
+    const dir = makeTempDir();
+    const providersRoot = path.join(dir, 'providers');
+    fs.mkdirSync(path.join(providersRoot, 'stash'), {recursive: true});
+    fs.copyFileSync(
+      path.join(FIXTURES_DIR, 'providers-links', 'xhttp', 'links.txt'),
+      path.join(providersRoot, 'stash', 'links.txt'),
+    );
+    const settingsFile = writeSettings(dir, {
+      providers: {stash: {enabled: true, kind: 'subscription'}},
+    });
+    const env = {
+      ...fakeSystemEnv({GATEHOUSE_XRAY: XRAY_BIN, GATEHOUSE_XRAY_UNIT: 'xray'}),
+      GATEHOUSE_PROVIDERS: providersRoot,
+      GATEHOUSE_SETTINGS: settingsFile,
+      GATEHOUSE_CONFIG: path.join(dir, 'config.json'),
+      GATEHOUSE_STATE_DIR: path.join(dir, 'state'),
+      GATEHOUSE_HOST: '127.0.0.1',
+      GATEHOUSE_PORT: '0',
+    };
+    const {server, url} = await startServer({env});
+    const base = url.replace(/\/$/, '');
+    try {
+      const html = await (await fetch(`${base}/panel/provider:stash`)).text();
+      assert.match(html, /name="engine"/);
+      assert.match(html, /Серверы Xray/);
+      assert.match(html, /VLESS XHTTP · TLS/);
+      assert.match(html, /<th>ядро<\/th>/);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
 });

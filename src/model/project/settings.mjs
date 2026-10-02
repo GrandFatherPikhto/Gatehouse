@@ -258,6 +258,7 @@ export function generate(model, options = {}) {
   const result = generateConfigFile(model.path, {
     ...options,
     providersRoot: resolvedProvidersRoot(model),
+    xrayInstalled: model.xrayInstalled !== false,
   });
   return {
     ...result,
@@ -283,6 +284,7 @@ export function generateXray(model, options = {}) {
     ...options,
     warnings,
     providersRoot: resolvedProvidersRoot(model),
+    xrayInstalled: model.xrayInstalled !== false,
   });
 }
 
@@ -302,6 +304,7 @@ export function previewBoth(model, options = {}) {
   return previewPair(model.path, {
     providersRoot: resolvedProvidersRoot(model),
     warnings: options.warnings ?? [],
+    xrayInstalled: model.xrayInstalled !== false,
   });
 }
 

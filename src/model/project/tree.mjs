@@ -44,10 +44,13 @@ export function treeSpec(model, options = {}) {
     .map((entry) => String(entry.provider));
 
   // §5: server names carried by Xray, so a proxy whose exits ride on it can be
-  // marked when the service is stopped. Derived from the ENABLED providers only.
+  // marked when the service is stopped. Derived from the ENABLED providers only —
+  // a kind-«xray» folder AND a subscription that routes servers through Xray
+  // (task 22 §2) both carry `xrayServers`.
   const xrayTags = [];
   for (const provider of info.providers) {
-    if (provider.kind !== 'xray' || provider.enabled !== true) continue;
+    if (provider.enabled !== true) continue;
+    if (provider.kind !== 'xray' && provider.kind !== 'subscription') continue;
     for (const server of provider.xrayServers ?? []) xrayTags.push(server.name);
   }
 
