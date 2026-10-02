@@ -97,9 +97,10 @@
       <input type="text" id="suffix" name="suffix" value="<%= panel.suffix %>"
              maxlength="16" size="16" placeholder="(нет)">
       <p class="hint">
-        Пусто — имена как в ссылках. Нужна, когда у двух включённых провайдеров одинаковые
-        имена серверов (например, vpnd и vpnd-ws). Смена приписки переименовывает эти
-        серверы в прокси и маршрутах.
+        Пусто — имена как <% if (panel.folderKind === 'xray') { %>в конфигах:
+        <code><тег> (<хост>)</code><% } else { %>в ссылках<% } %>. Нужна, когда у двух
+        включённых провайдеров одинаковые имена серверов (например, vpnd и vpnd-ws).
+        Смена приписки переименовывает эти серверы в прокси и маршрутах.
         <% if (panel.firstServerName) { %>
           <br>Пример: <code><%= panel.firstServerName %></code>
         <% } %>
@@ -195,7 +196,7 @@
   <h3>Серверы Xray (<%= panel.xrayRows.length %>)</h3>
   <% if (!panel.xrayInstalled) { %>
     <p class="error">Xray не найден: <code><%= panel.xrayBinary %></code> — включить провайдера нельзя.</p>
-  <% } else if (!panel.xrayActive) { %>
+  <% } else if (panel.xrayActive === false) { %>
     <p class="notice">Xray остановлен: порты этих серверов не работают, пока он не запущен.</p>
   <% } %>
   <table class="list">

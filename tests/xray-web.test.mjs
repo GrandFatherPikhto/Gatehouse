@@ -8,7 +8,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {describe, test} from 'node:test';
 
+import {treeSpec} from '../src/model/stale.mjs';
 import {startServer} from '../src/web/server.mjs';
+import {refreshXrayState} from '../src/web/tunnel-state.mjs';
 import {
   DEFAULT_LINKS,
   FAKE_BIN_DIR,
@@ -225,6 +227,114 @@ describe('the tree and the provider mark (§5)', () => {
     try {
       const html = await (await fetch(`${editor.base}/panel/proxies`)).text();
       assert.doesNotMatch(html, /через Xray, а он остановлен/);
+    } finally {
+      await editor.close();
+    }
+  });
+});
+
+// Task plan_2026_10_02_gatehouse_xray_state_honest.md: with no Xray server the
+// service state is «not checked» (`null`), never an invented «остановлен». The
+// system:xray panel still reads the truth when opened; the autostart advice only
+// appears when there ARE servers to lose.
+describe('no Xray server: the state is «not checked» (task 21 §1)', () => {
+  /** A ctx-shaped object for `refreshXrayState`, with a fake systemctl that logs argv. */
+  function xrayCtx(dir, servers) {
+    const argvLog = path.join(dir, 'systemctl.log');
+    const xray = path.join(FAKE_BIN_DIR, 'xray');
+    return {
+      argvLog,
+      ctx: {
+        systemEnv: fakeSystemEnv({
+          GATEHOUSE_XRAY: xray,
+          GATEHOUSE_XRAY_UNIT: 'xray',
+          FAKE_SYSTEMCTL_ACTIVE: 'xray',
+          FAKE_SYSTEMCTL_ENABLED: 'xray',
+          FAKE_SYSTEMCTL_ARGV_LOG: argvLog,
+        }),
+        system: {xray, xrayUnit: 'xray'},
+        model: {enabledXrayServers: () => servers},
+        state: {},
+      },
+    };
+  }
+
+  test('refreshXrayState leaves both axes null and does not call systemctl', async () => {
+    const {argvLog, ctx} = xrayCtx(makeTempDir(), []);
+    const state = await refreshXrayState(ctx);
+    assert.equal(state.installed, true);
+    assert.equal(state.servers, 0);
+    assert.equal(state.active, null);
+    assert.equal(state.enabled, null);
+    assert.equal(fs.existsSync(argvLog), false, 'systemctl must not be asked');
+  });
+
+  test('refreshXrayState reads both axes when a server exists', async () => {
+    const {argvLog, ctx} = xrayCtx(makeTempDir(), [{name: 'x'}]);
+    const state = await refreshXrayState(ctx);
+    assert.equal(state.servers, 1);
+    assert.equal(state.active, true);
+    assert.equal(state.enabled, true);
+    assert.equal(fs.existsSync(argvLog), true, 'systemctl must be asked');
+  });
+
+  test('system:xray shows the real service and no enable advice without servers', async () => {
+    const editor = await startEditor({subscription: true, active: 'xray', enabled: 'xray'});
+    try {
+      const html = await (await fetch(`${editor.base}/panel/system:xray`)).text();
+      assert.match(html, /работает/);
+      assert.match(html, /в автозагрузке/);
+      assert.match(html, /Серверов через Xray: 0/);
+      assert.match(html, /Серверов Xray нет/);
+      assert.doesNotMatch(html, /sudo systemctl enable/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('system:xray says «остановлен» but still no enable advice without servers', async () => {
+    const editor = await startEditor({subscription: true, active: '', enabled: ''});
+    try {
+      const html = await (await fetch(`${editor.base}/panel/system:xray`)).text();
+      assert.match(html, /остановлен/);
+      assert.match(html, /не в автозагрузке/);
+      assert.doesNotMatch(html, /sudo systemctl enable/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('«Настройки → Xray» shows «не проверялось» without servers', async () => {
+    const editor = await startEditor({subscription: true});
+    try {
+      const html = await (await fetch(`${editor.base}/panel/xray`)).text();
+      assert.match(html, /состояние не проверялось/);
+      assert.doesNotMatch(html, /sudo systemctl enable/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('the tree draws the Xray mark only on a KNOWN stop', () => {
+    const document = {proxies: [{tag: 'p', type: 'mixed', port: 1080, servers: ['x']}]};
+    const build = (xrayActive) =>
+      JSON.stringify(
+        treeSpec({document, allTags: ['x'], providers: [], xrayTags: ['x'], xrayActive}),
+      );
+    assert.doesNotMatch(build(null), /через Xray/);
+    assert.doesNotMatch(build(true), /через Xray/);
+    assert.match(build(false), /через Xray, а он остановлен/);
+  });
+});
+
+// The provider panel of kind xray says «имена в конфигах», not «в ссылках».
+describe('the suffix hint of an xray provider (task 21 §4)', () => {
+  test('names the configs, not the links', async () => {
+    const editor = await startEditor();
+    try {
+      const html = await (await fetch(`${editor.base}/panel/provider:stash`)).text();
+      assert.match(html, /Пусто — имена как\s*в конфигах/);
+      assert.match(html, /<code><тег> \(<хост>\)<\/code>/);
     } finally {
       await editor.close();
     }

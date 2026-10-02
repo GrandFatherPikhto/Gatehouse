@@ -77,9 +77,16 @@
   <% if (!panel.installed) { %><span class="error">— не найден</span><% } %><br>
   Конфиг: <code><%= panel.configPath %></code><br>
   Юнит: <code><%= panel.unit %></code> —
-  <%= panel.active ? 'работает' : 'остановлен' %>,
-  <%= panel.enabled ? 'в автозагрузке' : 'не в автозагрузке' %>
-  <% if (panel.installed && !panel.enabled) { %>
+  <%# Three-way: `null` is «not checked» (no Xray server), never «остановлен»
+      (task 21 §1). %>
+  <% if (panel.active === null || panel.enabled === null) { %>
+    состояние не проверялось (ни одного сервера через Xray)
+  <% } else { %>
+    <%= panel.active ? 'работает' : 'остановлен' %>,
+    <%= panel.enabled ? 'в автозагрузке' : 'не в автозагрузке' %>
+  <% } %>
+  <%# The autostart advice only exists when there are servers to lose at a reboot. %>
+  <% if (panel.installed && panel.servers > 0 && panel.enabled === false) { %>
     <br><span class="notice">после перезагрузки роутера серверы Xray окажутся мёртвыми:
     <code>sudo systemctl enable <%= panel.unit %></code></span>
   <% } %>

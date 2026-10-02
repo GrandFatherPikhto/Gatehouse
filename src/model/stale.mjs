@@ -256,9 +256,11 @@ export function treeSpec(options = {}) {
   const tunnelStates = isMapping(options.tunnelStates) ? options.tunnelStates : {};
   // §5: a proxy whose exits go through Xray is dead while the service is stopped.
   // `xrayTags` names the servers carried by Xray, `xrayActive` its runtime state;
-  // both come from the web layer, which alone may ask the host.
+  // both come from the web layer, which alone may ask the host. `null`/absent is
+  // «not checked» and draws NO mark: only a KNOWN stop is a fact worth a mark
+  // (task 21 §1).
   const xrayTags = new Set(asList(options.xrayTags).map((tag) => String(tag)));
-  const xrayActive = options.xrayActive === true;
+  const xrayActive = options.xrayActive;
   // The subscription-expiry mark needs a clock; it is injectable so a test never
   // depends on the wall clock (§3.6).
   const now = Number.isFinite(options.now) ? Number(options.now) : Date.now();
@@ -306,7 +308,7 @@ export function treeSpec(options = {}) {
     // §5: the same idea for Xray. The mark names how many exits of THIS proxy ride
     // on Xray, so the owner sees why the port is dead, not just that it is.
     let xrayMark = '';
-    if (xrayTags.size > 0 && !xrayActive) {
+    if (xrayTags.size > 0 && xrayActive === false) {
       const count = asList(proxy.servers).filter(
         (server) => typeof server === 'string' && xrayTags.has(server),
       ).length;

@@ -55,6 +55,12 @@ export async function refreshTunnelStates(ctx) {
  * the two systemd axes. The systemd reads are SKIPPED with no Xray servers, so a
  * project that never used the second engine pays only one `fs.existsSync`.
  *
+ * With no Xray server the two axes are `null`, NOT `false`: asking systemd would
+ * let a project that never used the engine claim «остановлен, не в автозагрузке»
+ * and advise `systemctl enable` for a service that is none of its business. The
+ * rule of the project is a diagnosis, not a guess — `null` means «not checked»,
+ * and everything built on `state.xray` treats it as «nothing to report».
+ *
  * @param {ReturnType<import('./context.mjs').buildContext>} ctx
  * @returns {Promise<Record<string, unknown>>}
  */
@@ -62,7 +68,7 @@ export async function refreshXrayState(ctx) {
   const installed = xrayInstalled({env: ctx.systemEnv, xray: ctx.system.xray});
   const servers = ctx.model.enabledXrayServers().length;
   if (servers === 0) {
-    ctx.state.xray = {installed, active: false, enabled: false, servers: 0, unit: ctx.system.xrayUnit};
+    ctx.state.xray = {installed, active: null, enabled: null, servers: 0, unit: ctx.system.xrayUnit};
     return ctx.state.xray;
   }
   const runtime = await xrayState({env: ctx.systemEnv, xray: ctx.system.xray});

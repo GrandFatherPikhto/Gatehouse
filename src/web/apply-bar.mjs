@@ -238,7 +238,9 @@ export function applyBar(ctx) {
   // the owner presses anything.
   const xrayServers = model.enabledXrayServers().length;
   const xrayRuntime = ctx.state?.xray ?? {};
-  if (xrayServers > 0 && xrayRuntime.active !== true) {
+  // Only a KNOWN stop is a fact: `null` means «not checked» and must not turn
+  // into «Xray не работает» (task 21 §1).
+  if (xrayServers > 0 && xrayRuntime.active === false) {
     return {
       state: 'warning',
       message: `Xray не работает — ${xrayServers} ${plural(

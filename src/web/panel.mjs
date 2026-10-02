@@ -453,7 +453,9 @@ function xrayProviderView(model, provider, system) {
     xrayRows: rows,
     xrayBinary: system.xrayBinary ?? '',
     xrayInstalled: xray.installed === true,
-    xrayActive: xray.active === true,
+    // `null` means «not checked» (no Xray server at all): the panel then says
+    // nothing about the service instead of inventing «остановлен» (task 21 §1).
+    xrayActive: typeof xray.active === 'boolean' ? xray.active : null,
     xrayServers: rows.length,
     xraySkipped: provider.skipped ?? [],
   };
@@ -646,7 +648,8 @@ export function buildPanel(model, key, extra = {}) {
 
     case 'xray': {
       // «Настройки → Xray»: the port range, the handed-out ports (with «Забыть»
-      // for the gone servers) and the state of the engine.
+      // for the gone servers) and the state of the engine. The two axes keep
+      // `null` as «not checked», never as `false` (task 21 §1).
       const info = model.xrayPortInfo();
       const xray = system.xray ?? {};
       return {
@@ -657,8 +660,8 @@ export function buildPanel(model, key, extra = {}) {
         assigned: info.assigned,
         portsError: info.error,
         installed: xray.installed === true,
-        active: xray.active === true,
-        enabled: xray.enabled === true,
+        active: typeof xray.active === 'boolean' ? xray.active : null,
+        enabled: typeof xray.enabled === 'boolean' ? xray.enabled : null,
         servers: xray.servers ?? info.rows.filter((row) => !row.missing).length,
         binary: system.xrayBinary ?? '',
         configPath: system.xrayConfigPath ?? '',

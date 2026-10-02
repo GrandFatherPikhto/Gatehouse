@@ -9,7 +9,13 @@
 import path from 'node:path';
 
 import {ConfigError} from '../core/errors.mjs';
-import {PRIORITY_LEVELS, tailJournal, xrayPermissions, xrayVersion} from '../system/index.mjs';
+import {
+  PRIORITY_LEVELS,
+  tailJournal,
+  xrayPermissions,
+  xrayState,
+  xrayVersion,
+} from '../system/index.mjs';
 import {applyBar} from './apply-bar.mjs';
 import {PANEL_KINDS, buildPanel, buildStatus, panelKey, panelUrl} from './panel.mjs';
 import {tunnelPanelRows, tunnelPanelSudoers} from './tunnel-state.mjs';
@@ -116,7 +122,13 @@ export function buildView(ctx, key, extra) {
       journalLevels: PRIORITY_LEVELS,
       // §5: the runtime state of the second engine and its paths, so the provider
       // panel and «Службы → Xray» can speak about it without asking the host.
-      xray: state.xray ?? {installed: false, active: false, enabled: false, servers: 0},
+      // `panelExtra` reads the REAL state for the system:xray panel and passes it
+      // as `extra.xray`, so opening that panel is honest even with no Xray server;
+      // elsewhere the cached snapshot is used and `null` means «not checked»
+      // (task 21 §1.2).
+      xray: extra.xray
+        ? {...(state.xray ?? {}), ...extra.xray}
+        : state.xray ?? {installed: false, active: null, enabled: null, servers: 0},
       xrayBinary: system.xray,
       xrayConfigPath: system.xrayConfig,
       xrayUnit: system.xrayUnit,
@@ -140,7 +152,9 @@ export function buildView(ctx, key, extra) {
     // stopped Xray; the states come from the caches refreshed by the middleware.
     tree: model.treeSpec({
       tunnelStates: state.tunnels,
-      xrayActive: (state.xray ?? {}).active === true,
+      // `null` = «not checked»: the tree draws no Xray mark on a state nobody
+      // asked the host about (task 21 §1).
+      xrayActive: (state.xray ?? {}).active ?? null,
     }),
     status: buildStatus(model),
     // The permanent apply bar: dirty / failed / saved-not-applied / applied.
@@ -238,9 +252,21 @@ export async function panelExtra(ctx, key, req) {
       typeof key === 'string' && key.includes(':') ? key.slice(key.indexOf(':') + 1) : 'singbox';
     if (tab === 'singbox') return {journal: await journalSnapshot(ctx, req)};
     if (tab === 'xray') {
+      // «Службы → Xray» ALWAYS reads the real state, whatever the server count:
+      // with no Xray server the cached snapshot deliberately carries `null` (not
+      // checked), and the owner opened this exact panel to see the truth. Two
+      // `systemctl` calls, only here (task 21 §1.2). A failure keeps `null`, the
+      // same way the middleware swallows one.
+      let runtime = null;
+      try {
+        runtime = await xrayState({env: ctx.systemEnv, xray: ctx.system.xray});
+      } catch {
+        runtime = null;
+      }
       return {
         journal: await journalSnapshot(ctx, req, ctx.system.xrayUnit),
         xrayVersion: await xrayVersion({env: ctx.systemEnv, xray: ctx.system.xray}),
+        xray: runtime,
       };
     }
     return {};

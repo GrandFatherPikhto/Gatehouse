@@ -146,20 +146,41 @@
   <h3>Состояние</h3>
   <% if (!panel.xray || panel.xray.installed !== true) { %>
     <p class="error">Xray не найден: <code><%= panel.xrayBinary %></code>. Включить серверы Xray нельзя, пока бинарник не установлен.</p>
-  <% } else { %>
+  <% } else {
+       // Three-way, not two: `null` means «not checked» and must never be printed
+       // as «остановлен» (task 21 §1). The server count tells whether the unit is
+       // any of this project's business at all.
+       const xrayServers = Number(panel.xray.servers ?? 0);
+       const unchecked = panel.xray.active === null || panel.xray.enabled === null;
+     %>
     <p>
       Юнит <code><%= panel.xrayUnit %></code>:
-      <strong><%= panel.xray.active ? 'работает' : 'остановлен' %></strong>,
-      <%= panel.xray.enabled ? 'в автозагрузке' : 'не в автозагрузке' %>.
+      <% if (unchecked) { %>
+        <strong>не проверялось</strong>.
+      <% } else { %>
+        <strong><%= panel.xray.active ? 'работает' : 'остановлен' %></strong>,
+        <%= panel.xray.enabled ? 'в автозагрузке' : 'не в автозагрузке' %>.
+      <% } %>
       Версия: <code><%= panel.xrayVersion && panel.xrayVersion.ok ? panel.xrayVersion.version : 'неизвестна' %></code>.
-      Серверов через Xray: <%= panel.xray.servers ?? 0 %>.
+      Серверов через Xray: <%= xrayServers %>.
     </p>
     <p class="hint">
       Конфиг: <code><%= panel.xrayConfigPath %></code>. Xray слушает только
       <code>127.0.0.1</code>; клиенты ходят на порты sing-box.
     </p>
 
-    <% if (!panel.xray.enabled) { %>
+    <%# No server rides on Xray: the unit is not this project's business, so no
+        advice about autostart is given (task 21 §1.3). The running service is only
+        named because «Применить» stops it (task 19). %>
+    <% if (xrayServers === 0) { %>
+      <p class="hint">
+        Серверов Xray нет.<% if (panel.xray.active === true) { %> Служба работает — «Применить» её остановит.<% } %>
+      </p>
+    <% } %>
+
+    <%# The autostart advice is ONLY honest when there ARE servers to lose at a
+        reboot. Without them «не в автозагрузке» is not a problem (task 21 §1.3). %>
+    <% if (xrayServers > 0 && panel.xray.enabled === false) { %>
       <div class="sudoers-block notice">
         <p>Юнит не в автозагрузке: после перезагрузки роутера серверы Xray окажутся мёртвыми. На роутере выполните:</p>
         <pre class="output">sudo systemctl enable <%= panel.xrayUnit %></pre>
