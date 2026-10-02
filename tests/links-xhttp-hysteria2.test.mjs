@@ -96,11 +96,11 @@ describe('hysteria2:// → sing-box (§1.1)', () => {
 
   test('the fixture parses into sing-box outbounds', () => {
     const parsed = parseSubscriptionLinks(HY2_LINKS);
-    assert.equal(parsed.outbounds.length, 2);
+    assert.equal(parsed.outbounds.length, 3);
     assert.equal(parsed.xrayServers.length, 0);
     assert.deepEqual(
       parsed.outbounds.map((outbound) => outbound.tag),
-      ['HY2 Full', 'HY2 Short'],
+      ['HY2 Full', 'HY2 Short', 'HY2 Raw'],
     );
   });
 });
@@ -324,7 +324,7 @@ describe('Hysteria2 survives to the assembled config.json (task 23 §2.3)', () =
   test('password, obfs, server_ports and speeds reach config.json', () => {
     const {config} = generateFor({hy2: {enabled: true, kind: 'subscription'}}, {hy2: HY2_LINKS});
     const hy2 = config.outbounds.filter((outbound) => outbound.type === 'hysteria2');
-    assert.equal(hy2.length, 2);
+    assert.equal(hy2.length, 3);
 
     const full = hy2.find((outbound) => outbound.tag === 'HY2 Full');
     assert.equal(full.password, 'secret');
@@ -337,6 +337,12 @@ describe('Hysteria2 survives to the assembled config.json (task 23 §2.3)', () =
     const short = hy2.find((outbound) => outbound.tag === 'HY2 Short');
     assert.equal(short.password, 'plain');
     assert.deepEqual(short.tls, {enabled: true, server_name: 'hy2b.example.com', insecure: true});
+
+    // A raw `/` in the password must not become the server (task 24 §2.1).
+    const raw = hy2.find((outbound) => outbound.tag === 'HY2 Raw');
+    assert.equal(raw.password, 'abc/def+ghi=');
+    assert.equal(raw.server, 'hy2raw.example.net');
+    assert.equal(raw.server_port, 8443);
   });
 
   test('a suffix and overrides do not strip the Hysteria2 fields', () => {
@@ -359,5 +365,67 @@ describe('Hysteria2 survives to the assembled config.json (task 23 §2.3)', () =
     const result = generateFor({xhttp: {enabled: true, kind: 'subscription'}}, {xhttp: XHTTP_LINKS});
     assert.equal(result.config.outbounds.filter((o) => o.type === 'hysteria2').length, 0);
     assert.equal(result.xray.servers.length, 3);
+  });
+});
+
+// Task 24: some panels put a base64 password into the link WRITHOUT encoding the
+// `/`. `splitVlessUrl` ends the authority at the first `/`, so the server came out
+// as `abc` with no password and no warning.
+describe('a raw `/` in the Hysteria2 password (task 24)', () => {
+  test('authority is read to the LAST `@`; raw / + = stay in the password', () => {
+    const out = parseHysteria2ToSingbox(
+      'hy2://abc/def+ghi=@h.example.net:8443/?obfs=salamander&obfs-password=x#T',
+    );
+    assert.equal(out.password, 'abc/def+ghi=');
+    assert.equal(out.server, 'h.example.net');
+    assert.equal(out.server_port, 8443);
+    assert.deepEqual(out.obfs, {type: 'salamander', password: 'x'});
+  });
+
+  test('percent-encoded / + = are decoded to the same password', () => {
+    const out = parseHysteria2ToSingbox('hy2://abc%2Fdef%2Bghi%3D@h.example.net:8443/#T');
+    assert.equal(out.password, 'abc/def+ghi=');
+    assert.equal(out.server, 'h.example.net');
+  });
+
+  test('an empty password is skipped with a reason, not turned into a server', () => {
+    const skipped = [];
+    assert.equal(parseHysteria2ToSingbox('hy2://@h.example.net:443/#X', [], skipped), null);
+    assert.match(skipped[0].reason, /нет пароля/);
+    const skipped2 = [];
+    assert.equal(parseHysteria2ToSingbox('hy2://h.example.net:443/#X', [], skipped2), null);
+    assert.match(skipped2[0].reason, /нет пароля/);
+  });
+
+  test('a host without a dot and not an IP is skipped with a reason', () => {
+    const skipped = [];
+    assert.equal(parseHysteria2ToSingbox('hy2://pass@abc:443/#X', [], skipped), null);
+    assert.match(skipped[0].reason, /странный адрес сервера: 'abc'/);
+  });
+
+  test('the Xray builder reads the same password and server', () => {
+    const server = parseHysteria2ToXray('hy2://abc/def=@h.example.net:8443/#T');
+    assert.equal(server.outbound.streamSettings.hysteriaSettings.auth, 'abc/def=');
+    assert.equal(server.outbound.settings.address, 'h.example.net');
+    assert.equal(server.outbound.settings.port, 8443);
+  });
+
+  test('the whole pipeline keeps the raw password and the real server', () => {
+    const dir = makeTempDir();
+    const root = path.join(dir, 'providers');
+    writeProvider(
+      root,
+      'hy2',
+      'hy2://abc/def+ghi=@hy2raw.example.net:8443/?sni=hy2raw.example.net#Raw\n',
+    );
+    const settingsFile = writeSettings(dir, {
+      providers: {hy2: {enabled: true, kind: 'subscription'}},
+      proxies: [{tag: 'main', type: 'mixed', port: 54321}],
+    });
+    const {config} = generateConfigFile(settingsFile, {providersRoot: root});
+    const out = config.outbounds.find((o) => o.type === 'hysteria2');
+    assert.equal(out.password, 'abc/def+ghi=');
+    assert.equal(out.server, 'hy2raw.example.net');
+    assert.equal(out.server_port, 8443);
   });
 });

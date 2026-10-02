@@ -41,19 +41,58 @@ export function isHysteria2Link(rawUrl) {
 }
 
 /**
- * The `userinfo` of the authority, url-decoded, and the host/port. `splitNetloc`
- * keeps only the part before the first `:` of the userinfo, which is right for a
- * VLESS UUID; a Hysteria2 password is the WHOLE userinfo, so it is read here from
- * the last `@`.
+ * The authority of a Hysteria2 link, taken WHOLE: everything after `://` up to
+ * the first `?` or `#`.
  *
- * @param {string} netloc
- * @returns {{auth: string, hostname: string, portText: string|null}}
+ * `splitVlessUrl` ends the netloc at the first `/`, which is right for VLESS but
+ * wrong here: a password may contain a raw `/` (base64 without percent-encoding,
+ * as some panels write it), and cutting at `/` turned
+ * `hy2://abc/def=@h.example.net:8443/` into the server `abc` — silently, with no
+ * password. `@` cannot appear in a host, so the last `@` of the authority is the
+ * real separator (task 24 §2.1).
+ *
+ * @param {string} rawUrl
+ * @returns {string}
  */
-function splitAuthority(netloc) {
-  const at = netloc.lastIndexOf('@');
-  const auth = at === -1 ? '' : unquote(netloc.slice(0, at));
-  const {hostname, portText} = splitNetloc(netloc);
-  return {auth, hostname, portText};
+function hysteriaAuthority(rawUrl) {
+  const text = String(rawUrl ?? '');
+  const schemeEnd = text.indexOf('://');
+  if (schemeEnd === -1) return {auth: '', hostport: ''};
+
+  let rest = text.slice(schemeEnd + 3);
+  let cut = rest.length;
+  for (const mark of ['?', '#']) {
+    const at = rest.indexOf(mark);
+    if (at !== -1 && at < cut) cut = at;
+  }
+  rest = rest.slice(0, cut);
+
+  // The last `@` of what is left is the real separator: a host cannot contain one,
+  // while the password can contain `/`, `+`, `=` and even `:`.
+  const at = rest.lastIndexOf('@');
+  const auth = at === -1 ? '' : unquote(rest.slice(0, at));
+  // Everything after the `@` is `host:port`, optionally followed by a `/path`.
+  let hostport = at === -1 ? rest : rest.slice(at + 1);
+  const slash = hostport.indexOf('/');
+  if (slash !== -1) hostport = hostport.slice(0, slash);
+  return {auth, hostport};
+}
+
+/**
+ * Whether a Hysteria2 server host looks like a host at all: an IPv4, an IPv6
+ * (brackets already unwrapped by `splitNetloc`), or a name with a dot. A bare
+ * label (`abc`) is the signature of a mis-parsed authority — better skipped with
+ * a reason than put into the config as a dead server (task 24 §2.3).
+ *
+ * @param {string} host
+ * @returns {boolean}
+ */
+function isReasonableHost(host) {
+  const text = String(host ?? '');
+  if (text.length === 0) return false;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(text)) return true;
+  if (text.includes(':')) return true;
+  return text.includes('.') && !/[\s/]/.test(text);
 }
 
 /**
@@ -99,8 +138,13 @@ export function parseHysteria2ToSingbox(rawUrl, warnings = [], skipped = []) {
     }
     label = linkLabel(rawUrl);
 
-    const {auth, hostname: server, portText} = splitAuthority(parts.netloc);
+    const {auth, hostport} = hysteriaAuthority(rawUrl);
+    const {hostname: server, portText} = splitNetloc(hostport);
     if (!server) return skipLink(warnings, skipped, label, 'ссылка без сервера');
+    if (!auth) return skipLink(warnings, skipped, label, 'нет пароля');
+    if (!isReasonableHost(server)) {
+      return skipLink(warnings, skipped, label, `странный адрес сервера: '${server}'`);
+    }
 
     const port = resolvePort(portText);
     const tag = parts.fragment ? unquote(parts.fragment) : `vpnd-${server}`;
@@ -165,8 +209,13 @@ export function parseHysteria2ToXray(rawUrl, warnings = [], skipped = []) {
     }
     label = linkLabel(rawUrl);
 
-    const {auth, hostname: server, portText} = splitAuthority(parts.netloc);
+    const {auth, hostport} = hysteriaAuthority(rawUrl);
+    const {hostname: server, portText} = splitNetloc(hostport);
     if (!server) return skipLink(warnings, skipped, label, 'ссылка без сервера');
+    if (!auth) return skipLink(warnings, skipped, label, 'нет пароля');
+    if (!isReasonableHost(server)) {
+      return skipLink(warnings, skipped, label, `странный адрес сервера: '${server}'`);
+    }
 
     const port = resolvePort(portText);
     const tag = parts.fragment ? unquote(parts.fragment) : `vpnd-${server}`;

@@ -2,3 +2,6 @@
 # Fake passwords; every host under example.com. Both the long and the short scheme.
 hysteria2://secret@hy2.example.com:443/?sni=hy2.example.com&alpn=h3&obfs=salamander&obfs-password=obfspass&mport=20000-30000&upmbps=100&downmbps=500#HY2%20Full
 hy2://plain@hy2b.example.com:8443/?insecure=1&fm=%7B%22a%22%3A1%7D#HY2%20Short
+# A password with a RAW `/` and `=` (base64 without percent-encoding, as some
+# panels write it): the authority must be read to the LAST `@` (task 24).
+hy2://abc/def+ghi=@hy2raw.example.net:8443/?sni=hy2raw.example.net&obfs=salamander&obfs-password=op#HY2%20Raw
