@@ -27,7 +27,8 @@ import {
   waitForActive,
 } from '../../system/index.mjs';
 import {isPermissionError, restoreLatestConfig, snapshotConfig} from '../../model/storage.mjs';
-import {mutation} from '../edits.mjs';
+import {applyEditForm, mutation, panelFromBody} from '../edits.mjs';
+import {editFormRoutes, parsePanelKey} from '../panel.mjs';
 import {SSE_HEADERS, testResultView, writeEvent} from '../stream.mjs';
 import {refreshTunnelStates} from '../tunnel-state.mjs';
 
@@ -79,10 +80,15 @@ async function restartAndConfirm(ctx) {
 export function registerSystemRoutes(app, ctx) {
   const {model, state, systemEnv} = ctx;
 
-  // The one chain. Its outcome is kept on `state.lastApply` for the bar.
+  // The one chain. Its outcome is kept on `state.lastApply` for the bar. The panel
+  // the button sits on travels in `?panel=`; the open edit form of THAT panel is
+  // applied first, and the answer goes back to it on success (§1.2, §1б).
   app.post(
     '/apply',
-    mutation(ctx, 'singbox', async () => {
+    mutation(ctx, 'system:singbox', async (req) => {
+      const ownKey = panelFromBody(req, 'system:singbox');
+      const {kind} = parsePanelKey(ownKey);
+      const failKey = 'system:singbox';
       const configPath = model.resolvedOutputPath();
       const tempPath = `${configPath}.new`;
       /** @type {Array<{ok: boolean, step: string, message: string, at: string}>} */
@@ -90,11 +96,11 @@ export function registerSystemRoutes(app, ctx) {
       const record = (ok, step, message) => {
         steps.push({ok, step, message, at: new Date().toISOString()});
       };
-      const finish = (outcome) => {
+      const finish = (outcome, extra = {}) => {
         state.lastApply = {...outcome, at: new Date().toISOString(), steps};
         // The live bytes may have moved: drop the bar's comparison cache.
         state.applyCache = null;
-        return {key: 'singbox', apply: state.lastApply, notice: outcome.message};
+        return {key: outcome.panel, apply: state.lastApply, notice: outcome.message, ...extra};
       };
 
       // The chain needs write access to the DIRECTORY of the live config: it
@@ -109,6 +115,34 @@ export function registerSystemRoutes(app, ctx) {
       let phase = 'сохранение';
 
       try {
+        // 0. the open edit form of the panel the button sits on, applied with the
+        // VERY SAME code `/save?panel=` uses, so "edit → Apply" can never behave
+        // differently from "edit → Сохранить → Apply". A refusal stops HERE:
+        // nothing is saved, nothing is built (§1.2).
+        phase = 'форма панели';
+        if (editFormRoutes(kind).length > 0) {
+          const hadEdits = model.dirty;
+          try {
+            const applied = applyEditForm(ctx, kind, req);
+            // `applyEditForm` always marks the document dirty; an untouched form
+            // must not turn into a save, so "changed nothing and was clean" goes
+            // back to clean, exactly like `/save` does.
+            if (!applied.changed && !hadEdits) model.markClean();
+            record(
+              true,
+              'форма панели',
+              applied.changed ? 'правки панели применены' : 'изменений в форме нет',
+            );
+          } catch (error) {
+            if (!(error instanceof ConfigError)) throw error;
+            record(false, 'форма панели', error.message);
+            return finish(
+              {ok: false, step: 'форма панели', message: error.message, rolledBack: false, panel: failKey},
+              {error: error.message, form: req.body ?? {}},
+            );
+          }
+        }
+
         // 1. save
         if (model.dirty) {
           model.save();
@@ -138,6 +172,7 @@ export function registerSystemRoutes(app, ctx) {
             step: 'проверка схемы',
             message: `Сборка не применена: проверка схемы не прошла — ${why}`,
             rolledBack: false,
+            panel: failKey,
           });
         }
         record(true, 'проверка схемы', 'sing-box check прошёл');
@@ -154,6 +189,7 @@ export function registerSystemRoutes(app, ctx) {
             step: 'готово',
             message: 'Уже применено, перезапуск не нужен',
             rolledBack: false,
+            panel: ownKey,
           });
         }
 
@@ -183,6 +219,7 @@ export function registerSystemRoutes(app, ctx) {
                   ? ' — выполнен откат, служба вернулась'
                   : ' — откат сделан, но служба не поднялась'),
             rolledBack: restored !== null,
+            panel: failKey,
           });
         }
         record(true, 'перезапуск', up.message);
@@ -191,6 +228,7 @@ export function registerSystemRoutes(app, ctx) {
           step: 'готово',
           message: 'Применено: config.json установлен и sing-box перезапущен',
           rolledBack: false,
+          panel: ownKey,
         });
       } catch (error) {
         fs.rmSync(tempPath, {force: true});
@@ -202,7 +240,7 @@ export function registerSystemRoutes(app, ctx) {
               ? error.message
               : `внутренняя ошибка: ${error.message}`;
         record(false, phase, message);
-        return finish({ok: false, step: phase, message, rolledBack: false});
+        return finish({ok: false, step: phase, message, rolledBack: false, panel: failKey});
       }
     }),
   );
@@ -320,7 +358,10 @@ export function registerSystemRoutes(app, ctx) {
 
   app.post(
     '/rollback',
-    mutation(ctx, 'system:singbox', async () => {
+    mutation(ctx, 'system:singbox', async (req) => {
+      // A SUCCESS answers the panel the button sat on; a failure switches to
+      // «Службы → Sing-Box», where the journal is (§1б).
+      const ownKey = panelFromBody(req, 'system:singbox');
       const configPath = model.resolvedOutputPath();
       // The rollback writes a temporary file next to the live config and renames
       // it, so it needs the very same directory right.
@@ -349,7 +390,7 @@ export function registerSystemRoutes(app, ctx) {
 
       const from = path.basename(restored.from);
       return {
-        key: 'system:singbox',
+        key: up.ok ? ownKey : 'system:singbox',
         notice: up.ok
           ? `Восстановлен ${from} и sing-box перезапущен.`
           : `Конфиг восстановлен из ${from}, но перезапуск не удался: ${up.message}`,

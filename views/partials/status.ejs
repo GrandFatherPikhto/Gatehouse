@@ -43,18 +43,39 @@
       <button type="submit" class="<%= apply.state === 'dirty' ? 'primary' : '' %>">Сохранить</button>
     </form>
   <% } %>
-  <form hx-post="/apply" hx-target="#panel" hx-swap="innerHTML" method="post" action="/apply">
-    <button type="submit" class="<%= apply.state === 'pending' ? 'primary' : '' %>"
-            <%= apply.applyButton === false ? 'disabled' : '' %>
-            hx-confirm="Перезапуск sing-box оборвёт текущие соединения через все прокси. Применить?">Применить</button>
-  </form>
-  <form hx-post="/rollback" hx-target="#panel" hx-swap="innerHTML" method="post" action="/rollback">
+  <%# «Применить» takes the open edit form exactly like «Сохранить»: htmx pulls the
+      fields in with hx-include, and the form="" attribute does the same with
+      JavaScript off. A panel with no form keeps the standalone post.
+      «Откатить» and «Перечитать с диска» deliberately do NOT take the form — they
+      discard edits by design — but warn when the open form has unsaved changes
+      (the script, `data-form-guard`). %>
+  <% if (editForm) { %>
+    <% const applyUrl = `/apply?panel=${encodeURIComponent(key)}`; %>
+    <form method="post" action="<%= applyUrl %>">
+      <button type="submit" class="<%= apply.state === 'pending' ? 'primary' : '' %>"
+              <%= apply.applyButton === false ? 'disabled' : '' %>
+              hx-post="<%= applyUrl %>" hx-target="#panel" hx-swap="innerHTML"
+              hx-include="#panel-form"
+              form="panel-form" formaction="<%= applyUrl %>" formmethod="post"
+              hx-confirm="Перезапуск sing-box оборвёт текущие соединения через все прокси. Применить?">Применить</button>
+    </form>
+  <% } else { %>
+    <form hx-post="/apply" hx-target="#panel" hx-swap="innerHTML" method="post" action="/apply">
+      <input type="hidden" name="panel" value="<%= key %>">
+      <button type="submit" class="<%= apply.state === 'pending' ? 'primary' : '' %>"
+              <%= apply.applyButton === false ? 'disabled' : '' %>
+              hx-confirm="Перезапуск sing-box оборвёт текущие соединения через все прокси. Применить?">Применить</button>
+    </form>
+  <% } %>
+  <form hx-post="/rollback?panel=<%= encodeURIComponent(key) %>" hx-target="#panel" hx-swap="innerHTML" method="post" action="/rollback?panel=<%= encodeURIComponent(key) %>">
     <button type="submit" class="secondary" <%= apply.canRollback ? '' : 'disabled' %>
+            data-form-guard="#panel-form"
+            data-base-confirm="Вернуть предыдущий config.json и перезапустить sing-box? Текущие соединения оборвутся."
             hx-confirm="Вернуть предыдущий config.json и перезапустить sing-box? Текущие соединения оборвутся.">Откатить</button>
   </form>
   <form hx-post="/reload" hx-target="#panel" hx-swap="innerHTML" method="post" action="/reload">
     <input type="hidden" name="panel" value="<%= key %>">
-    <button type="submit" class="secondary">Перечитать с диска</button>
+    <button type="submit" class="secondary" data-form-guard="#panel-form">Перечитать с диска</button>
   </form>
 </div>
 <% if (apply.steps && apply.steps.length > 0) { %>

@@ -147,6 +147,74 @@ function wireExitKind(combo) {
 }
 
 /**
+ * Wires one provider «вид» select: it shows only the block of the chosen kind
+ * (`[data-kind-block="subscription"]` for a subscription), so the suffix can be
+ * typed in the SAME submit that picks the kind — no reload. Without the script
+ * every block stays visible, and the model ignores the fields that do not belong
+ * to the effective kind.
+ *
+ * @param {HTMLSelectElement} select
+ */
+function wireKindToggle(select) {
+  if (select.dataset.wired === '1') return;
+  select.dataset.wired = '1';
+  const form = select.closest('form');
+  if (form === null) return;
+  const blocks = [...form.querySelectorAll('[data-kind-block]')];
+
+  const apply = () => {
+    for (const block of blocks) block.hidden = block.dataset.kindBlock !== select.value;
+  };
+  select.addEventListener('change', apply);
+  apply();
+}
+
+/**
+ * Value of one form field, in the shape the form would SUBMIT it: a checkbox that
+ * is not checked sends nothing, so it counts as the empty string.
+ *
+ * @param {HTMLElement} field
+ * @returns {string}
+ */
+function fieldValue(field) {
+  if (field.type === 'checkbox' || field.type === 'radio') return field.checked ? field.value : '';
+  return field.value;
+}
+
+/**
+ * Wires one button that DISCARDS the open edit form («Откатить», «Перечитать с
+ * диска»): when the form differs from its initial values, the confirmation says
+ * the edits will be lost. Plain DOM, no library; without the script there is no
+ * warning, which is the honest fallback.
+ *
+ * @param {HTMLElement} button
+ */
+function wireFormGuard(button) {
+  if (button.dataset.wired === '1') return;
+  button.dataset.wired = '1';
+  const form = document.querySelector(button.dataset.formGuard ?? '');
+  if (form === null) return;
+
+  const fields = [...form.elements];
+  const baseline = new Map(fields.map((field) => [field, fieldValue(field)]));
+  const changed = () => fields.some((field) => baseline.get(field) !== fieldValue(field));
+  const base = button.dataset.baseConfirm ?? button.getAttribute('hx-confirm') ?? '';
+
+  const apply = () => {
+    if (changed()) {
+      button.setAttribute('hx-confirm', `${base} Правки на открытой панели будут потеряны.`.trim());
+    } else if (base.length > 0) {
+      button.setAttribute('hx-confirm', base);
+    } else {
+      button.removeAttribute('hx-confirm');
+    }
+  };
+  form.addEventListener('input', apply);
+  form.addEventListener('change', apply);
+  apply();
+}
+
+/**
  * Wires one «Скопировать» button: it puts the text of the element named by its
  * `data-copy` selector (a CSS selector, e.g. `#sudoers-lines`) into the
  * clipboard. Without JavaScript the block is still selectable by hand, which is
@@ -170,10 +238,12 @@ function wireCopy(button) {
   });
 }
 
-/** Wires every picker, exit selector and copy button of the document, if any. */
+/** Wires every control of the document, if any. */
 function setup() {
   for (const picker of document.querySelectorAll('[data-servers-picker]')) wirePicker(picker);
   for (const combo of document.querySelectorAll('[data-exit-kind]')) wireExitKind(combo);
+  for (const select of document.querySelectorAll('[data-kind-toggle]')) wireKindToggle(select);
+  for (const guard of document.querySelectorAll('[data-form-guard]')) wireFormGuard(guard);
   for (const button of document.querySelectorAll('[data-copy]')) wireCopy(button);
 }
 

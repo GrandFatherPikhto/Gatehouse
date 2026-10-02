@@ -32,7 +32,7 @@
 
     <label for="kind">вид</label>
     <% if (panel.kindEditable) { %>
-      <select id="kind" name="kind">
+      <select id="kind" name="kind" data-kind-toggle>
         <option value="subscription" <%= panel.folderKind === 'subscription' ? 'selected' : '' %>>Подписка</option>
         <option value="awg" <%= panel.folderKind === 'awg' ? 'selected' : '' %>>Туннели AmneziaWG</option>
       </select>
@@ -41,7 +41,12 @@
       <span class="hint">чтобы сменить вид, выключите провайдера</span>
     <% } %>
 
-    <% if (panel.folderKind === 'subscription') { %>
+    <%# The subscription block (suffix, expiry, тонкие настройки) is rendered for
+        every kind but «туннели» and hidden by the script as soon as «Подписка» is
+        chosen in the select, so the suffix can be typed in the SAME submit that
+        chooses the kind — no reload needed. Without the script the block is simply
+        visible; the model ignores it for a tunnel kind (§1а). %>
+    <div data-kind-block="subscription" <%= panel.folderKind === 'awg' ? 'hidden' : '' %>>
       <label for="suffix">приписка к именам серверов</label>
       <input type="text" id="suffix" name="suffix" value="<%= panel.suffix %>"
              maxlength="16" size="16" placeholder="(нет)">
@@ -65,14 +70,14 @@
           <% } %>
         </p>
       <% } %>
-    <% } %>
+    </div>
 
     <label class="check">
       <input type="checkbox" name="enabled" value="1" <%= panel.enabled ? 'checked' : '' %>>
       включён (серверы попадают в <code>config.json</code>)
     </label>
 
-    <% if (panel.folderKind === 'subscription') { %>
+    <div data-kind-block="subscription" <%= panel.folderKind === 'awg' ? 'hidden' : '' %>>
       <details class="overrides" <%= panel.overrides.open ? 'open' : '' %>>
         <summary>Тонкие настройки</summary>
         <p class="hint">
@@ -102,7 +107,7 @@
         </select>
         <span class="hint">в ссылках: <%= panel.overrides.fpActual %></span>
       </details>
-    <% } %>
+    </div>
   </fieldset>
 </form>
 
@@ -203,8 +208,18 @@
   <% } %>
 <% } %>
 
-<% if (panel.provider.tags.length === 0 && panel.provider.entries.length === 0 && panel.skippedCount === 0) { %>
+<%# «Пуст» is claimed only when the folder really holds nothing. A folder WITHOUT a
+    chosen kind still shows what it holds («Записей: 156»), and repeating the hint
+    of «Найдено» is more useful than the false claim of emptiness (§1а). %>
+<% const providerEmpty =
+     panel.provider.count === 0 &&
+     panel.provider.tags.length === 0 &&
+     panel.provider.entries.length === 0 &&
+     panel.skippedCount === 0; %>
+<% if (providerEmpty) { %>
   <p class="hint">Провайдер пуст: ни ссылок, ни конфигов туннелей.</p>
+<% } else if (panel.folderKind === null && panel.provider.hint) { %>
+  <p class="hint"><%= panel.provider.hint %></p>
 <% } %>
 
 <p>

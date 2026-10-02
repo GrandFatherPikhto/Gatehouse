@@ -58,10 +58,19 @@ async function startEditor(options = {}) {
     fs.mkdirSync(tunnelDir, {recursive: true});
     fs.copyFileSync(PROVIDER_CONF, path.join(tunnelDir, 'AustriaGrazS4.conf'));
   }
+  // A SECOND folder with the very same links: two enabled providers would collide
+  // on server names unless one carries a suffix (§2.2).
+  if (options.twin === true) {
+    const twinDir = path.join(dir, 'providers', 'vpnd-ws');
+    fs.mkdirSync(twinDir, {recursive: true});
+    fs.writeFileSync(path.join(twinDir, 'links.txt'), options.links ?? DEFAULT_LINKS);
+  }
 
-  const providers = options.tunnel === true
-    ? {vpnd: {enabled: true, kind: 'subscription'}, hidemyname: {enabled: true, kind: 'awg'}}
-    : {vpnd: {enabled: true, kind: 'subscription'}};
+  const providers = {
+    ...(options.tunnel === true ? {hidemyname: {enabled: true, kind: 'awg'}} : {}),
+    vpnd: {enabled: true, kind: 'subscription'},
+    ...(options.twin === true ? {'vpnd-ws': {enabled: false}} : {}),
+  };
   const settingsFile = writeSettings(dir, {providers, ...(options.overrides ?? {})});
   const stateDir = path.join(dir, 'state');
   const amneziaDir = path.join(dir, 'amnezia');
@@ -396,6 +405,179 @@ describe('the config directory rights (§1)', () => {
       assert.match(html, /chmod 775/);
     } finally {
       fs.chmodSync(editor.dir, 0o755);
+      await editor.close();
+    }
+  });
+});
+
+describe('«Применить» takes the open panel form (§1)', () => {
+  const providerUrl = (id) => `/apply?panel=${encodeURIComponent(`provider:${id}`)}`;
+
+  test('the form is applied first, then the chain: suffix and «включён» land', async () => {
+    const editor = await startEditor({twin: true});
+    try {
+      const html = await (
+        await post(editor.base, providerUrl('vpnd-ws'), {
+          id: 'vpnd-ws',
+          kind: 'subscription',
+          suffix: 'WS',
+          label: '',
+          enabled: '1',
+        })
+      ).text();
+
+      assert.match(html, /apply-applied/);
+      assert.match(html, /форма панели/);
+      const document = JSON.parse(fs.readFileSync(editor.settingsFile, 'utf8'));
+      assert.equal(document.providers['vpnd-ws'].enabled, true);
+      assert.equal(document.providers['vpnd-ws'].suffix, 'WS');
+
+      const config = JSON.parse(fs.readFileSync(editor.configPath, 'utf8'));
+      assert.ok(
+        config.outbounds.some((outbound) => typeof outbound.tag === 'string' && outbound.tag.endsWith(' WS')),
+        'the suffixed servers reached config.json',
+      );
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('a refusal on the form step stops before saving and building', async () => {
+    const editor = await startEditor({twin: true});
+    try {
+      // Save first: opening a file whose folder has no kind yet leaves the model
+      // dirty (the migration writes the inferred kind), and dirty outranks the
+      // "failed" state in the bar.
+      editor.model.save();
+      const before = fs.readFileSync(editor.settingsFile, 'utf8');
+      const html = await (
+        await post(editor.base, providerUrl('vpnd-ws'), {
+          id: 'vpnd-ws',
+          kind: 'subscription',
+          suffix: '',
+          label: '',
+          enabled: '1',
+        })
+      ).text();
+
+      assert.match(html, /apply-failed/);
+      assert.match(html, /форма панели/);
+      assert.match(html, /задайте приписку/);
+      assert.equal(fs.readFileSync(editor.settingsFile, 'utf8'), before, 'the file is not saved');
+      assert.equal(fs.existsSync(editor.configPath), false, 'nothing was built');
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('one submit sets the kind, the suffix and «включён»; without the suffix nothing applies', async () => {
+    const editor = await startEditor({twin: true});
+    try {
+      const ok = await (
+        await post(editor.base, '/provider', {
+          id: 'vpnd-ws',
+          kind: 'subscription',
+          suffix: 'WS',
+          label: 'Twin',
+          enabled: '1',
+        })
+      ).text();
+      assert.doesNotMatch(ok, /задайте приписку/);
+      assert.equal(editor.model.getProvider('vpnd-ws').kind, 'subscription');
+      assert.equal(editor.model.getProvider('vpnd-ws').suffix, 'WS');
+      assert.equal(editor.model.getProvider('vpnd-ws').enabled, true);
+
+      // A second folder, the same links, no suffix: the enabling refusal rolls the
+      // WHOLE form back, the kind included.
+      const otherFolder = path.join(editor.dir, 'providers', 'vpnd-tcp');
+      fs.mkdirSync(otherFolder, {recursive: true});
+      fs.writeFileSync(path.join(otherFolder, 'links.txt'), DEFAULT_LINKS);
+      editor.model.setProviderEnabled('vpnd-ws', false);
+      const before = editor.model.toText();
+
+      const refused = await (
+        await post(editor.base, '/provider', {
+          id: 'vpnd-tcp',
+          kind: 'subscription',
+          suffix: '',
+          label: '',
+          enabled: '1',
+        })
+      ).text();
+      assert.match(refused, /задайте приписку/);
+      assert.equal(editor.model.toText(), before, 'nothing was applied');
+      assert.equal(editor.model.getProvider('vpnd-tcp') ?? null, null, 'the kind was rolled back too');
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('an enabled provider may not change its kind, and the same kind is a no-op', async () => {
+    const editor = await startEditor();
+    try {
+      const same = await (
+        await post(editor.base, '/provider', {id: 'vpnd', kind: 'subscription', label: 'X', enabled: '1'})
+      ).text();
+      assert.doesNotMatch(
+        same,
+        /<p class="error">провайдер включён: чтобы сменить вид/,
+        'the same kind is accepted',
+      );
+
+      const changed = await (
+        await post(editor.base, '/provider', {id: 'vpnd', kind: 'awg', label: 'X', enabled: '1'})
+      ).text();
+      assert.match(changed, /провайдер включён: чтобы сменить вид/);
+      assert.equal(editor.model.getProvider('vpnd').kind, 'subscription', 'the kind did not move');
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('a kind-less folder with links is not called empty', async () => {
+    const editor = await startEditor({overrides: {providers: {}}});
+    try {
+      const html = await (await fetch(`${editor.base}/panel/provider:vpnd`)).text();
+      assert.doesNotMatch(html, /Провайдер пуст/);
+      assert.match(html, /Записей: 3/);
+      assert.match(html, /похоже на подписку/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('success answers the panel it came from, a failure switches to system:singbox', async () => {
+    const editor = await startEditor();
+    try {
+      const ok = await (
+        await post(editor.base, providerUrl('vpnd'), {id: 'vpnd', kind: 'subscription', label: '', enabled: '1'})
+      ).text();
+      assert.match(ok, /Провайдер: vpnd/);
+
+      // Break the build: the only links file disappears.
+      fs.rmSync(path.join(editor.dir, 'providers', 'vpnd', 'links.txt'));
+      const failed = await (
+        await post(editor.base, providerUrl('vpnd'), {id: 'vpnd', kind: 'subscription', label: '', enabled: '1'})
+      ).text();
+      assert.match(failed, /apply-failed/);
+      assert.match(failed, /Журнал sing-box/);
+    } finally {
+      await editor.close();
+    }
+  });
+
+  test('the bar takes the open form on a panel with a form and not on one without', async () => {
+    const editor = await startEditor();
+    try {
+      const withForm = await (await fetch(`${editor.base}/panel/provider:vpnd`)).text();
+      assert.match(withForm, /hx-post="\/apply\?panel=provider%3Avpnd"/);
+      assert.match(withForm, /hx-include="#panel-form"/);
+      assert.match(withForm, /form="panel-form"/);
+
+      const withoutForm = await (await fetch(`${editor.base}/panel/system:singbox`)).text();
+      assert.match(withoutForm, /hx-post="\/apply"/);
+      assert.doesNotMatch(withoutForm, /hx-include="#panel-form"/);
+    } finally {
       await editor.close();
     }
   });

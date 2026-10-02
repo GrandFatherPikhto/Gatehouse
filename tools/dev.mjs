@@ -61,10 +61,40 @@ if (!fs.existsSync(LINKS)) {
 // `sing-box` is NOT one of the sandbox stubs: `check` and `tools fetch` have to
 // behave as on the router. Say plainly when the binary is missing instead of
 // letting «Применить» fail on the check step with a bare ENOENT.
-const singbox =
+//
+// The search order: the variable, the build default, then `sing-box` from `PATH`.
+// A developer who installed it with a package manager has it in PATH but not under
+// /usr/local/bin, and there is no reason to make them set the variable by hand.
+const SINGBOX_DEFAULT = '/usr/local/bin/sing-box';
+
+/**
+ * First executable `sing-box` found in `PATH`, or `null`.
+ *
+ * @param {string} name
+ * @returns {string|null}
+ */
+function findInPath(name) {
+  for (const dir of String(process.env.PATH ?? '').split(path.delimiter)) {
+    if (dir.length === 0) continue;
+    const candidate = path.join(dir, name);
+    try {
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      // not there: try the next directory
+    }
+  }
+  return null;
+}
+
+const configured =
   typeof process.env.GATEHOUSE_SINGBOX === 'string' && process.env.GATEHOUSE_SINGBOX.length > 0
     ? process.env.GATEHOUSE_SINGBOX
-    : '/usr/local/bin/sing-box';
+    : null;
+const singbox =
+  configured ?? (fs.existsSync(SINGBOX_DEFAULT) ? SINGBOX_DEFAULT : findInPath('sing-box') ?? SINGBOX_DEFAULT);
+if (configured === null && singbox !== SINGBOX_DEFAULT) {
+  process.stdout.write(`sing-box найден в PATH: ${singbox}\n`);
+}
 if (!fs.existsSync(singbox)) {
   process.stderr.write(
     `Внимание: sing-box не найден: ${singbox}; задайте GATEHOUSE_SINGBOX=… — ` +
@@ -76,6 +106,9 @@ if (!fs.existsSync(singbox)) {
 // there rather than passed as an argument; this also makes the sandbox marker in
 // the UI fire, because it is derived from these very paths.
 Object.assign(process.env, {
+  // The resolved binary (variable, default or PATH) so the server agrees with the
+  // message printed above.
+  GATEHOUSE_SINGBOX: singbox,
   GATEHOUSE_SYSTEMCTL: path.join(ROOT, 'dev', 'bin', 'systemctl'),
   GATEHOUSE_SUDO: path.join(ROOT, 'dev', 'bin', 'sudo'),
   GATEHOUSE_CONFIG: CONFIG,

@@ -278,9 +278,9 @@ describe('the header button is bound to the edit form', () => {
       assert.match(html, /hx-include="#panel-form"/);
       assert.match(html, /form="panel-form"/);
       assert.match(html, /formaction="\/save\?panel=/);
-      // Only the save button is bound. «Перечитать с диска» must keep discarding,
-      // so it must not carry the include either.
-      assert.equal(html.split('hx-include="#panel-form"').length - 1, 1);
+      // BOTH «Сохранить» and «Применить» take the open form; «Перечитать с диска»
+      // and «Откатить» must keep discarding, so they carry no include.
+      assert.equal(html.split('hx-include="#panel-form"').length - 1, 2);
       assert.match(
         html,
         /hx-post="\/reload"[^>]*>\s*<input[^>]*name="panel"/,

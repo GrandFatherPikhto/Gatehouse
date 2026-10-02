@@ -124,24 +124,47 @@ export function applyRoute(ctx, route, req) {
     case '/provider': {
       const id = String(body.id ?? '').trim();
       const wantsEnabled = forms.checkbox(body.enabled);
-      // The kind comes first, but ONLY when the provider stays disabled: a kind
-      // may not be changed while it is enabled, so applying it on an enabling
-      // submit would be refused for nothing.
-      if (Object.hasOwn(body, 'kind') && !wantsEnabled) {
+      // The KIND is judged by the CURRENT state of the provider, not by the wish
+      // to enable: a DISABLED folder may set its kind and turn on in one submit,
+      // while an ENABLED one may not change it at all (`setProviderKind` refuses).
+      // The old order skipped the kind whenever the form asked to enable, so the
+      // enabling refusal then complained about the very kind the form had sent.
+      const stored = model.getProvider(id) ?? {};
+      if (Object.hasOwn(body, 'kind')) {
         const kind = body.kind === 'subscription' || body.kind === 'awg' ? body.kind : null;
-        model.setProviderKind(id, kind);
+        const storedKind =
+          stored.kind === 'subscription' || stored.kind === 'awg' ? stored.kind : null;
+        if (stored.enabled !== true) {
+          model.setProviderKind(id, kind);
+        } else if (kind !== storedKind) {
+          // An ENABLED provider may not change its kind; the SAME value is a no-op
+          // (the select is not drawn while it is on, but a crafted body or an older
+          // tab must not be refused for nothing).
+          throw new ConfigError('провайдер включён: чтобы сменить вид, сначала выключите его');
+        }
       }
       model.setProviderLabel(id, String(body.label ?? ''));
-      if (Object.hasOwn(body, 'suffix')) {
-        model.setProviderSuffix(id, String(body.suffix ?? ''));
+
+      // «Suffix» and the overrides only exist for a SUBSCRIPTION: they are applied
+      // when the effective kind is one and skipped for tunnels, so a no-JS submit
+      // cannot leave a suffix on a tunnel record.
+      const effectiveKind = (model.getProvider(id) ?? {}).kind ?? null;
+      if (effectiveKind === 'subscription') {
+        if (Object.hasOwn(body, 'suffix')) {
+          model.setProviderSuffix(id, String(body.suffix ?? ''));
+        }
+        // Only the fields the form really carries: a direct POST of `id`+`label`
+        // must not wipe the stored overrides by sending two empty fields.
+        const overrides = {};
+        if (Object.hasOwn(body, 'flow')) overrides.flow = String(body.flow ?? '');
+        if (Object.hasOwn(body, 'fp')) overrides.fp = String(body.fp ?? '');
+        if (Object.keys(overrides).length > 0) model.setProviderOverrides(id, overrides);
       }
-      // Only the fields the form really carries: a direct POST of `id`+`label`
-      // must not wipe the stored overrides by sending two empty fields.
-      const overrides = {};
-      if (Object.hasOwn(body, 'flow')) overrides.flow = String(body.flow ?? '');
-      if (Object.hasOwn(body, 'fp')) overrides.fp = String(body.fp ?? '');
-      if (Object.keys(overrides).length > 0) model.setProviderOverrides(id, overrides);
-      model.setProviderEnabled(id, forms.checkbox(body.enabled));
+
+      // «Включён» LAST: an enabling refusal (no kind, colliding names) then leaves
+      // the whole form unapplied, because `applyEditForm` restores the document as
+      // one unit on any refusal.
+      model.setProviderEnabled(id, wantsEnabled);
       return {applied: true, key: panelKey('provider', id)};
     }
     case '/dns':

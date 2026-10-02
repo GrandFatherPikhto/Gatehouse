@@ -165,9 +165,10 @@ describe('the apply bar and the hidden system routes', () => {
       // §1.4: the four buttons left the tab; the chain lives on the bar.
       assert.doesNotMatch(panel, /hx-post="\/check"/);
       assert.doesNotMatch(panel, /hx-post="\/restart"/);
-      // The bar's own «Откатить» is the only rollback on the page now.
-      assert.equal(panel.split('hx-post="/rollback"').length - 1, 1, 'only the bar rolls back');
-      assert.match(panel, /hx-post="\/apply"/, 'the apply bar is on the panel too');
+      // The bar's own «Откатить» is the only rollback on the page now; it carries
+      // `?panel=`, so only the prefix is pinned.
+      assert.equal(panel.split('hx-post="/rollback').length - 1, 1, 'only the bar rolls back');
+      assert.match(panel, /hx-post="\/apply/, 'the apply bar is on the panel too');
     } finally {
       await editor.close();
     }

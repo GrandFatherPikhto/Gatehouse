@@ -127,11 +127,12 @@ describe('the «Службы» children (NEW)', () => {
       assert.match(plain, /class="active"[^>]*>Sing-Box</);
       // The check/restart/rollback buttons left this tab: the apply bar over every
       // page drives the whole chain now, and the tab points at it.
-      assert.match(plain, /hx-post="\/apply"/);
+      assert.match(plain, /hx-post="\/apply/);
       assert.doesNotMatch(plain, /hx-post="\/check"/);
       assert.doesNotMatch(plain, /hx-post="\/restart"/);
-      // «Откатить» on the bar is the only rollback left on the page.
-      assert.equal(plain.split('hx-post="/rollback"').length - 1, 1, 'only the bar rolls back');
+      // «Откатить» on the bar is the only rollback left on the page (it carries
+      // `?panel=` now, so only the prefix is pinned).
+      assert.equal(plain.split('hx-post="/rollback').length - 1, 1, 'only the bar rolls back');
       assert.match(plain, /Журнал sing-box/);
       assert.match(plain, /Проверить все серверы профиля/);
 
