@@ -32,6 +32,14 @@ export const SNAPSHOT_PREFIX = 'webui-';
  */
 export const CONFIG_SNAPSHOT_PREFIX = 'config-';
 
+/**
+ * File name prefix of an Xray `config.json` snapshot. A separate series for the
+ * same reason the sing-box one has its own: the rollback must restore the exact
+ * bytes the daemon last ran, and the Xray file lives in another directory and is
+ * written with another mode.
+ */
+export const XRAY_CONFIG_SNAPSHOT_PREFIX = 'xray-config-';
+
 /** How many `config.json` snapshots are kept; the rest are deleted oldest first. */
 export const DEFAULT_CONFIG_SNAPSHOT_KEEP = 10;
 
@@ -142,6 +150,44 @@ export function listConfigSnapshots(stateDir) {
 }
 
 /**
+ * Lists the Xray `config.json` snapshots of a state directory, oldest first.
+ *
+ * @param {string} stateDir
+ * @returns {string[]} File names, not full paths.
+ */
+export function listXraySnapshots(stateDir) {
+  return listSnapshots(stateDir, XRAY_CONFIG_SNAPSHOT_PREFIX);
+}
+
+/**
+ * Copies the generated Xray config aside before it is overwritten.
+ *
+ * @param {string} filePath Path of the generated Xray config.
+ * @param {string} stateDir
+ * @param {{keep?: number, now?: Date}} [options]
+ * @returns {{path: string, removed: string[]}|null}
+ */
+export function snapshotXrayConfig(filePath, stateDir, options = {}) {
+  return takeSnapshot(filePath, stateDir, {
+    keep: options.keep ?? DEFAULT_CONFIG_SNAPSHOT_KEEP,
+    now: options.now,
+    prefix: XRAY_CONFIG_SNAPSHOT_PREFIX,
+  });
+}
+
+/**
+ * Full path of the newest Xray `config.json` snapshot, or `null`.
+ *
+ * @param {string} stateDir
+ * @returns {string|null}
+ */
+export function latestXraySnapshot(stateDir) {
+  const names = listXraySnapshots(stateDir);
+  if (names.length === 0) return null;
+  return path.join(snapshotDir(stateDir), names[names.length - 1]);
+}
+
+/**
  * Copies the generated `config.json` aside before the generator overwrites it.
  *
  * Same rule as `webui.json`: the bytes are copied as they are, because a snapshot
@@ -185,8 +231,37 @@ export function latestConfigSnapshot(stateDir) {
  * @returns {{restored: string, from: string}|null} `null` when there is no snapshot.
  */
 export function restoreLatestConfig(stateDir, target) {
-  const source = latestConfigSnapshot(stateDir);
-  if (source === null) return null;
+  return restoreLatest(stateDir, target, CONFIG_SNAPSHOT_PREFIX, 0o600);
+}
+
+/**
+ * Restores the newest Xray `config.json` snapshot over the live config. The
+ * restored bytes keep mode `0640`: the `xray` service reads the file through the
+ * group, so the rollback must not leave it unreadable.
+ *
+ * @param {string} stateDir
+ * @param {string} target Path of the live Xray config to overwrite.
+ * @returns {{restored: string, from: string}|null} `null` when there is no snapshot.
+ */
+export function restoreLatestXrayConfig(stateDir, target) {
+  return restoreLatest(stateDir, target, XRAY_CONFIG_SNAPSHOT_PREFIX, 0o640);
+}
+
+/**
+ * Copies the newest snapshot of one series over the target through a temporary
+ * file and a `rename`, so the daemon never observes a half-written config. The
+ * mode is explicit because the two engines need different rights.
+ *
+ * @param {string} stateDir
+ * @param {string} target
+ * @param {string} prefix Snapshot series (`config-` / `xray-config-`).
+ * @param {number} mode Mode of the restored file.
+ * @returns {{restored: string, from: string}|null}
+ */
+function restoreLatest(stateDir, target, prefix, mode) {
+  const names = listSnapshots(stateDir, prefix);
+  if (names.length === 0) return null;
+  const source = path.join(snapshotDir(stateDir), names[names.length - 1]);
 
   const directory = path.dirname(target);
   fs.mkdirSync(directory, {recursive: true});
@@ -197,7 +272,7 @@ export function restoreLatestConfig(stateDir, target) {
 
   try {
     fs.copyFileSync(source, temporary);
-    fs.chmodSync(temporary, 0o600);
+    fs.chmodSync(temporary, mode);
     fs.renameSync(temporary, target);
   } catch (error) {
     try {
@@ -283,6 +358,28 @@ export function configDirInfo(dir) {
     user,
     group,
     message: `нет права писать в каталог ${dir} — «Применить» и «Откатить» не сработают.`,
+    command,
+  };
+}
+
+/**
+ * What the interface says when the Xray directory may not be written.
+ *
+ * On the router `/etc/xray` is `denis:xray 2750`: GateHouse writes it as `denis`
+ * and the `xray` service reads through the group, so the fix command names the
+ * group `xray` and the setgid bit, not the sing-box wording.
+ *
+ * @param {string} dir Directory of the live Xray config.
+ * @returns {{dir: string, user: string, group: string, message: string, command: string}}
+ */
+export function xrayDirInfo(dir) {
+  const {user} = processIdentity();
+  const command = `sudo chown ${user}:xray ${dir} && sudo chmod 2750 ${dir}`;
+  return {
+    dir,
+    user,
+    group: 'xray',
+    message: `нет права писать в каталог ${dir} — конфиг Xray не сгенерируется.`,
     command,
   };
 }

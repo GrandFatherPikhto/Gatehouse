@@ -58,11 +58,17 @@
 import {execFile} from 'node:child_process';
 import fs from 'node:fs';
 
-import {DEFAULT_AMNEZIA_DIR, DEFAULT_PROVIDERS_ROOT} from '../core/paths.mjs';
+import {DEFAULT_AMNEZIA_DIR, DEFAULT_PROVIDERS_ROOT, DEFAULT_XRAY_DIR} from '../core/paths.mjs';
 import {tunnelStartupGuard} from './tunnel-file.mjs';
 
 /** Default path of the sing-box binary. */
 export const DEFAULT_SINGBOX_PATH = '/usr/local/bin/sing-box';
+/** Default path of the xray binary, the second engine behind sing-box. */
+export const DEFAULT_XRAY_PATH = '/usr/local/bin/xray';
+/** Default path of the generated Xray config (`GATEHOUSE_XRAY_CONFIG`). */
+export const DEFAULT_XRAY_CONFIG = '/etc/xray/config.json';
+/** Default name of the systemd unit of the second engine. */
+export const XRAY_UNIT = 'xray';
 /** Default path of `systemctl`. */
 export const DEFAULT_SYSTEMCTL_PATH = '/usr/bin/systemctl';
 /** Default path of `journalctl`. */
@@ -100,7 +106,7 @@ export const TUNNEL_UNIT_PREFIX = 'gatehouse-tunnel@';
  * a directory constant of the build must not have to be imported FROM the host
  * boundary, while the deploy tests keep reading the name at this path.
  */
-export {DEFAULT_AMNEZIA_DIR};
+export {DEFAULT_AMNEZIA_DIR, DEFAULT_XRAY_DIR};
 /**
  * Default path of the sudoers file the editor READS to learn which tunnel units
  * it may control. It never writes this file — installing the rules is the
@@ -187,6 +193,9 @@ export function systemConfig(env = process.env, overrides = {}) {
     journalctl: read('GATEHOUSE_JOURNALCTL', DEFAULT_JOURNALCTL_PATH),
     sudo: read('GATEHOUSE_SUDO', DEFAULT_SUDO_PATH),
     unit: read('GATEHOUSE_UNIT', DEFAULT_UNIT),
+    xray: read('GATEHOUSE_XRAY', DEFAULT_XRAY_PATH),
+    xrayConfig: read('GATEHOUSE_XRAY_CONFIG', DEFAULT_XRAY_CONFIG),
+    xrayUnit: read('GATEHOUSE_XRAY_UNIT', XRAY_UNIT),
     amneziaDir: read('GATEHOUSE_AMNEZIA_DIR', DEFAULT_AMNEZIA_DIR),
     providersDir: read('GATEHOUSE_PROVIDERS', DEFAULT_PROVIDERS_ROOT),
     sudoers: read('GATEHOUSE_SUDOERS', DEFAULT_SUDOERS_PATH),
@@ -590,6 +599,286 @@ export async function restartSingBox(options = {}) {
     error: result.error,
     timedOut: result.timedOut,
     command: [file, ...args],
+  };
+}
+
+// ------------------------------------------------------------------
+// Xray: the second engine behind sing-box
+// ------------------------------------------------------------------
+//
+// Xray is driven exactly like sing-box: `execFile` with an argument array, the
+// binary and the unit coming from the environment, `sudo -n systemctl` to
+// restart or stop, and `waitForActive` to confirm the unit really came up. Its
+// own surface is small: a config check (`run -test`), restart, stop, the two
+// systemd axes, the version, and the sudoers rules the panel offers to paste.
+
+/**
+ * True when the xray binary named by the configuration exists. The interface
+ * refuses to ENABLE an `xray` provider when it does not: a shape that would
+ * never work must say so before the owner saves it (§5).
+ *
+ * @param {{env?: Record<string, string|undefined>, xray?: string}} [options]
+ * @returns {boolean}
+ */
+export function xrayInstalled(options = {}) {
+  const config = systemConfig(options.env, options);
+  const file = typeof options.xray === 'string' && options.xray.length > 0 ? options.xray : config.xray;
+  return fs.existsSync(file);
+}
+
+/**
+ * Runs `xray run -test -c <file>`. Its `ExecStartPre` in `xray.service` does the
+ * same; checking the TEMPORARY file here is what stops a broken build from ever
+ * reaching the live config.
+ *
+ * @param {string} configPath
+ * @param {{env?: Record<string, string|undefined>, timeout?: number,
+ *   signal?: AbortSignal, xray?: string}} [options]
+ * @returns {Promise<{ok: boolean, code: number|null, stdout: string, stderr: string,
+ *   error: string|null, timedOut: boolean, configPath: string, args: string[]}>}
+ */
+export async function checkXrayConfig(configPath, options = {}) {
+  const config = systemConfig(options.env, options);
+  const file = options.xray ?? config.xray;
+  const args = ['run', '-test', '-c', String(configPath)];
+  const result = await run(file, args, {
+    timeout: positive(options.timeout, config.testTimeout),
+    env: options.env,
+    signal: options.signal,
+  });
+  return {
+    ok: result.ok,
+    code: result.code,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    error: result.error,
+    timedOut: result.timedOut,
+    configPath: String(configPath),
+    args,
+  };
+}
+
+/**
+ * Builds the argv of one `systemctl` action on the xray unit, with or without
+ * sudo. Mirrors `restartSingBox`: `GATEHOUSE_SUDO=none` is the polkit variant.
+ *
+ * @param {string[]} action
+ * @param {Record<string, unknown>} [options]
+ * @returns {{file: string, args: string[]}}
+ */
+function xraySystemctl(action, options = {}) {
+  const config = systemConfig(options.env, options);
+  const sudoSetting = options.sudo ?? config.sudo;
+  const systemctl = options.systemctl ?? config.systemctl;
+  const unit = options.unit ?? config.xrayUnit;
+  const useSudo = sudoSetting !== 'none' && sudoSetting !== '';
+  const file = useSudo ? sudoSetting : systemctl;
+  const args = useSudo
+    ? [...SUDO_NON_INTERACTIVE, systemctl, ...action, unit]
+    : [...action, unit];
+  return {file, args};
+}
+
+/**
+ * Restarts the xray unit. Used only when its config really changed (§4).
+ *
+ * @param {{env?: Record<string, string|undefined>, timeout?: number,
+ *   signal?: AbortSignal, sudo?: string, systemctl?: string, unit?: string}} [options]
+ */
+export async function restartXray(options = {}) {
+  const config = systemConfig(options.env, options);
+  const {file, args} = xraySystemctl(['restart'], options);
+  const result = await run(file, args, {
+    timeout: positive(options.timeout, config.testTimeout),
+    env: options.env,
+    signal: options.signal,
+  });
+  return {
+    ok: result.ok,
+    code: result.code,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    error: result.error,
+    timedOut: result.timedOut,
+    unit: options.unit ?? config.xrayUnit,
+    command: [file, ...args],
+  };
+}
+
+/**
+ * Stops the xray unit. Used when no enabled provider goes through Xray any more
+ * (§4, step 5): the config is not written, but a running service must not keep
+ * ports open for servers nobody lists.
+ *
+ * @param {Parameters<typeof restartXray>[0]} [options]
+ */
+export async function stopXray(options = {}) {
+  const config = systemConfig(options.env, options);
+  const {file, args} = xraySystemctl(['stop'], options);
+  const result = await run(file, args, {
+    timeout: positive(options.timeout, config.testTimeout),
+    env: options.env,
+    signal: options.signal,
+  });
+  return {
+    ok: result.ok,
+    code: result.code,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    error: result.error,
+    timedOut: result.timedOut,
+    unit: options.unit ?? config.xrayUnit,
+    command: [file, ...args],
+  };
+}
+
+/**
+ * Reads both systemd axes of the xray unit and whether the binary is installed.
+ * No privileges are needed.
+ *
+ * @param {{env?: Record<string, string|undefined>, timeout?: number,
+ *   signal?: AbortSignal, systemctl?: string, unit?: string, xray?: string}} [options]
+ * @returns {Promise<{unit: string, installed: boolean, active: boolean,
+ *   enabled: boolean, activeRaw: string, enabledRaw: string,
+ *   activeError: string|null, enabledError: string|null}>}
+ */
+export async function xrayState(options = {}) {
+  const config = systemConfig(options.env, options);
+  const systemctl = options.systemctl ?? config.systemctl;
+  const unit = options.unit ?? config.xrayUnit;
+  const timeout = positive(options.timeout, config.testTimeout);
+
+  const one = async (verb) => {
+    const result = await run(systemctl, [verb, unit], {
+      timeout,
+      env: options.env,
+      signal: options.signal,
+    });
+    return {ok: result.ok, value: result.stdout.trim(), error: result.error};
+  };
+
+  const [active, enabled] = await Promise.all([one('is-active'), one('is-enabled')]);
+
+  return {
+    unit,
+    installed: xrayInstalled(options),
+    active: active.value === 'active',
+    enabled: enabled.value === 'enabled',
+    activeRaw: active.value,
+    enabledRaw: enabled.value,
+    activeError: active.error,
+    enabledError: enabled.error,
+  };
+}
+
+/**
+ * Reads `xray version`. The first non-empty line is the human version.
+ *
+ * @param {Parameters<typeof checkXrayConfig>[1]} [options]
+ * @returns {Promise<{ok: boolean, version: string, stdout: string, stderr: string,
+ *   error: string|null, code: number|null}>}
+ */
+export async function xrayVersion(options = {}) {
+  const config = systemConfig(options.env, options);
+  const file = options.xray ?? config.xray;
+  const result = await run(file, ['version'], {
+    timeout: positive(options.timeout, config.testTimeout),
+    env: options.env,
+    signal: options.signal,
+  });
+  const version =
+    String(result.stdout)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? '';
+  return {
+    ok: result.ok,
+    version,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    error: result.error,
+    code: result.code,
+  };
+}
+
+/**
+ * The two sudoers lines that let the editor control the xray unit. Named per
+ * unit and without a wildcard, exactly like the tunnel rules.
+ *
+ * @param {{systemctl?: string, user?: string}} [options]
+ * @returns {string[]} `[restart, stop]`.
+ */
+export function xraySudoersLines(options = {}) {
+  const systemctl = options.systemctl ?? DEFAULT_SYSTEMCTL_PATH;
+  const user = options.user ?? process.env.USER ?? 'denis';
+  return [
+    `${user} ALL=(root) NOPASSWD: ${systemctl} restart ${XRAY_UNIT}`,
+    `${user} ALL=(root) NOPASSWD: ${systemctl} stop ${XRAY_UNIT}`,
+  ];
+}
+
+/**
+ * Parses a sudoers file into `{restart, stop}` for the xray unit. Only lines
+ * naming the configured `systemctl` and the unit are read; comments ignored.
+ *
+ * @param {string} text
+ * @param {{systemctl?: string}} [options]
+ * @returns {{restart: boolean, stop: boolean}}
+ */
+export function parseXraySudoers(text, options = {}) {
+  const systemctl = options.systemctl ?? DEFAULT_SYSTEMCTL_PATH;
+  const unit = new RegExp(`\\b${XRAY_UNIT}\\b`);
+  const result = {restart: false, stop: false};
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.length === 0 || line.startsWith('#') || !line.includes(systemctl)) continue;
+    if (!unit.test(line)) continue;
+    if (/\brestart\b/.test(line)) result.restart = true;
+    else if (/\bstop\b/.test(line)) result.stop = true;
+  }
+  return result;
+}
+
+/**
+ * What the editor may do with the xray unit, plus the exact lines to paste. A
+ * missing or unreadable file means "no rights" / "cannot read", never a guess.
+ *
+ * @param {string} sudoersPath
+ * @param {{env?: Record<string, string|undefined>, systemctl?: string,
+ *   user?: string}} [options]
+ * @returns {{restart: boolean, stop: boolean, canRestart: boolean, canStop: boolean,
+ *   missing: string[], readable: boolean, notice: string|null, path: string}}
+ */
+export function xrayPermissions(sudoersPath, options = {}) {
+  const config = systemConfig(options.env, options);
+  const systemctl = options.systemctl ?? config.systemctl;
+
+  let text = '';
+  let readable = true;
+  try {
+    text = fs.readFileSync(sudoersPath, 'utf8');
+  } catch (error) {
+    text = '';
+    if (error.code === 'EACCES' || error.code === 'EPERM') readable = false;
+  }
+  const notice = readable
+    ? null
+    : `не могу прочитать ${sudoersPath}: права. Файл ставится с группой denis: ` +
+      'install -m 0440 -o root -g denis';
+  const parsed = parseXraySudoers(text, {systemctl});
+  const [restartLine, stopLine] = xraySudoersLines({systemctl, user: options.user});
+  const missing = [];
+  if (!parsed.restart) missing.push(restartLine);
+  if (!parsed.stop) missing.push(stopLine);
+  return {
+    restart: parsed.restart,
+    stop: parsed.stop,
+    canRestart: parsed.restart,
+    canStop: parsed.stop,
+    missing,
+    readable,
+    notice,
+    path: sudoersPath,
   };
 }
 

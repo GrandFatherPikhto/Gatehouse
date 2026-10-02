@@ -390,6 +390,16 @@ export class ProjectModel extends ProjectSession {
     return settings.generate(this, options);
   }
 
+  /** Builds and writes the Xray config of the SAVED document (writes nothing if none). */
+  generateXray(options) {
+    return settings.generateXray(this, options);
+  }
+
+  /** Builds BOTH configs of the SAVED document without writing (the apply bar). */
+  previewBoth(options) {
+    return settings.previewBoth(this, options);
+  }
+
   // ------------------------------------------------------------------
   // Xray ports (the second engine behind sing-box)
   // ------------------------------------------------------------------

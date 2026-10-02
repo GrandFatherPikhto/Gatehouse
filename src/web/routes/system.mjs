@@ -1,20 +1,14 @@
 // The system layer as the owner uses it: the ONE apply chain, the rollback, and
 // the streamed outbound test.
 //
-// The buttons «Сгенерировать / Проверить / Перезапустить / Откатить» left the
-// «Службы → Sing-Box» tab: the permanent apply bar drives the whole chain now.
-// The old routes stay (hidden) because tools and tests still speak to them; the
-// chain itself never leaves unchecked bytes in the live `config.json`.
-//
-// `/apply` steps, in order, first failure stops:
-//   1. save the document if it is dirty;
-//   2. build `config.json` into a NEIGHBOURING temporary file (`config.json.new`);
-//   3. `sing-box check` that temporary file;
-//   4. snapshot the live `config.json` (keep 10);
-//   5. rename the temporary file over the live one;
-//   6. restart sing-box;
-//   7. poll `systemctl is-active` until the unit is really up.
-// A failure of 6–7 rolls the snapshot back and restarts again.
+// The chain now applies a PAIR of configs (task plan_2026_10_02_gatehouse_xray_core.md
+// §4): sing-box AND Xray. It saves the document, builds BOTH into neighbouring
+// temporary files, checks BOTH, snapshots BOTH live files, renames BOTH, restarts
+// Xray (only if its config changed; stopped when no server goes through it) and
+// then sing-box. A failure at a restart step rolls BOTH back and restarts what it
+// restarted. The buttons «Сгенерировать / Проверить / Перезапустить / Откатить»
+// left the «Службы → Sing-Box» tab: the permanent apply bar drives the chain now.
+// The old routes stay (hidden) because tools and tests still speak to them.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,17 +16,29 @@ import path from 'node:path';
 import {ConfigError} from '../../core/errors.mjs';
 import {
   checkConfig,
+  checkXrayConfig,
   restartSingBox,
+  restartXray,
+  stopXray,
   testOutbounds,
   waitForActive,
+  xrayState,
 } from '../../system/index.mjs';
-import {isPermissionError, restoreLatestConfig, snapshotConfig} from '../../model/storage.mjs';
+import {
+  canWriteDir,
+  isPermissionError,
+  restoreLatestConfig,
+  restoreLatestXrayConfig,
+  snapshotConfig,
+  snapshotXrayConfig,
+  xrayDirInfo,
+} from '../../model/storage.mjs';
 import {applyEditForm, mutation, panelFromBody} from '../edits.mjs';
 import {editFormRoutes, parsePanelKey} from '../panel.mjs';
 import {SSE_HEADERS, testResultView, writeEvent} from '../stream.mjs';
 import {refreshTunnelStates} from '../tunnel-state.mjs';
 
-/** How long a check may take before it is killed; `sing-box check` is instant. */
+/** How long a check may take before it is killed; both checks are instant. */
 const CHECK_TIMEOUT = 15000;
 
 /** Keep of the `config.json` snapshots taken before each generation. */
@@ -41,9 +47,9 @@ const CONFIG_SNAPSHOT_KEEP = 10;
 /**
  * The refusal text for a config directory this process may not write: the
  * sentence plus the exact command the owner runs on the router. One helper, so
- * the three routes and the bar can never disagree about the wording.
+ * the routes and the bar can never disagree about the wording.
  *
- * @param {{message: string, command: string}} info `model.outputDirInfo()`.
+ * @param {{message: string, command: string}} info
  * @returns {string}
  */
 function dirRefusal(info) {
@@ -51,9 +57,40 @@ function dirRefusal(info) {
 }
 
 /**
- * Restarts sing-box and confirms the unit really came up (step 6 + 7). The
- * `Restart=always` unit may be `activating` for a moment, so the poll waits for
- * two consecutive `active` reads.
+ * True when two files, both present, hold the same bytes.
+ *
+ * @param {string} left
+ * @param {string} right
+ * @returns {boolean}
+ */
+function sameBytes(left, right) {
+  try {
+    return fs.readFileSync(left).equals(fs.readFileSync(right));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Removes a temporary file, ignoring every failure. A missing file is normal; a
+ * file the process may not even inspect (the default `/etc/xray` on a desktop) is
+ * NOT a reason to fail the whole chain — it only means there is nothing of ours
+ * to clean up there.
+ *
+ * @param {string} file
+ */
+function removeQuietly(file) {
+  try {
+    fs.rmSync(file, {force: true});
+  } catch {
+    // nothing of ours to remove, or no right to look: neither is an error
+  }
+}
+
+/**
+ * Restarts sing-box and confirms the unit really came up. The `Restart=always`
+ * unit may be `activating` for a moment, so the poll waits for two consecutive
+ * `active` reads.
  *
  * @param {ReturnType<import('../context.mjs').buildContext>} ctx
  * @returns {Promise<{ok: boolean, message: string}>}
@@ -74,6 +111,27 @@ async function restartAndConfirm(ctx) {
 }
 
 /**
+ * Restarts the Xray unit and confirms it really came up.
+ *
+ * @param {ReturnType<import('../context.mjs').buildContext>} ctx
+ * @returns {Promise<{ok: boolean, message: string}>}
+ */
+async function restartXrayAndConfirm(ctx) {
+  const result = await restartXray({env: ctx.systemEnv});
+  if (!result.ok) {
+    return {
+      ok: false,
+      message: result.stderr.trim() || result.error || 'перезапуск Xray не удался',
+    };
+  }
+  const active = await waitForActive({env: ctx.systemEnv, unit: ctx.system.xrayUnit});
+  if (!active.ok) {
+    return {ok: false, message: `xray не поднялся (is-active: ${active.last || 'без ответа'})`};
+  }
+  return {ok: true, message: 'xray поднялся'};
+}
+
+/**
  * @param {import('express').Express} app
  * @param {ReturnType<import('../context.mjs').buildContext>} ctx
  */
@@ -82,7 +140,7 @@ export function registerSystemRoutes(app, ctx) {
 
   // The one chain. Its outcome is kept on `state.lastApply` for the bar. The panel
   // the button sits on travels in `?panel=`; the open edit form of THAT panel is
-  // applied first, and the answer goes back to it on success (§1.2, §1б).
+  // applied first, and the answer goes back to it on success.
   app.post(
     '/apply',
     mutation(ctx, 'system:singbox', async (req) => {
@@ -91,6 +149,8 @@ export function registerSystemRoutes(app, ctx) {
       const failKey = 'system:singbox';
       const configPath = model.resolvedOutputPath();
       const tempPath = `${configPath}.new`;
+      const xrayConfigPath = String(ctx.system.xrayConfig);
+      const xrayTempPath = `${xrayConfigPath}.new`;
       /** @type {Array<{ok: boolean, step: string, message: string, at: string}>} */
       const steps = [];
       const record = (ok, step, message) => {
@@ -101,6 +161,10 @@ export function registerSystemRoutes(app, ctx) {
         // The live bytes may have moved: drop the bar's comparison cache.
         state.applyCache = null;
         return {key: outcome.panel, apply: state.lastApply, notice: outcome.message, ...extra};
+      };
+      const cleanup = () => {
+        removeQuietly(tempPath);
+        removeQuietly(xrayTempPath);
       };
 
       // The chain needs write access to the DIRECTORY of the live config: it
@@ -117,16 +181,12 @@ export function registerSystemRoutes(app, ctx) {
       try {
         // 0. the open edit form of the panel the button sits on, applied with the
         // VERY SAME code `/save?panel=` uses, so "edit → Apply" can never behave
-        // differently from "edit → Сохранить → Apply". A refusal stops HERE:
-        // nothing is saved, nothing is built (§1.2).
+        // differently from "edit → Сохранить → Apply". A refusal stops HERE.
         phase = 'форма панели';
         if (editFormRoutes(kind).length > 0) {
           const hadEdits = model.dirty;
           try {
             const applied = applyEditForm(ctx, kind, req);
-            // `applyEditForm` always marks the document dirty; an untouched form
-            // must not turn into a save, so "changed nothing and was clean" goes
-            // back to clean, exactly like `/save` does.
             if (!applied.changed && !hadEdits) model.markClean();
             record(
               true,
@@ -143,7 +203,10 @@ export function registerSystemRoutes(app, ctx) {
           }
         }
 
-        // 1. save
+        // 1. ports, then save. Handing out an Xray port changes the document, and
+        // «Применить» saves that change like any other (§2).
+        phase = 'сохранение';
+        model.ensureXrayPorts();
         if (model.dirty) {
           model.save();
           record(true, 'сохранение', 'документ сохранён');
@@ -151,22 +214,45 @@ export function registerSystemRoutes(app, ctx) {
           record(true, 'сохранение', 'несохранённых правок нет');
         }
 
-        // 2. build into the temporary file
+        // 2. build BOTH into neighbouring temporary files
         phase = 'сборка';
         await refreshTunnelStates(ctx);
         const runningTunnels = Object.entries(state.tunnels)
           .filter(([, runtime]) => runtime.active === true)
           .map(([name]) => name);
         const generation = model.generate({output: tempPath, runningTunnels});
-        record(true, 'сборка', `серверов: ${generation.stats.servers}`);
+        const xrayGeneration = model.generateXray({xrayConfig: xrayTempPath});
+        const xrayCount = xrayGeneration.xray.servers.length;
+        record(
+          true,
+          'сборка',
+          `серверов: ${generation.stats.servers}` +
+            (xrayCount > 0 ? `, через Xray: ${xrayCount}` : ''),
+        );
 
-        // 3. check the temporary file
+        // The Xray directory must be writable only when there IS an Xray config.
+        if (xrayCount > 0) {
+          const info = xrayDirInfo(path.dirname(xrayConfigPath));
+          if (!canWriteDir(info.dir)) {
+            cleanup();
+            record(false, 'сборка', dirRefusal(info));
+            return finish({
+              ok: false,
+              step: 'сборка',
+              message: dirRefusal(info),
+              rolledBack: false,
+              panel: failKey,
+            });
+          }
+        }
+
+        // 3. check BOTH; a failure applies nothing
         phase = 'проверка схемы';
         const check = await checkConfig(tempPath, {env: systemEnv, timeout: CHECK_TIMEOUT});
         if (!check.ok) {
-          fs.rmSync(tempPath, {force: true});
+          cleanup();
           const why = check.stderr.trim() || check.error || 'check не прошёл';
-          record(false, 'проверка схемы', why);
+          record(false, 'проверка схемы', `sing-box: ${why}`);
           return finish({
             ok: false,
             step: 'проверка схемы',
@@ -175,15 +261,36 @@ export function registerSystemRoutes(app, ctx) {
             panel: failKey,
           });
         }
-        record(true, 'проверка схемы', 'sing-box check прошёл');
+        if (xrayCount > 0) {
+          const xrayCheck = await checkXrayConfig(xrayTempPath, {env: systemEnv});
+          if (!xrayCheck.ok) {
+            cleanup();
+            const why = xrayCheck.stderr.trim() || xrayCheck.error || 'xray run -test не прошёл';
+            record(false, 'проверка схемы', `Xray: ${why}`);
+            return finish({
+              ok: false,
+              step: 'проверка схемы',
+              message: `Сборка не применена: конфиг Xray не прошёл проверку — ${why}`,
+              rolledBack: false,
+              panel: failKey,
+            });
+          }
+        }
+        record(
+          true,
+          'проверка схемы',
+          xrayCount > 0 ? 'sing-box check и xray run -test прошли' : 'sing-box check прошёл',
+        );
 
-        // 4. already applied? Do not break connections for nothing.
-        if (
-          fs.existsSync(configPath) &&
-          fs.readFileSync(tempPath).equals(fs.readFileSync(configPath))
-        ) {
-          fs.rmSync(tempPath, {force: true});
-          record(true, 'применение', 'совпадает с боевым файлом');
+        // 4. already applied? Both configs must match; do not break connections.
+        const singboxSame = fs.existsSync(configPath) && sameBytes(tempPath, configPath);
+        const xraySame =
+          xrayCount === 0
+            ? true
+            : fs.existsSync(xrayConfigPath) && sameBytes(xrayTempPath, xrayConfigPath);
+        if (singboxSame && xraySame) {
+          cleanup();
+          record(true, 'применение', 'совпадает с боевыми файлами');
           return finish({
             ok: true,
             step: 'готово',
@@ -193,19 +300,79 @@ export function registerSystemRoutes(app, ctx) {
           });
         }
 
-        // 5. snapshot + rename (never copy: the rename is atomic)
+        // 5. snapshot + rename both (never copy: the rename is atomic)
         phase = 'установка файла';
         const snapshot = fs.existsSync(configPath)
           ? snapshotConfig(configPath, model.stateDir, {keep: CONFIG_SNAPSHOT_KEEP})
           : null;
+        const xraySnapshot =
+          xrayCount > 0 && fs.existsSync(xrayConfigPath)
+            ? snapshotXrayConfig(xrayConfigPath, model.stateDir, {keep: CONFIG_SNAPSHOT_KEEP})
+            : null;
         fs.renameSync(tempPath, configPath);
-        record(true, 'установка файла', path.basename(configPath));
+        const xrayChanged = xrayCount > 0 && !xraySame;
+        if (xrayCount > 0) {
+          fs.renameSync(xrayTempPath, xrayConfigPath);
+          record(true, 'установка файла', path.basename(xrayConfigPath));
+        }
+        // With no Xray servers there is no Xray temp file to remove: generation
+        // wrote none, and touching the default path would need rights we do not
+        // have on a desktop.
 
-        // 6 + 7. restart and confirm; rollback on failure
+        // 6. Xray: restart if its config changed, else leave it; no servers — stop it
+        let xrayRestarted = false;
+        if (xrayCount > 0) {
+          if (xrayChanged) {
+            phase = 'перезапуск Xray';
+            const up = await restartXrayAndConfirm(ctx);
+            if (!up.ok) {
+              const rolled = rollbackPair({
+                model,
+                configPath,
+                xrayConfigPath,
+                snapshot,
+                xraySnapshot,
+                xrayCount,
+                restartSingBoxAgain: true,
+                ctx,
+              });
+              record(false, 'перезапуск Xray', up.message);
+              return finish({
+                ok: false,
+                step: 'перезапуск Xray',
+                message:
+                  `Применение не удалось на шаге «перезапуск Xray»: ${up.message}` +
+                  (rolled ? ' — выполнен откат обоих конфигов' : ' — снимка нет, откат невозможен'),
+                rolledBack: rolled,
+                panel: failKey,
+              });
+            }
+            xrayRestarted = true;
+            record(true, 'перезапуск Xray', up.message);
+          } else {
+            record(true, 'перезапуск Xray', 'конфиг Xray не изменился — не трогали');
+          }
+        } else {
+          phase = 'остановка Xray';
+          const current = await xrayState({env: systemEnv});
+          if (current.active) {
+            await stopXray({env: systemEnv});
+            record(true, 'остановка Xray', 'серверов Xray нет — служба остановлена');
+          } else {
+            record(true, 'Xray', 'серверов Xray нет — служба не запущена');
+          }
+        }
+
+        // 7. sing-box — restart and confirm, as before
         phase = 'перезапуск';
         const up = await restartAndConfirm(ctx);
         if (!up.ok) {
-          const restored = snapshot === null ? null : restoreLatestConfig(model.stateDir, configPath);
+          const restored =
+            snapshot === null ? null : restoreLatestConfig(model.stateDir, configPath);
+          if (xrayCount > 0 && xrayRestarted) {
+            restoreLatestXrayConfig(model.stateDir, xrayConfigPath);
+            await restartXrayAndConfirm(ctx);
+          }
           const again = restored === null ? {ok: false} : await restartAndConfirm(ctx);
           record(false, 'перезапуск', up.message);
           return finish({
@@ -226,12 +393,14 @@ export function registerSystemRoutes(app, ctx) {
         return finish({
           ok: true,
           step: 'готово',
-          message: 'Применено: config.json установлен и sing-box перезапущен',
+          message: xrayCount > 0
+            ? 'Применено: config.json и конфиг Xray установлены, службы перезапущены'
+            : 'Применено: config.json установлен и sing-box перезапущен',
           rolledBack: false,
           panel: ownKey,
         });
       } catch (error) {
-        fs.rmSync(tempPath, {force: true});
+        cleanup();
         const info = model.outputDirInfo();
         const message =
           isPermissionError(error) && !info.ok
@@ -245,19 +414,47 @@ export function registerSystemRoutes(app, ctx) {
     }),
   );
 
-  // Kept for `tools/` and tests, HIDDEN in the UI (§1.4). Generation itself
-  // never leaves unchecked bytes in the live file: it builds next to it, checks
-  // it and only then renames it into place.
+  /**
+   * Rolls BOTH live files back to their snapshots and restarts what was started.
+   *
+   * @param {{model: import('../../model/project.mjs').ProjectModel, configPath: string,
+   *   xrayConfigPath: string, snapshot: {path: string}|null, xraySnapshot: {path: string}|null,
+   *   xrayCount: number, restartSingBoxAgain: boolean,
+   *   ctx: ReturnType<import('../context.mjs').buildContext>}} options
+   * @returns {boolean} True when at least one config was restored.
+   */
+  function rollbackPair(options) {
+    const {
+      model: project,
+      configPath: liveConfig,
+      xrayConfigPath: liveXray,
+      snapshot,
+      xraySnapshot,
+      xrayCount,
+      ctx: context,
+    } = options;
+    let restored = false;
+    if (snapshot !== null) {
+      restored = restoreLatestConfig(project.stateDir, liveConfig) !== null || restored;
+    }
+    if (xrayCount > 0 && xraySnapshot !== null) {
+      restored = restoreLatestXrayConfig(project.stateDir, liveXray) !== null || restored;
+    }
+    return restored;
+  }
+
+  // Kept for `tools/` and tests, HIDDEN in the UI. Generation itself never leaves
+  // unchecked bytes in the live files: it builds next to them, checks them and
+  // only then renames them into place. Writes BOTH configs (§4).
   app.post(
     '/generate',
     mutation(ctx, 'singbox', async () => {
       const configPath = model.resolvedOutputPath();
       const tempPath = `${configPath}.new`;
+      const xrayConfigPath = String(ctx.system.xrayConfig);
+      const xrayTempPath = `${xrayConfigPath}.new`;
       const dirInfo = model.outputDirInfo();
       if (!dirInfo.ok) throw new ConfigError(dirRefusal(dirInfo));
-      const snapshot = fs.existsSync(configPath)
-        ? snapshotConfig(configPath, model.stateDir, {keep: CONFIG_SNAPSHOT_KEEP})
-        : null;
 
       await refreshTunnelStates(ctx);
       const runningTunnels = Object.entries(state.tunnels)
@@ -265,15 +462,39 @@ export function registerSystemRoutes(app, ctx) {
         .map(([name]) => name);
 
       try {
+        const snapshot = fs.existsSync(configPath)
+          ? snapshotConfig(configPath, model.stateDir, {keep: CONFIG_SNAPSHOT_KEEP})
+          : null;
         const generation = model.generate({output: tempPath, runningTunnels});
+        const xrayGeneration = model.generateXray({xrayConfig: xrayTempPath});
+        const xrayCount = xrayGeneration.xray.servers.length;
+
         const check = await checkConfig(tempPath, {env: systemEnv, timeout: CHECK_TIMEOUT});
         if (!check.ok) {
-          fs.rmSync(tempPath, {force: true});
+          removeQuietly(tempPath);
+          removeQuietly(xrayTempPath);
           throw new ConfigError(
             `сборка не прошла проверку схемы: ${check.stderr.trim() || check.error || 'check не прошёл'}`,
           );
         }
+        if (xrayCount > 0) {
+          const xrayCheck = await checkXrayConfig(xrayTempPath, {env: systemEnv});
+          if (!xrayCheck.ok) {
+            removeQuietly(tempPath);
+            removeQuietly(xrayTempPath);
+            throw new ConfigError(
+              `конфиг Xray не прошёл проверку: ${xrayCheck.stderr.trim() || xrayCheck.error || 'xray run -test не прошёл'}`,
+            );
+          }
+        }
+
         fs.renameSync(tempPath, configPath);
+        if (xrayCount > 0) {
+          if (fs.existsSync(xrayConfigPath)) {
+            snapshotXrayConfig(xrayConfigPath, model.stateDir, {keep: CONFIG_SNAPSHOT_KEEP});
+          }
+          fs.renameSync(xrayTempPath, xrayConfigPath);
+        }
         state.lastCheck = null;
         state.applyCache = null;
         return {
@@ -283,7 +504,8 @@ export function registerSystemRoutes(app, ctx) {
           notice: generation.summary,
         };
       } catch (error) {
-        fs.rmSync(tempPath, {force: true});
+        removeQuietly(tempPath);
+        removeQuietly(xrayTempPath);
         const info = model.outputDirInfo();
         if (isPermissionError(error) && !info.ok) throw new ConfigError(dirRefusal(info));
         throw error;
@@ -359,18 +581,18 @@ export function registerSystemRoutes(app, ctx) {
   app.post(
     '/rollback',
     mutation(ctx, 'system:singbox', async (req) => {
-      // A SUCCESS answers the panel the button sat on; a failure switches to
-      // «Службы → Sing-Box», where the journal is (§1б).
       const ownKey = panelFromBody(req, 'system:singbox');
       const configPath = model.resolvedOutputPath();
-      // The rollback writes a temporary file next to the live config and renames
-      // it, so it needs the very same directory right.
+      const xrayConfigPath = String(ctx.system.xrayConfig);
       const dirInfo = model.outputDirInfo();
       if (!dirInfo.ok) throw new ConfigError(dirRefusal(dirInfo));
 
+      // The pair is rolled back together: both snapshots are the ones taken by the
+      // last apply, so restoring only one would leave the engines disagreeing.
       let restored;
       try {
         restored = restoreLatestConfig(model.stateDir, configPath);
+        restoreLatestXrayConfig(model.stateDir, xrayConfigPath);
       } catch (error) {
         if (isPermissionError(error)) throw new ConfigError(dirRefusal(model.outputDirInfo()));
         throw error;
@@ -383,16 +605,13 @@ export function registerSystemRoutes(app, ctx) {
       state.applyCache = null;
 
       const up = await restartAndConfirm(ctx);
-      state.lastRestart = {
-        ok: up.ok,
-        at: new Date().toISOString(),
-      };
+      state.lastRestart = {ok: up.ok, at: new Date().toISOString()};
 
       const from = path.basename(restored.from);
       return {
         key: up.ok ? ownKey : 'system:singbox',
         notice: up.ok
-          ? `Восстановлен ${from} и sing-box перезапущен.`
+          ? `Восстановлена пара конфигов (${from}) и sing-box перезапущен.`
           : `Конфиг восстановлен из ${from}, но перезапуск не удался: ${up.message}`,
       };
     }),

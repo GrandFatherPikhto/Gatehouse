@@ -1,0 +1,35 @@
+#!/usr/bin/env node
+// Fake `xray` for the system-layer tests: `run -test` and `version` only.
+//
+// Like the other fakes it reproduces the output SHAPES the parsers accept and
+// nothing else — no network, no daemon, no root. Behaviour is driven by the
+// arguments and by the environment:
+//   * `FAKE_XRAY_ARGV_LOG` — append the received argv as JSON, one line each;
+//   * `FAKE_XRAY_TEST_FAIL` — make `run -test` exit non-zero, for the "a broken
+//     Xray config applies nothing" path.
+
+import fs from 'node:fs';
+import process from 'node:process';
+
+const argv = process.argv.slice(2);
+
+if (process.env.FAKE_XRAY_ARGV_LOG) {
+  fs.appendFileSync(process.env.FAKE_XRAY_ARGV_LOG, `${JSON.stringify(argv)}\n`);
+}
+
+if (argv[0] === 'run' && argv.includes('-test')) {
+  if (process.env.FAKE_XRAY_TEST_FAIL) {
+    process.stderr.write('Failed to start: main: failed to load config files\n');
+    process.exit(1);
+  }
+  process.stdout.write('Configuration OK. (fake)\n');
+  process.exit(0);
+}
+
+if (argv[0] === 'version') {
+  process.stdout.write('Xray 26.9.30 (fake) linux/amd64\n');
+  process.exit(0);
+}
+
+process.stdout.write(`fake xray: ${argv.join(' ')}\n`);
+process.exit(0);
